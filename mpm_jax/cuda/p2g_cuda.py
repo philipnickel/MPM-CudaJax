@@ -45,6 +45,20 @@ def _compile_kernel(cu_name, so_name):
         logger.warning("Cannot determine JAX FFI include dir")
         return False
 
+    # Find the GCC libstdc++ and set RPATH so the .so can find it at runtime
+    rpath_flag = ""
+    try:
+        gcc_lib = subprocess.run(
+            ["gcc", "-print-file-name=libstdc++.so"],
+            capture_output=True, text=True
+        )
+        if gcc_lib.returncode == 0 and "/" in gcc_lib.stdout.strip():
+            gcc_lib_dir = os.path.dirname(gcc_lib.stdout.strip())
+            rpath_flag = f"-Xlinker,-rpath,{gcc_lib_dir}"
+            logger.info("Using GCC libstdc++ from %s", gcc_lib_dir)
+    except FileNotFoundError:
+        pass
+
     cmd = [
         "nvcc",
         "-arch=sm_90",
@@ -56,9 +70,11 @@ def _compile_kernel(cu_name, so_name):
         f"-I{ffi_inc}",
         "-diag-suppress=940,2473",
         "-Xcompiler", "-Wno-return-type",
-        "-o", so_path,
-        cu_path,
     ]
+    if rpath_flag:
+        cmd.extend(["-Xcompiler", rpath_flag])
+    cmd.extend(["-o", so_path, cu_path])
+
     logger.info("Compiling %s -> %s", cu_name, so_name)
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
