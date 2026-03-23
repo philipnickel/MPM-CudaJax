@@ -13,8 +13,9 @@ state = MPMState(
     C=jnp.zeros((n, 3, 3)),
     F=jnp.tile(jnp.eye(3), (n, 1, 1)),
 )
-efn = get_constitutive({"name": "CorotatedElasticity", "E": 2e6, "nu": 0.4})
-pfn = get_constitutive({"name": "IdentityPlasticity"})
+from omegaconf import OmegaConf
+efn = get_constitutive(OmegaConf.create({"name": "CorotatedElasticity", "E": 2e6, "nu": 0.4}))
+pfn = get_constitutive(OmegaConf.create({"name": "IdentityPlasticity"}))
 noop = lambda x, v, t: (x, v)
 noop2 = lambda gv, gm, t: gv
 
