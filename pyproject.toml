@@ -13,6 +13,7 @@ dependencies = [
     "matplotlib",
     "tqdm",
     "numpy",
+    "wandb",
 ]
 
 [project.optional-dependencies]

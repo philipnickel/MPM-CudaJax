@@ -5,7 +5,8 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 import hydra
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
+import wandb
 
 
 def get_cube(center, size, num, add_noise=False):
@@ -42,6 +43,55 @@ def visualize_frames(frames, export_path, center=[0.5, 0.5, 0.5],
 
 
 # ---------------------------------------------------------------------------
+# Per-stage timing helpers
+# ---------------------------------------------------------------------------
+
+class StageTimer:
+    """Accumulates per-stage wall-clock times across substeps."""
+
+    def __init__(self):
+        self.stages = {}
+        self._start = None
+        self._current = None
+
+    def start(self, name):
+        self._current = name
+        self._start = time.perf_counter()
+
+    def stop(self):
+        elapsed = time.perf_counter() - self._start
+        if self._current not in self.stages:
+            self.stages[self._current] = []
+        self.stages[self._current].append(elapsed)
+        self._current = None
+
+    def flush_frame(self):
+        """Pop accumulated times for the current frame and return per-stage totals in ms."""
+        out = {}
+        for name, times in self.stages.items():
+            out[name] = sum(times) * 1000  # ms
+        self.stages.clear()
+        return out
+
+    def summary_from_frames(self, frame_timings):
+        """Compute overall summary from a list of per-frame dicts."""
+        all_stages = {}
+        for ft in frame_timings:
+            for name, ms in ft.items():
+                all_stages.setdefault(name, []).append(ms)
+        out = {}
+        for name, vals in all_stages.items():
+            arr = np.array(vals)
+            out[name] = {
+                'mean_ms': float(arr.mean()),
+                'std_ms': float(arr.std()),
+                'total_ms': float(arr.sum()),
+                'count': len(vals),
+            }
+        return out
+
+
+# ---------------------------------------------------------------------------
 # Backend-specific runners
 # ---------------------------------------------------------------------------
 
@@ -49,11 +99,13 @@ def run_jax(cfg: DictConfig):
     import jax
     import jax.numpy as jnp
     from mpm_jax.solver import MPMState, make_params, step, simulate_frame
+    from mpm_jax.solver import compute_weights_and_indices, p2g_compute, p2g_scatter, grid_update, g2p
     from mpm_jax.constitutive import get_constitutive
     from mpm_jax.boundary import build_boundary_fns
 
     sim = cfg.sim
     mat = cfg.material
+    bench = cfg.get('benchmark', False)
 
     cube_np = get_cube(center=list(sim.center), size=[0.5, 0.5, 0.5], num=10, add_noise=True)
     particles = jnp.array(cube_np, dtype=jnp.float32)
@@ -100,26 +152,71 @@ def run_jax(cfg: DictConfig):
         F=jnp.tile(jnp.eye(3), (n, 1, 1)),
     )
 
+    timer = StageTimer()
     frames = []
+    frame_metrics = []  # collect metrics outside timing
+    frame_timings = []  # per-frame stage breakdown
     sim_time = 0.0
     t0 = time.perf_counter()
+
     for frame in tqdm(range(sim.num_frames), desc='JAX'):
-        frames.append(np.array(state.x))
-        state, sim_time = simulate_frame(
-            params, state, elasticity_fn, plasticity_fn,
-            pre_fn, post_fn, sim.steps_per_frame, sim_time,
-        )
+        if not bench:
+            frames.append(np.array(state.x))
+        for _ in range(sim.steps_per_frame):
+            # --- P2G: stress + weights + per-particle compute + scatter ---
+            timer.start('p2g_compute')
+            stress = elasticity_fn(state.F)
+            x, v = pre_fn(state.x, state.v, sim_time)
+            weight, dweight, dpos, index = compute_weights_and_indices(
+                x, params.inv_dx, params.dx, params.num_grids)
+            mv, m = p2g_compute(v, state.C, stress, weight, dweight, dpos,
+                                params.dt, params.vol, params.p_mass)
+            jax.block_until_ready(mv)
+            timer.stop()
+
+            timer.start('p2g_scatter')
+            grid_mv, grid_m = p2g_scatter(mv, m, index, params.num_grids)
+            jax.block_until_ready(grid_mv)
+            timer.stop()
+
+            # --- Grid update ---
+            timer.start('grid_update')
+            grid_mv = grid_update(grid_mv, grid_m, params.gravity, params.dt, params.damping)
+            grid_mv = post_fn(grid_mv, grid_m, sim_time)
+            jax.block_until_ready(grid_mv)
+            timer.stop()
+
+            # --- G2P ---
+            timer.start('g2p')
+            new_x, new_v, new_C, new_F = g2p(grid_mv, weight, dweight, dpos, index,
+                                               state.F, x, params.dt, params.inv_dx, params.clip_bound)
+            new_F = plasticity_fn(new_F)
+            jax.block_until_ready(new_x)
+            timer.stop()
+
+            state = MPMState(x=new_x, v=new_v, C=new_C, F=new_F)
+            sim_time += params.dt
+
+        # Flush per-frame stage timings (sums substeps within this frame)
+        ft = timer.flush_frame()
+        frame_ms = sum(ft.values())
+        frame_timings.append(ft)
+        frame_metrics.append({
+            'x_mean_z': float(state.x[:, 2].mean()),
+            'v_max': float(jnp.abs(state.v).max()),
+            'frame_ms': frame_ms,
+            **{f'{k}_ms': v for k, v in ft.items()},
+        })
+
     jax.block_until_ready(state.x)
     elapsed = time.perf_counter() - t0
 
     total_steps = sim.num_frames * sim.steps_per_frame
-    print(f"JAX: {total_steps} steps in {elapsed:.2f}s ({total_steps/elapsed:.1f} steps/s, {elapsed/total_steps*1000:.2f} ms/step)")
-    return frames
+    return frames, elapsed, total_steps, timer.summary_from_frames(frame_timings), frame_metrics
 
 
 def run_pytorch(cfg: DictConfig):
     import sys
-    # Add the vendored MPM-PyTorch to the path
     vendor_path = os.path.join(os.path.dirname(__file__), "vendor", "MPM-PyTorch")
     if vendor_path not in sys.path:
         sys.path.insert(0, vendor_path)
@@ -129,6 +226,7 @@ def run_pytorch(cfg: DictConfig):
 
     sim = cfg.sim
     mat = cfg.material
+    bench = cfg.get('benchmark', False)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     cube_np = get_cube(center=list(sim.center), size=[0.5, 0.5, 0.5], num=10, add_noise=True)
@@ -148,19 +246,85 @@ def run_pytorch(cfg: DictConfig):
     C = torch.zeros((n, 3, 3), device=device)
     F = torch.eye(3, device=device).unsqueeze(0).repeat(n, 1, 1)
 
+    timer = StageTimer()
     frames = []
+    frame_metrics = []
+    frame_timings = []
     t0 = time.perf_counter()
+
     for frame in tqdm(range(sim.num_frames), desc='PyTorch'):
-        frames.append(x.cpu().numpy())
+        if not bench:
+            frames.append(x.detach().cpu().numpy())
         for _ in range(sim.steps_per_frame):
+            # Full timestep: stress + P2G + grid + G2P + plasticity
+            # PyTorch solver bundles P2G/grid/G2P internally so we
+            # can't split to match JAX's 3-stage breakdown.
+            timer.start('timestep')
             stress = elasticity(F)
             x, v, C, F = solver(x, v, C, F, stress)
             F = plasticity(F)
-    elapsed = time.perf_counter() - t0
+            if device.type == 'cuda':
+                torch.cuda.synchronize()
+            timer.stop()
 
+        ft = timer.flush_frame()
+        frame_ms = sum(ft.values())
+        frame_timings.append(ft)
+        frame_metrics.append({
+            'x_mean_z': float(x[:, 2].mean().item()),
+            'v_max': float(torch.abs(v).max().item()),
+            'frame_ms': frame_ms,
+            **{f'{k}_ms': v for k, v in ft.items()},
+        })
+
+    elapsed = time.perf_counter() - t0
     total_steps = sim.num_frames * sim.steps_per_frame
-    print(f"PyTorch: {total_steps} steps in {elapsed:.2f}s ({total_steps/elapsed:.1f} steps/s, {elapsed/total_steps*1000:.2f} ms/step)")
-    return frames
+    return frames, elapsed, total_steps, timer.summary_from_frames(frame_timings), frame_metrics
+
+
+# ---------------------------------------------------------------------------
+# Wandb logging (all after timing is complete)
+# ---------------------------------------------------------------------------
+
+def log_results(backend, elapsed, total_steps, summary, frame_metrics, frames, cfg, export_path):
+    """Log all metrics to wandb. Called only after timing is done."""
+    steps_per_sec = total_steps / elapsed
+    ms_per_step = elapsed / total_steps * 1000
+    steps_per_frame = cfg.sim.steps_per_frame
+
+    # Per-frame time series (stage timings + physics metrics)
+    for i, fm in enumerate(frame_metrics):
+        step_idx = (i + 1) * steps_per_frame
+        wandb.log({k: v for k, v in fm.items()}, step=step_idx)
+
+    # Summary scalars
+    n_particles = frames[0].shape[0] if frames else 0
+    wandb.log({
+        'summary/total_steps': total_steps,
+        'summary/elapsed_s': elapsed,
+        'summary/steps_per_sec': steps_per_sec,
+        'summary/ms_per_step': ms_per_step,
+        'summary/n_particles': n_particles,
+    })
+
+    # Per-stage breakdown table
+    stage_table = wandb.Table(
+        columns=["stage", "mean_ms", "std_ms", "total_ms", "count", "pct"],
+    )
+    total_ms = sum(s['total_ms'] for s in summary.values())
+    for stage, stats in sorted(summary.items(), key=lambda x: -x[1]['total_ms']):
+        pct = stats['total_ms'] / total_ms * 100 if total_ms > 0 else 0
+        stage_table.add_data(stage, round(stats['mean_ms'], 4), round(stats['std_ms'], 4),
+                             round(stats['total_ms'], 2), stats['count'], round(pct, 1))
+        wandb.log({
+            f'stage/{stage}_mean_ms': stats['mean_ms'],
+            f'stage/{stage}_pct': pct,
+        })
+    wandb.log({'stage_breakdown': stage_table})
+
+    # Animation
+    if export_path and os.path.exists(export_path):
+        wandb.log({'animation': wandb.Video(export_path, format='gif')})
 
 
 # ---------------------------------------------------------------------------
@@ -172,19 +336,49 @@ def main(cfg: DictConfig):
     backend = cfg.backend.name
     print(f"Backend: {backend}")
 
+    # Init wandb
+    wandb_cfg = OmegaConf.to_container(cfg, resolve=True)
+    wandb.init(
+        project="MPM-CudaJAX",
+        name=f"{cfg.tag}_{backend}",
+        config=wandb_cfg,
+        tags=[backend, cfg.tag],
+    )
+
+    # Run simulation (timing-critical — no wandb calls inside)
     if backend == "jax":
-        frames = run_jax(cfg)
+        frames, elapsed, total_steps, summary, frame_metrics = run_jax(cfg)
     elif backend == "pytorch":
-        frames = run_pytorch(cfg)
+        frames, elapsed, total_steps, summary, frame_metrics = run_pytorch(cfg)
     else:
         raise ValueError(f"Unknown backend: {backend}")
 
-    orig_cwd = hydra.utils.get_original_cwd()
-    output_dir = os.path.join(orig_cwd, cfg.output_dir)
-    os.makedirs(output_dir, exist_ok=True)
-    export_path = os.path.join(output_dir, f"{cfg.tag}_{backend}.gif")
-    print(f"Rendering to {export_path}...")
-    visualize_frames(frames, export_path, size=[1, 1, 1], c=cfg.material.color)
+    # Print timing summary
+    steps_per_sec = total_steps / elapsed
+    ms_per_step = elapsed / total_steps * 1000
+    print(f"\n{backend}: {total_steps} steps in {elapsed:.2f}s ({steps_per_sec:.1f} steps/s, {ms_per_step:.2f} ms/step)")
+
+    total_ms = sum(s['total_ms'] for s in summary.values())
+    print(f"\nPer-stage timing (per frame, {cfg.sim.steps_per_frame} substeps each):")
+    for stage, stats in sorted(summary.items(), key=lambda x: -x[1]['total_ms']):
+        pct = stats['total_ms'] / total_ms * 100 if total_ms > 0 else 0
+        print(f"  {stage:15s}: {stats['mean_ms']:8.3f} ms/frame ({pct:5.1f}%  std={stats['std_ms']:.3f}  n={stats['count']})")
+
+    # Render GIF (skip in benchmark mode)
+    export_path = None
+    if not cfg.get('benchmark', False) and frames:
+        orig_cwd = hydra.utils.get_original_cwd()
+        output_dir = os.path.join(orig_cwd, cfg.output_dir)
+        os.makedirs(output_dir, exist_ok=True)
+        export_path = os.path.join(output_dir, f"{cfg.tag}_{backend}.gif")
+        print(f"\nRendering to {export_path}...")
+        visualize_frames(frames, export_path, size=[1, 1, 1], c=cfg.material.color)
+    elif cfg.get('benchmark', False):
+        print("\nBenchmark mode: skipping GIF rendering.")
+
+    # Log everything to wandb (after all timing is done)
+    log_results(backend, elapsed, total_steps, summary, frame_metrics, frames, cfg, export_path)
+    wandb.finish()
 
 
 if __name__ == "__main__":

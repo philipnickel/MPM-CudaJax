@@ -6,3 +6,4 @@ defaults:
 
 output_dir: ./output
 tag: jelly
+benchmark: false  # skip GIF rendering and frame saving when true

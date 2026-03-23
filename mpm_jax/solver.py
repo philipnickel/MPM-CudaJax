@@ -54,100 +54,179 @@ def make_params(
     )
 
 
-def _compute_weights(fx):
-    """Compute quadratic B-spline weights and weight gradients.
+# ---------------------------------------------------------------------------
+# Single-particle functions (one thread in CUDA)
+# ---------------------------------------------------------------------------
+
+def _single_particle_weights(x_p, inv_dx, dx, num_grids):
+    """Compute B-spline weights, gradients, dpos, and indices for one particle.
 
     Args:
-        fx: (N, 3) fractional position within cell
+        x_p: (3,) particle position
 
     Returns:
-        w: (N, 3, 3) — axis 0=particle, axis 1=node offset (0,1,2), axis 2=spatial dim (x,y,z)
-        dw: (N, 3, 3) — same layout for weight gradients
+        weight:  (27,)   scalar weight per stencil node
+        dweight: (27, 3) weight gradient per stencil node
+        dpos:    (27, 3) offset from particle to each stencil node
+        index:   (27,)   flat grid index per stencil node
     """
-    w0 = 0.5 * (1.5 - fx) ** 2
-    w1 = 0.75 - (fx - 1.0) ** 2
-    w2 = 0.5 * (fx - 0.5) ** 2
-    w = jnp.stack([w0, w1, w2], axis=1)
+    px = x_p * inv_dx
+    base = jnp.floor(px - 0.5).astype(int)  # (3,)
+    fx = px - base.astype(jnp.float32)       # (3,)
 
-    dw0 = fx - 1.5
-    dw1 = -2.0 * (fx - 1.0)
-    dw2 = fx - 0.5
-    dw = jnp.stack([dw0, dw1, dw2], axis=1)
+    # Quadratic B-spline weights per dimension: (3, 3) -> offset x dim
+    w = jnp.stack([
+        0.5 * (1.5 - fx) ** 2,
+        0.75 - (fx - 1.0) ** 2,
+        0.5 * (fx - 0.5) ** 2,
+    ])  # (3, 3): [offset_idx, spatial_dim]
 
-    return w, dw
+    dw = jnp.stack([
+        fx - 1.5,
+        -2.0 * (fx - 1.0),
+        fx - 0.5,
+    ])  # (3, 3)
 
-
-def _linearize_index(base, offset, num_grids):
-    """Convert 3D grid indices to flat 1D indices."""
-    idx = base[:, None, :] + offset[None, :, :].astype(int)  # (N, 27, 3)
-    flat = idx[:, :, 0] * num_grids * num_grids + idx[:, :, 1] * num_grids + idx[:, :, 2]
-    flat = jnp.clip(flat, 0, num_grids ** 3 - 1)
-    return flat.reshape(-1)  # (N*27,)
-
-
-# ---------------------------------------------------------------------------
-# Individually JIT-able kernels
-# ---------------------------------------------------------------------------
-
-def compute_weights_and_indices(x, inv_dx, dx, num_grids):
-    """Compute B-spline weights, weight gradients, dpos, and grid indices.
-
-    Returns everything the P2G and G2P steps need, so weight computation
-    is shared between them.
-    """
-    px = x * inv_dx
-    base = jnp.floor(px - 0.5).astype(int)
-    fx = px - base.astype(jnp.float32)
-
-    w, dw = _compute_weights(fx)
-
-    weight = jnp.einsum('bi,bj,bk->bijk', w[:, :, 0], w[:, :, 1], w[:, :, 2]).reshape(-1, 27)
+    # 3D tensor product over 27 nodes
+    offsets = OFFSET_27.astype(int)  # (27, 3)
+    weight = w[offsets[:, 0], 0] * w[offsets[:, 1], 1] * w[offsets[:, 2], 2]  # (27,)
 
     dweight = inv_dx * jnp.stack([
-        jnp.einsum('bi,bj,bk->bijk', dw[:, :, 0],  w[:, :, 1],  w[:, :, 2]),
-        jnp.einsum('bi,bj,bk->bijk',  w[:, :, 0], dw[:, :, 1],  w[:, :, 2]),
-        jnp.einsum('bi,bj,bk->bijk',  w[:, :, 0],  w[:, :, 1], dw[:, :, 2]),
-    ], axis=-1).reshape(-1, 27, 3)
+        dw[offsets[:, 0], 0] *  w[offsets[:, 1], 1] *  w[offsets[:, 2], 2],
+         w[offsets[:, 0], 0] * dw[offsets[:, 1], 1] *  w[offsets[:, 2], 2],
+         w[offsets[:, 0], 0] *  w[offsets[:, 1], 1] * dw[offsets[:, 2], 2],
+    ], axis=-1)  # (27, 3)
 
-    dpos = (OFFSET_27[None, :, :] - fx[:, None, :]) * dx
-    index = _linearize_index(base, OFFSET_27, num_grids)
+    dpos = (OFFSET_27 - fx[None, :]) * dx  # (27, 3)
+
+    # Flat grid indices
+    idx_3d = base[None, :] + offsets  # (27, 3)
+    index = idx_3d[:, 0] * num_grids * num_grids + idx_3d[:, 1] * num_grids + idx_3d[:, 2]
+    index = jnp.clip(index, 0, num_grids ** 3 - 1)  # (27,)
 
     return weight, dweight, dpos, index
 
 
-def p2g(v, C, stress, weight, dweight, dpos, index, dt, vol, p_mass, num_grids):
-    """Particle-to-grid scatter. Returns (grid_mv, grid_m)."""
-    G = num_grids
+def _single_particle_p2g(v_p, C_p, stress_p, weight, dweight, dpos, dt, vol, p_mass):
+    """Compute P2G contributions for one particle (one CUDA thread).
+
+    Args:
+        v_p:      (3,)   particle velocity
+        C_p:      (3, 3) APIC affine matrix
+        stress_p: (3, 3) Kirchhoff stress
+        weight:   (27,)  B-spline weights
+        dweight:  (27, 3) weight gradients
+        dpos:     (27, 3) particle-to-node offsets
+        dt, vol, p_mass: scalars
+
+    Returns:
+        mv: (27, 3) momentum contribution per stencil node
+        m:  (27,)   mass contribution per stencil node
+    """
+    # Affine momentum: stress term + APIC term
     mv = (
-        -dt * vol * jnp.einsum('bij,bkj->bki', stress, dweight)
-        + p_mass * weight[:, :, None] * (v[:, None, :] + jnp.einsum('bij,bkj->bki', C, dpos))
+        -dt * vol * (stress_p @ dweight.T).T              # (27, 3)
+        + p_mass * weight[:, None] * (v_p[None, :] + (C_p @ dpos.T).T)  # (27, 3)
     )
-    grid_mv = jnp.zeros((G ** 3, 3)).at[index].add(mv.reshape(-1, 3))
-    grid_m = jnp.zeros((G ** 3,)).at[index].add((weight * p_mass).reshape(-1))
+    m = weight * p_mass  # (27,)
+    return mv, m
+
+
+def _single_particle_g2p(grid_mv, weight, dweight, dpos, index, F_p, x_p, dt, inv_dx, clip_bound):
+    """Compute G2P gather for one particle (one CUDA thread).
+
+    Args:
+        grid_mv: (G^3, 3) grid velocities (read-only)
+        weight:  (27,)  B-spline weights
+        dweight: (27, 3) weight gradients
+        dpos:    (27, 3) particle-to-node offsets
+        index:   (27,)  flat grid indices
+        F_p:     (3, 3) deformation gradient
+        x_p:     (3,)   particle position
+        dt, inv_dx, clip_bound: scalars
+
+    Returns:
+        new_x: (3,)   updated position
+        new_v: (3,)   updated velocity
+        new_C: (3, 3) updated APIC matrix
+        new_F: (3, 3) updated deformation gradient
+    """
+    gv = grid_mv[index]  # (27, 3) — gather from grid
+    new_v = (weight[:, None] * gv).sum(axis=0)  # (3,)
+    new_C = 4.0 * inv_dx * inv_dx * (weight[:, None, None] * jnp.einsum('ij,ik->ijk', gv, dpos)).sum(axis=0)  # (3, 3)
+    grad_v = jnp.einsum('ij,ik->ijk', gv, dweight).sum(axis=0)  # (3, 3)
+
+    new_x = jnp.clip(x_p + new_v * dt, clip_bound, 1.0 - clip_bound)  # (3,)
+    new_F = jnp.clip(F_p + dt * grad_v @ F_p, -2.0, 2.0)  # (3, 3)
+
+    return new_x, new_v, new_C, new_F
+
+
+# ---------------------------------------------------------------------------
+# Batched versions via vmap
+# ---------------------------------------------------------------------------
+
+# vmap over particles (axis 0), keep grid params as scalars
+compute_weights_and_indices = jax.vmap(
+    _single_particle_weights,
+    in_axes=(0, None, None, None),
+)  # (N, 3) -> (N, 27), (N, 27, 3), (N, 27, 3), (N, 27)
+
+
+def p2g_compute(v, C, stress, weight, dweight, dpos, dt, vol, p_mass):
+    """Per-particle P2G computation via vmap (embarrassingly parallel).
+
+    Returns:
+        mv: (N, 27, 3) momentum contributions per particle per stencil node
+        m:  (N, 27)    mass contributions per particle per stencil node
+    """
+    return jax.vmap(
+        _single_particle_p2g,
+        in_axes=(0, 0, 0, 0, 0, 0, None, None, None),
+    )(v, C, stress, weight, dweight, dpos, dt, vol, p_mass)
+
+
+def p2g_scatter(mv, m, index, num_grids):
+    """Scatter particle contributions onto the grid (the reduction).
+
+    This is the only non-embarrassingly-parallel operation in the timestep.
+    XLA lowers this to atomicAdd on GPU — the primary target for CUDA
+    optimisation (shared memory staging, spatial sorting, warp reductions).
+
+    Returns:
+        grid_mv: (G^3, 3) grid momentum
+        grid_m:  (G^3,)   grid mass
+    """
+    G = num_grids
+    grid_mv = jnp.zeros((G ** 3, 3)).at[index.ravel()].add(mv.reshape(-1, 3))
+    grid_m = jnp.zeros((G ** 3,)).at[index.ravel()].add(m.ravel())
     return grid_mv, grid_m
+
+
+def p2g(v, C, stress, weight, dweight, dpos, index, dt, vol, p_mass, num_grids):
+    """Full P2G: compute + scatter. Drop-in compatible with existing interface."""
+    mv, m = p2g_compute(v, C, stress, weight, dweight, dpos, dt, vol, p_mass)
+    return p2g_scatter(mv, m, index, num_grids)
 
 
 @jax.jit
 def grid_update(grid_mv, grid_m, gravity, dt, damping):
-    """Normalize momentum by mass, apply gravity and damping."""
+    """Normalize momentum by mass, apply gravity and damping.
+
+    Embarrassingly parallel over grid nodes.
+    """
     valid = grid_m > 1e-15
     grid_mv = jnp.where(valid[:, None], grid_mv / grid_m[:, None], grid_mv)
     grid_mv = damping * (grid_mv + dt * gravity)
     return grid_mv
 
 
-@jax.jit
 def g2p(grid_mv, weight, dweight, dpos, index, F, x, dt, inv_dx, clip_bound):
-    """Grid-to-particle gather. Returns new (x, v, C, F)."""
-    gv = grid_mv[index].reshape(-1, 27, 3)
-    new_v = (weight[:, :, None] * gv).sum(axis=1)
-    new_C = 4.0 * inv_dx * inv_dx * (weight[:, :, None, None] * jnp.einsum('bij,bik->bijk', gv, dpos)).sum(axis=1)
-    grad_v = jnp.einsum('bij,bik->bijk', gv, dweight).sum(axis=1)
-
-    new_x = jnp.clip(x + new_v * dt, clip_bound, 1.0 - clip_bound)
-    new_F = jnp.clip(F + dt * grad_v @ F, -2.0, 2.0)
-
-    return new_x, new_v, new_C, new_F
+    """G2P gather via vmap (embarrassingly parallel over particles)."""
+    return jax.vmap(
+        _single_particle_g2p,
+        in_axes=(None, 0, 0, 0, 0, 0, 0, None, None, None),
+    )(grid_mv, weight, dweight, dpos, index, F, x, dt, inv_dx, clip_bound)
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +246,7 @@ def step(params, state, stress, pre_particle_fn, post_grid_fn, time, p2g_fn=None
     # Pre-particle BCs (Python-level)
     x, v = pre_particle_fn(state.x, state.v, time)
 
-    # Compute shared weights/indices
+    # Compute shared weights/indices (vmap over particles)
     weight, dweight, dpos, index = compute_weights_and_indices(x, inv_dx, dx, G)
 
     # P2G — swappable with CUDA kernel
@@ -184,7 +263,7 @@ def step(params, state, stress, pre_particle_fn, post_grid_fn, time, p2g_fn=None
     # Post-grid BCs (Python-level)
     grid_mv = post_grid_fn(grid_mv, grid_m, time)
 
-    # G2P
+    # G2P (vmap over particles)
     new_x, new_v, new_C, new_F = g2p(grid_mv, weight, dweight, dpos, index,
                                        state.F, x, dt, inv_dx, clip_bound)
 
