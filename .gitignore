@@ -10,3 +10,7 @@ outputs/
 uv.lock
 .pytest_cache/
 wandb/
+
+multirun/
+outputs/
+wandb/
