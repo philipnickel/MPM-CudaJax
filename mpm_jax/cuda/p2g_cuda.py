@@ -34,8 +34,12 @@ def _compile_kernel(cu_name, so_name):
         logger.error("CUDA source not found: %s", cu_path)
         return False
 
-    if not shutil.which("nvcc"):
-        logger.warning("nvcc not found on PATH — cannot compile CUDA kernels")
+    # Prefer an nvcc matching the driver's CUDA version to avoid
+    # "driver version insufficient" errors. Fall back to PATH nvcc.
+    nvcc = os.environ.get("NVCC", shutil.which("nvcc"))
+    if not nvcc:
+        logger.warning("nvcc not found on PATH — cannot compile CUDA kernels. "
+                       "Set NVCC env var to point to a compatible nvcc.")
         return False
 
     # Get FFI include dir
@@ -59,7 +63,7 @@ def _compile_kernel(cu_name, so_name):
         pass
 
     cmd = [
-        "nvcc",
+        nvcc,
         "-arch=sm_90",
         "-O3",
         "--use_fast_math",
