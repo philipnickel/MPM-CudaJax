@@ -8,24 +8,23 @@ Unified MLS-MPM benchmark comparing JAX, PyTorch, and hand-written CUDA implemen
 
 ## Build & Run Commands
 
-```bash
-# Install with both backends
-uv run --python 3.11 --extra all python simulate.py
+All commands use `uv run` — no manual venv or `pip install`.
 
+```bash
 # JAX backend (default)
-python simulate.py backend=jax material=jelly
+uv run --python 3.11 --extra all python simulate.py backend=jax material=jelly
 
 # PyTorch backend
-python simulate.py backend=pytorch material=jelly
+uv run --python 3.11 --extra all python simulate.py backend=pytorch material=jelly
 
 # Override params
-python simulate.py backend=jax sim.num_frames=50 sim.dt=1e-4
+uv run --python 3.11 --extra all python simulate.py backend=jax sim.num_frames=50 sim.dt=1e-4
 
 # Run CUDA P2G benchmark
-python -m mpm_jax.cuda.benchmark
+uv run --python 3.11 --extra jax python -m mpm_jax.cuda.benchmark
 
 # Run tests
-python -m pytest tests/ -v
+uv run --python 3.11 --extra jax python -m pytest tests/ -v
 ```
 
 ## Architecture
