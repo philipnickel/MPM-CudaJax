@@ -230,7 +230,7 @@ def g2p(grid_mv, weight, dweight, dpos, index, F, x, dt, inv_dx, clip_bound):
 
 
 # ---------------------------------------------------------------------------
-# Orchestrator (not jitted — calls jitted pieces + Python-level BCs)
+# Orchestrator — unjitted version for compatibility / CUDA kernel swapping
 # ---------------------------------------------------------------------------
 
 def step(params, state, stress, pre_particle_fn, post_grid_fn, time, p2g_fn=None):
@@ -243,7 +243,7 @@ def step(params, state, stress, pre_particle_fn, post_grid_fn, time, p2g_fn=None
     G = params.num_grids
     clip_bound = params.clip_bound
 
-    # Pre-particle BCs (Python-level)
+    # Pre-particle BCs
     x, v = pre_particle_fn(state.x, state.v, time)
 
     # Compute shared weights/indices (vmap over particles)
@@ -260,7 +260,7 @@ def step(params, state, stress, pre_particle_fn, post_grid_fn, time, p2g_fn=None
     # Grid update
     grid_mv = grid_update(grid_mv, grid_m, params.gravity, dt, params.damping)
 
-    # Post-grid BCs (Python-level)
+    # Post-grid BCs
     grid_mv = post_grid_fn(grid_mv, grid_m, time)
 
     # G2P (vmap over particles)
@@ -271,10 +271,91 @@ def step(params, state, stress, pre_particle_fn, post_grid_fn, time, p2g_fn=None
 
 
 def simulate_frame(params, state, elasticity_fn, plasticity_fn, pre_particle_fn, post_grid_fn, steps_per_frame, time, p2g_fn=None):
-    """Run multiple substeps for one frame."""
+    """Run multiple substeps for one frame (unjitted, for CUDA kernel path)."""
     for _ in range(steps_per_frame):
         stress = elasticity_fn(state.F)
         state = step(params, state, stress, pre_particle_fn, post_grid_fn, time, p2g_fn=p2g_fn)
         state = state._replace(F=plasticity_fn(state.F))
         time += params.dt
     return state, time
+
+
+# ---------------------------------------------------------------------------
+# JIT-compiled orchestrator — entire frame as one XLA program
+# ---------------------------------------------------------------------------
+
+def build_jit_step(params, elasticity_fn, plasticity_fn, pre_particle_fn, post_grid_fn):
+    """Build a JIT-compiled single-step function.
+
+    Captures all closures (BCs, constitutive models) at trace time so the
+    entire timestep compiles to one XLA program — no Python dispatch overhead
+    between operations, and XLA can fuse across all stages.
+
+    Returns:
+        jit_step(state) -> MPMState
+    """
+    dt = params.dt
+    vol = params.vol
+    p_mass = params.p_mass
+    dx = params.dx
+    inv_dx = params.inv_dx
+    G = params.num_grids
+    clip_bound = params.clip_bound
+    gravity = params.gravity
+    damping = params.damping
+
+    @jax.jit
+    def jit_step(state):
+        # Stress
+        stress = elasticity_fn(state.F)
+
+        # Pre-particle BCs
+        x, v = pre_particle_fn(state.x, state.v, 0.0)
+
+        # Weights (vmap over particles)
+        weight, dweight, dpos, index = compute_weights_and_indices(x, inv_dx, dx, G)
+
+        # P2G: compute + scatter
+        mv, m = p2g_compute(v, state.C, stress, weight, dweight, dpos, dt, vol, p_mass)
+        grid_mv = jnp.zeros((G ** 3, 3)).at[index.ravel()].add(mv.reshape(-1, 3))
+        grid_m = jnp.zeros((G ** 3,)).at[index.ravel()].add(m.ravel())
+
+        # Grid update
+        valid = grid_m > 1e-15
+        grid_mv = jnp.where(valid[:, None], grid_mv / grid_m[:, None], grid_mv)
+        grid_mv = damping * (grid_mv + dt * gravity)
+
+        # Post-grid BCs
+        grid_mv = post_grid_fn(grid_mv, grid_m, 0.0)
+
+        # G2P (vmap over particles)
+        new_x, new_v, new_C, new_F = g2p(grid_mv, weight, dweight, dpos, index,
+                                           state.F, x, dt, inv_dx, clip_bound)
+
+        # Plasticity
+        new_F = plasticity_fn(new_F)
+
+        return MPMState(x=new_x, v=new_v, C=new_C, F=new_F)
+
+    return jit_step
+
+
+def build_jit_frame(params, elasticity_fn, plasticity_fn, pre_particle_fn, post_grid_fn, steps_per_frame):
+    """Build a JIT-compiled function that runs an entire frame via lax.scan.
+
+    One XLA program, zero Python loop overhead.
+
+    Returns:
+        jit_frame(state) -> MPMState
+    """
+    jit_step = build_jit_step(params, elasticity_fn, plasticity_fn,
+                               pre_particle_fn, post_grid_fn)
+
+    @jax.jit
+    def jit_frame(state):
+        def scan_body(state, _):
+            return jit_step(state), None
+        state, _ = jax.lax.scan(scan_body, state, None, length=steps_per_frame)
+        return state
+
+    return jit_frame
