@@ -18,8 +18,10 @@ dependencies = [
 
 [project.optional-dependencies]
 jax = ["jax>=0.4.20", "jaxlib>=0.4.20"]
+jax-cuda = ["jax[cuda12]>=0.4.20"]
 pytorch = ["torch>=2.0.1", "warp-lang>=1.0"]
 all = ["mpm-cudajax[jax,pytorch]"]
+all-cuda = ["mpm-cudajax[jax-cuda,pytorch]"]
 
 [tool.setuptools.packages.find]
 include = ["mpm_jax*"]

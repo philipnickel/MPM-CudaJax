@@ -106,6 +106,25 @@ def run_jax(cfg: DictConfig):
     sim = cfg.sim
     mat = cfg.material
     bench = cfg.get('benchmark', False)
+    kernel_name = cfg.get('kernel', {}).get('name', 'jax')
+
+    # Build p2g_fn based on kernel config
+    p2g_fn = None  # None = default JAX implementation
+    if kernel_name == 'cuda_v1':
+        from mpm_jax.cuda.p2g_cuda import make_cuda_p2g
+        p2g_fn = make_cuda_p2g(sim.num_grids, kernel='scatter')
+        if p2g_fn is None:
+            print(f"WARNING: kernel={kernel_name} requested but CUDA not available, falling back to JAX")
+        else:
+            print(f"Using CUDA P2G scatter kernel (v1)")
+    elif kernel_name == 'cuda_v2':
+        from mpm_jax.cuda.p2g_cuda import is_available
+        if not is_available('fused'):
+            print(f"WARNING: kernel={kernel_name} requested but CUDA not available, falling back to JAX")
+        else:
+            print(f"Using CUDA fused P2G kernel (v2)")
+    else:
+        print("Using JAX P2G kernel")
 
     cube_np = get_cube(center=list(sim.center), size=[0.5, 0.5, 0.5], num=10, add_noise=True)
     particles = jnp.array(cube_np, dtype=jnp.float32)
@@ -140,7 +159,7 @@ def run_jax(cfg: DictConfig):
     # Warmup JIT
     for _ in range(3):
         stress = elasticity_fn(state.F)
-        state = step(params, state, stress, pre_fn, post_fn, 0.0)
+        state = step(params, state, stress, pre_fn, post_fn, 0.0, p2g_fn=p2g_fn)
         state = state._replace(F=plasticity_fn(state.F))
     jax.block_until_ready(state.x)
 
@@ -175,7 +194,13 @@ def run_jax(cfg: DictConfig):
             timer.stop()
 
             timer.start('p2g_scatter')
-            grid_mv, grid_m = p2g_scatter(mv, m, index, params.num_grids)
+            if p2g_fn is not None:
+                # CUDA kernel: p2g_fn does compute+scatter, but we already
+                # computed mv/m above, so call scatter directly
+                from mpm_jax.cuda.p2g_cuda import cuda_p2g_scatter
+                grid_mv, grid_m = cuda_p2g_scatter(mv, m, index, params.num_grids)
+            else:
+                grid_mv, grid_m = p2g_scatter(mv, m, index, params.num_grids)
             jax.block_until_ready(grid_mv)
             timer.stop()
 

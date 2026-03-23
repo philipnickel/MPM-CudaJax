@@ -2,6 +2,7 @@ defaults:
   - backend: jax
   - material: jelly
   - sim: default
+  - kernel: jax
   - _self_
 
 output_dir: ./output
