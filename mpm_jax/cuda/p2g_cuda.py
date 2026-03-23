@@ -46,15 +46,14 @@ def _compile_kernel(cu_name, so_name):
         return False
 
     # Find the GCC libstdc++ and set RPATH so the .so can find it at runtime
-    rpath_flag = ""
+    gcc_lib_dir = None
     try:
         gcc_lib = subprocess.run(
             ["gcc", "-print-file-name=libstdc++.so"],
             capture_output=True, text=True
         )
         if gcc_lib.returncode == 0 and "/" in gcc_lib.stdout.strip():
-            gcc_lib_dir = os.path.dirname(gcc_lib.stdout.strip())
-            rpath_flag = f"-Xlinker,-rpath,{gcc_lib_dir}"
+            gcc_lib_dir = os.path.dirname(os.path.realpath(gcc_lib.stdout.strip()))
             logger.info("Using GCC libstdc++ from %s", gcc_lib_dir)
     except FileNotFoundError:
         pass
@@ -71,8 +70,8 @@ def _compile_kernel(cu_name, so_name):
         "-diag-suppress=940,2473",
         "-Xcompiler", "-Wno-return-type",
     ]
-    if rpath_flag:
-        cmd.extend(["-Xcompiler", rpath_flag])
+    if gcc_lib_dir:
+        cmd.extend(["-Xlinker", "-rpath", "-Xlinker", gcc_lib_dir])
     cmd.extend(["-o", so_path, cu_path])
 
     logger.info("Compiling %s -> %s", cu_name, so_name)
