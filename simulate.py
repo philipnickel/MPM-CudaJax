@@ -9,17 +9,12 @@ from omegaconf import DictConfig, OmegaConf
 import wandb
 
 
-def get_cube(center, size, num, add_noise=False):
+def get_particles(n_particles, center, size):
+    """Sample n_particles uniformly in a box."""
     start = np.array(center) - np.array(size) / 2
     end = np.array(center) + np.array(size) / 2
-    x = np.linspace(start[0], end[0], num)
-    y = np.linspace(start[1], end[1], num)
-    z = np.linspace(start[2], end[2], num)
-    cube = np.stack(np.meshgrid(x, y, z, indexing='ij'), axis=-1).reshape(-1, 3)
-    if add_noise:
-        noisy = start + np.random.rand(*cube.shape) * (end - start)
-        cube = np.concatenate([cube, noisy], axis=0)
-    return cube
+    rng = np.random.RandomState(42)
+    return start + rng.rand(n_particles, 3) * (end - start)
 
 
 def visualize_frames(frames, export_path, center=[0.5, 0.5, 0.5],
@@ -125,9 +120,10 @@ def run_jax(cfg: DictConfig):
     else:
         print("Using JAX P2G kernel")
 
-    cube_np = get_cube(center=list(sim.center), size=[0.5, 0.5, 0.5], num=10, add_noise=True)
+    n = sim.n_particles
+    cube_np = get_particles(n, center=list(sim.center), size=[0.5, 0.5, 0.5])
     particles = jnp.array(cube_np, dtype=jnp.float32)
-    n = particles.shape[0]
+    print(f"N={n}, G={sim.num_grids}")
 
     params = make_params(
         n_particles=n, num_grids=sim.num_grids, dt=sim.dt,
@@ -217,9 +213,10 @@ def run_pytorch(cfg: DictConfig):
     bench = cfg.get('benchmark', False)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    cube_np = get_cube(center=list(sim.center), size=[0.5, 0.5, 0.5], num=10, add_noise=True)
+    n = sim.n_particles
+    cube_np = get_particles(n, center=list(sim.center), size=[0.5, 0.5, 0.5])
     particles = torch.tensor(cube_np, dtype=torch.float32, device=device)
-    n = particles.shape[0]
+    print(f"N={n}, G={sim.num_grids}")
 
     solver = MPMSolver(particles, enable_train=False, device=device)
     set_boundary_conditions(solver, sim.boundary_conditions)
@@ -286,7 +283,7 @@ def log_results(backend, elapsed, total_steps, summary, frame_metrics, frames, c
         wandb.log({k: v for k, v in fm.items()}, step=step_idx)
 
     # Summary scalars
-    n_particles = frames[0].shape[0] if frames else 0
+    n_particles = cfg.sim.n_particles
     wandb.log({
         'summary/total_steps': total_steps,
         'summary/elapsed_s': elapsed,

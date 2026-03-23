@@ -1,5 +1,6 @@
 num_frames: 150
 steps_per_frame: 10
+n_particles: 2000
 initial_velocity: [0.0, 0.0, -0.5]
 num_grids: 25
 dt: 3e-4
