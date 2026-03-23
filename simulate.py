@@ -108,15 +108,19 @@ def run_jax(cfg: DictConfig):
         from mpm_jax.cuda.p2g_cuda import make_cuda_p2g
         p2g_fn = make_cuda_p2g(sim.num_grids, kernel='scatter')
         if p2g_fn is None:
-            print(f"WARNING: kernel={kernel_name} requested but CUDA not available, falling back to JAX")
-        else:
-            print(f"Using CUDA P2G scatter kernel (v1)")
+            raise RuntimeError(
+                "kernel=cuda_v1 requested but CUDA kernel failed to compile/register. "
+                "Check nvcc is on PATH and module load gcc is done."
+            )
+        print("Using CUDA P2G scatter kernel (v1)")
     elif kernel_name == 'cuda_v2':
         from mpm_jax.cuda.p2g_cuda import is_available
         if not is_available('fused'):
-            print(f"WARNING: kernel={kernel_name} requested but CUDA not available, falling back to JAX")
-        else:
-            print(f"Using CUDA fused P2G kernel (v2)")
+            raise RuntimeError(
+                "kernel=cuda_v2 requested but CUDA kernel failed to compile/register. "
+                "Check nvcc is on PATH and module load gcc is done."
+            )
+        print("Using CUDA fused P2G kernel (v2)")
     else:
         print("Using JAX P2G kernel")
 
