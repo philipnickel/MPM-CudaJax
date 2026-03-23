@@ -1,0 +1,7 @@
+elasticity:
+  name: CorotatedElasticity
+  E: 2e6
+  nu: 0.4
+plasticity:
+  name: IdentityPlasticity
+color: blue

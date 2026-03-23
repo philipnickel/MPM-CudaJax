@@ -1,0 +1,11 @@
+elasticity:
+  name: StVKElasticity
+  E: 2e6
+  nu: 0.4
+plasticity:
+  name: DruckerPragerPlasticity
+  E: 2e6
+  nu: 0.4
+  friction_angle: 25.0
+  cohesion: 0.0
+color: orange

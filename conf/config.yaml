@@ -1,0 +1,8 @@
+defaults:
+  - backend: jax
+  - material: jelly
+  - sim: default
+  - _self_
+
+output_dir: ./output
+tag: jelly
