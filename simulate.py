@@ -98,8 +98,7 @@ class StageTimer:
 def run_jax(cfg: DictConfig):
     import jax
     import jax.numpy as jnp
-    from mpm_jax.solver import MPMState, make_params, step, simulate_frame
-    from mpm_jax.solver import compute_weights_and_indices, p2g_compute, p2g_scatter, grid_update, g2p
+    from mpm_jax.solver import (MPMState, make_params, build_jit_step, build_jit_frame)
     from mpm_jax.constitutive import get_constitutive
     from mpm_jax.boundary import build_boundary_fns
 
@@ -149,80 +148,45 @@ def run_jax(cfg: DictConfig):
     elasticity_fn = get_constitutive(mat.elasticity)
     plasticity_fn = get_constitutive(mat.plasticity)
 
-    state = MPMState(
-        x=particles,
-        v=jnp.broadcast_to(jnp.array(list(sim.initial_velocity)), (n, 3)).copy(),
-        C=jnp.zeros((n, 3, 3)),
-        F=jnp.tile(jnp.eye(3), (n, 1, 1)),
-    )
+    # Build JIT-compiled step and frame functions
+    jit_step = build_jit_step(params, elasticity_fn, plasticity_fn,
+                               pre_fn, post_fn, p2g_fn=p2g_fn)
+    jit_frame = build_jit_frame(params, elasticity_fn, plasticity_fn,
+                                 pre_fn, post_fn, sim.steps_per_frame, p2g_fn=p2g_fn)
 
-    # Warmup JIT
-    for _ in range(3):
-        stress = elasticity_fn(state.F)
-        state = step(params, state, stress, pre_fn, post_fn, 0.0, p2g_fn=p2g_fn)
-        state = state._replace(F=plasticity_fn(state.F))
+    def make_state():
+        return MPMState(
+            x=particles,
+            v=jnp.broadcast_to(jnp.array(list(sim.initial_velocity)), (n, 3)).copy(),
+            C=jnp.zeros((n, 3, 3)),
+            F=jnp.tile(jnp.eye(3), (n, 1, 1)),
+        )
+
+    # Warmup JIT compilation
+    state = make_state()
+    state = jit_step(state)
+    jax.block_until_ready(state.x)
+    state = make_state()
+    state = jit_frame(state)
     jax.block_until_ready(state.x)
 
-    # Reset
-    state = MPMState(
-        x=particles,
-        v=jnp.broadcast_to(jnp.array(list(sim.initial_velocity)), (n, 3)).copy(),
-        C=jnp.zeros((n, 3, 3)),
-        F=jnp.tile(jnp.eye(3), (n, 1, 1)),
-    )
-
+    # Reset and time
+    state = make_state()
     timer = StageTimer()
     frames = []
-    frame_metrics = []  # collect metrics outside timing
-    frame_timings = []  # per-frame stage breakdown
-    sim_time = 0.0
+    frame_metrics = []
+    frame_timings = []
     t0 = time.perf_counter()
 
     for frame in tqdm(range(sim.num_frames), desc='JAX'):
         if not bench:
             frames.append(np.array(state.x))
-        for _ in range(sim.steps_per_frame):
-            # --- P2G: stress + weights + per-particle compute + scatter ---
-            timer.start('p2g_compute')
-            stress = elasticity_fn(state.F)
-            x, v = pre_fn(state.x, state.v, sim_time)
-            weight, dweight, dpos, index = compute_weights_and_indices(
-                x, params.inv_dx, params.dx, params.num_grids)
-            mv, m = p2g_compute(v, state.C, stress, weight, dweight, dpos,
-                                params.dt, params.vol, params.p_mass)
-            jax.block_until_ready(mv)
-            timer.stop()
 
-            timer.start('p2g_scatter')
-            if p2g_fn is not None:
-                # CUDA kernel: p2g_fn does compute+scatter, but we already
-                # computed mv/m above, so call scatter directly
-                from mpm_jax.cuda.p2g_cuda import cuda_p2g_scatter
-                grid_mv, grid_m = cuda_p2g_scatter(mv, m, index, params.num_grids)
-            else:
-                grid_mv, grid_m = p2g_scatter(mv, m, index, params.num_grids)
-            jax.block_until_ready(grid_mv)
-            timer.stop()
+        timer.start('timestep')
+        state = jit_frame(state)
+        jax.block_until_ready(state.x)
+        timer.stop()
 
-            # --- Grid update ---
-            timer.start('grid_update')
-            grid_mv = grid_update(grid_mv, grid_m, params.gravity, params.dt, params.damping)
-            grid_mv = post_fn(grid_mv, grid_m, sim_time)
-            jax.block_until_ready(grid_mv)
-            timer.stop()
-
-            # --- G2P ---
-            timer.start('g2p')
-            new_x, new_v, new_C, new_F = g2p(grid_mv, weight, dweight, dpos, index,
-                                               state.F, x, params.dt, params.inv_dx, params.clip_bound)
-            new_F = plasticity_fn(new_F)
-            jax.block_until_ready(new_x)
-            timer.stop()
-
-            state = MPMState(x=new_x, v=new_v, C=new_C, F=new_F)
-            sim_time += params.dt
-
-        # Flush per-frame stage timings (sums substeps within this frame)
         ft = timer.flush_frame()
         frame_ms = sum(ft.values())
         frame_timings.append(ft)
@@ -233,7 +197,6 @@ def run_jax(cfg: DictConfig):
             **{f'{k}_ms': v for k, v in ft.items()},
         })
 
-    jax.block_until_ready(state.x)
     elapsed = time.perf_counter() - t0
 
     total_steps = sim.num_frames * sim.steps_per_frame
@@ -362,12 +325,13 @@ def main(cfg: DictConfig):
     print(f"Backend: {backend}")
 
     # Init wandb
+    kernel_name = cfg.get('kernel', {}).get('name', 'jax')
     wandb_cfg = OmegaConf.to_container(cfg, resolve=True)
     wandb.init(
         project="MPM-CudaJAX",
-        name=f"{cfg.tag}_{backend}",
+        name=f"{cfg.tag}_{backend}_{kernel_name}_G{cfg.sim.num_grids}",
         config=wandb_cfg,
-        tags=[backend, cfg.tag],
+        tags=[backend, cfg.tag, kernel_name],
     )
 
     # Run simulation (timing-critical — no wandb calls inside)
