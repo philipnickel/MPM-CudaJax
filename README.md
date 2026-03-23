@@ -19,6 +19,31 @@ If you already cloned without `--recurse-submodules`:
 git submodule update --init --recursive
 ```
 
+### DTU HPC (LSF cluster)
+
+```bash
+# Get an interactive GPU session
+bsub -Is -q gpuv100 -gpu "num=1" -R "rusage[mem=8GB]" -- bash
+
+# Load modules (NVHPC bundles CUDA toolkit + nvcc)
+module load nvhpc/26.1
+module load gcc/15.2
+
+# Clone and install
+git clone --recurse-submodules git@github.com:philipnickel/MPM-CudaJax.git
+cd MPM-CudaJax
+
+# Validate JAX sees the GPU
+uv run --extra jax-cuda python -c "import jax; print(jax.devices())"
+
+# Quick benchmark
+uv run --extra jax-cuda python simulate.py backend=jax sim.num_frames=3 benchmark=true
+
+# Build CUDA kernels and run with them
+cd mpm_jax/cuda/kernels && make && cd -
+uv run --extra jax-cuda python simulate.py kernel=cuda_v1 benchmark=true
+```
+
 ### Build CUDA kernels (GPU nodes only)
 
 ```bash
