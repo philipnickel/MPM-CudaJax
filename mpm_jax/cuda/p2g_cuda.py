@@ -119,6 +119,10 @@ def _register_scatter():
     return _register("p2g_scatter_cuda", "p2g_scatter.cu", "libp2g_scatter.so", "P2GScatter")
 
 
+def _register_warp():
+    return _register("p2g_scatter_warp_cuda", "p2g_scatter_warp.cu", "libp2g_scatter_warp.so", "P2GScatterWarp")
+
+
 def _register_fused():
     return _register("p2g_fused_cuda", "p2g_fused.cu", "libp2g_fused.so", "P2GFused")
 
@@ -133,6 +137,27 @@ def cuda_p2g_scatter(mv, m, index, num_grids):
 
     grid_mv, grid_m = jax.ffi.ffi_call(
         "p2g_scatter_cuda",
+        (
+            jax.ShapeDtypeStruct((G3, 3), jnp.float32),
+            jax.ShapeDtypeStruct((G3,), jnp.float32),
+        ),
+        vmap_method="broadcast_all",
+    )(mv, m, index)
+
+    return grid_mv, grid_m
+
+
+def cuda_p2g_scatter_warp(mv, m, index, num_grids):
+    """CUDA P2G scatter with warp-level reduction via JAX FFI.
+
+    Same interface as cuda_p2g_scatter but uses __match_any_sync +
+    __shfl_down_sync to reduce atomics within each warp.
+    """
+    G3 = num_grids ** 3
+    index = index.astype(jnp.int32)
+
+    grid_mv, grid_m = jax.ffi.ffi_call(
+        "p2g_scatter_warp_cuda",
         (
             jax.ShapeDtypeStruct((G3, 3), jnp.float32),
             jax.ShapeDtypeStruct((G3,), jnp.float32),
@@ -186,6 +211,8 @@ def is_available(kernel='scatter'):
     """Check if a CUDA kernel can be compiled and registered."""
     if kernel == 'scatter':
         return _register_scatter()
+    elif kernel == 'warp':
+        return _register_warp()
     elif kernel == 'fused':
         return _register_fused()
     return False
@@ -208,6 +235,18 @@ def make_cuda_p2g(num_grids, kernel='scatter'):
             return cuda_p2g_scatter(mv, m, index, num_grids)
 
         return cuda_p2g_v1
+
+    elif kernel == 'warp':
+        if not is_available('warp'):
+            return None
+
+        from mpm_jax.solver import p2g_compute
+
+        def cuda_p2g_v3(v, C, stress, weight, dweight, dpos, index, dt, vol, p_mass, num_grids):
+            mv, m = p2g_compute(v, C, stress, weight, dweight, dpos, dt, vol, p_mass)
+            return cuda_p2g_scatter_warp(mv, m, index, num_grids)
+
+        return cuda_p2g_v3
 
     elif kernel == 'fused':
         if not is_available('fused'):

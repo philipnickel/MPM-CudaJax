@@ -14,7 +14,7 @@ hydra:
   sweeper:
     params:
       sim.n_particles: 5000,10000,50000,100000
-      kernel: jax,cuda_v1
+      kernel: jax,cuda_v1,cuda_v3
 
 benchmark: true
 tag: sweep_all
