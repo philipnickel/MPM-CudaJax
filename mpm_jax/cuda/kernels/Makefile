@@ -12,7 +12,7 @@ ARCH       := sm_90
 NVCC_FLAGS := -arch=$(ARCH) -O3 --use_fast_math -std=c++17 -Xcompiler -fPIC -shared
 
 # XLA FFI headers — auto-detect from jax install
-FFI_INC ?= $(shell python -c "import jax; print(jax.extend.ffi.include_dir())" 2>/dev/null)
+FFI_INC ?= $(shell python -c "import jax.ffi; print(jax.ffi.include_dir())" 2>/dev/null)
 
 ifeq ($(FFI_INC),)
 $(error Cannot find JAX FFI include directory. Set FFI_INC manually or ensure jax is installed.)
