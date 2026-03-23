@@ -323,12 +323,16 @@ def main(cfg: DictConfig):
 
     # Init wandb
     kernel_name = cfg.get('kernel', {}).get('name', 'jax')
+    # PyTorch ignores kernel config — always label as 'pytorch'
+    effective_kernel = kernel_name if backend == 'jax' else 'pytorch'
+    N = cfg.sim.n_particles
+    G = cfg.sim.num_grids
     wandb_cfg = OmegaConf.to_container(cfg, resolve=True)
     wandb.init(
         project="MPM-CudaJAX",
-        name=f"{cfg.tag}_{backend}_{kernel_name}_G{cfg.sim.num_grids}",
+        name=f"{backend}_{effective_kernel}_N{N}_G{G}",
         config=wandb_cfg,
-        tags=[backend, cfg.tag, kernel_name],
+        tags=[backend, effective_kernel, f"N{N}", f"G{G}"],
     )
 
     # Run simulation (timing-critical — no wandb calls inside)

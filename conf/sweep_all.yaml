@@ -1,0 +1,24 @@
+# Full comparison sweep: JAX (pure) vs JAX+CUDA scatter vs PyTorch.
+#
+# Usage: uv run --extra jax-cuda python simulate.py -cn sweep_all
+#
+# Note: kernel config only affects the JAX backend.
+# PyTorch runs ignore the kernel setting.
+# Build CUDA kernels first: cd mpm_jax/cuda/kernels && make
+defaults:
+  - config
+  - _self_
+
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      sim.n_particles: 5000,10000,50000,100000
+      backend: jax,pytorch
+      kernel: jax,cuda_v1
+
+benchmark: true
+tag: sweep_all
+sim:
+  num_frames: 20
+  num_grids: 64
