@@ -1,15 +1,14 @@
-"""CUDA P2G scatter kernel, integrated via JAX FFI.
+"""CUDA P2G kernels, integrated via JAX FFI.
 
-Loads the compiled .so and registers it as a JAX FFI target.
-Falls back to the JAX implementation if the .so is not built.
-
-Build the kernel first:
-    cd mpm_jax/cuda/kernels && make
+Kernels are compiled automatically from .cu source on first use (requires
+nvcc on PATH). The compiled .so is cached next to the source file.
 """
 
 import os
+import subprocess
 import ctypes
 import logging
+import shutil
 
 import jax
 import jax.numpy as jnp
@@ -21,69 +20,103 @@ _KERNEL_DIR = os.path.join(os.path.dirname(__file__), "kernels")
 _REGISTERED = {}
 
 
-def _register(name, lib_name, symbol):
-    """Load a .so and register an FFI target. Called once per kernel."""
+def _compile_kernel(cu_name, so_name):
+    """Compile a .cu file to .so using nvcc. Returns True on success."""
+    cu_path = os.path.join(_KERNEL_DIR, cu_name)
+    so_path = os.path.join(_KERNEL_DIR, so_name)
+
+    # Skip if .so exists and is newer than .cu
+    if os.path.exists(so_path):
+        if os.path.getmtime(so_path) > os.path.getmtime(cu_path):
+            return True
+
+    if not os.path.exists(cu_path):
+        logger.error("CUDA source not found: %s", cu_path)
+        return False
+
+    if not shutil.which("nvcc"):
+        logger.warning("nvcc not found on PATH — cannot compile CUDA kernels")
+        return False
+
+    # Get FFI include dir
+    try:
+        ffi_inc = jax.ffi.include_dir()
+    except Exception:
+        logger.warning("Cannot determine JAX FFI include dir")
+        return False
+
+    cmd = [
+        "nvcc",
+        "-arch=sm_90",
+        "-O3",
+        "--use_fast_math",
+        "-std=c++17",
+        "-Xcompiler", "-fPIC",
+        "-shared",
+        f"-I{ffi_inc}",
+        "-diag-suppress=940,2473",
+        "-Xcompiler", "-Wno-return-type",
+        "-o", so_path,
+        cu_path,
+    ]
+    logger.info("Compiling %s -> %s", cu_name, so_name)
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        logger.error("nvcc failed:\n%s\n%s", result.stdout, result.stderr)
+        return False
+
+    logger.info("Compiled %s successfully", so_name)
+    return True
+
+
+def _register(name, cu_name, so_name, symbol):
+    """Compile if needed, load .so, and register FFI target."""
     if name in _REGISTERED:
         return _REGISTERED[name]
 
-    lib_path = os.path.join(_KERNEL_DIR, lib_name)
-    if not os.path.exists(lib_path):
-        logger.warning(
-            "CUDA kernel not built: %s not found. "
-            "Build with: cd mpm_jax/cuda/kernels && make",
-            lib_path,
-        )
+    # Auto-compile
+    if not _compile_kernel(cu_name, so_name):
         _REGISTERED[name] = False
         return False
 
+    so_path = os.path.join(_KERNEL_DIR, so_name)
     try:
-        lib = ctypes.cdll.LoadLibrary(lib_path)
+        lib = ctypes.cdll.LoadLibrary(so_path)
         jax.ffi.register_ffi_target(
             name,
             jax.ffi.pycapsule(getattr(lib, symbol)),
             platform="CUDA",
         )
         _REGISTERED[name] = True
-        logger.info("Registered CUDA kernel '%s' from %s", name, lib_path)
+        logger.info("Registered CUDA kernel '%s'", name)
         return True
     except Exception as e:
-        logger.warning("Failed to register CUDA kernel '%s': %s", name, e)
+        logger.error("Failed to register CUDA kernel '%s': %s", name, e)
         _REGISTERED[name] = False
         return False
 
 
 def _register_scatter():
-    return _register("p2g_scatter_cuda", "libp2g_scatter.so", "P2GScatter")
+    return _register("p2g_scatter_cuda", "p2g_scatter.cu", "libp2g_scatter.so", "P2GScatter")
 
 
 def _register_fused():
-    return _register("p2g_fused_cuda", "libp2g_fused.so", "P2GFused")
+    return _register("p2g_fused_cuda", "p2g_fused.cu", "libp2g_fused.so", "P2GFused")
 
 
 def cuda_p2g_scatter(mv, m, index, num_grids):
     """CUDA P2G scatter via JAX FFI.
 
     Drop-in replacement for solver.p2g_scatter().
-
-    Args:
-        mv:    (N, 27, 3) float32 — momentum contributions
-        m:     (N, 27)    float32 — mass contributions
-        index: (N, 27)    int32   — flat grid indices
-
-    Returns:
-        grid_mv: (G^3, 3) float32 — grid momentum
-        grid_m:  (G^3,)   float32 — grid mass
     """
     G3 = num_grids ** 3
-
-    # Ensure index is int32 (JAX may default to int64)
     index = index.astype(jnp.int32)
 
     grid_mv, grid_m = jax.ffi.ffi_call(
         "p2g_scatter_cuda",
         (
-            jax.ShapeDtypeStruct((G3, 3), jnp.float32),  # grid_mv
-            jax.ShapeDtypeStruct((G3,), jnp.float32),    # grid_m
+            jax.ShapeDtypeStruct((G3, 3), jnp.float32),
+            jax.ShapeDtypeStruct((G3,), jnp.float32),
         ),
         vmap_method="broadcast_all",
     )(mv, m, index)
@@ -97,23 +130,11 @@ def cuda_p2g_fused(x, v, C, F, num_grids, dt, vol, p_mass, inv_dx, dx,
 
     Replaces the entire P2G pipeline (stress + weights + compute + scatter)
     with a single CUDA kernel. Also returns plasticity-corrected F.
-
-    Args:
-        x: (N, 3)    positions
-        v: (N, 3)    velocities
-        C: (N, 3, 3) APIC matrix
-        F: (N, 3, 3) deformation gradient
-
-    Returns:
-        grid_mv: (G^3, 3) grid momentum
-        grid_m:  (G^3,)   grid mass
-        F_out:   (N, 3, 3) corrected deformation gradient
     """
     N = x.shape[0]
     G = num_grids
     G3 = G ** 3
 
-    # Flatten C and F to (N, 9) for the kernel
     C_flat = C.reshape(N, 9)
     F_flat = F.reshape(N, 9)
 
@@ -143,7 +164,7 @@ def cuda_p2g_fused(x, v, C, F, num_grids, dt, vol, p_mass, inv_dx, dx,
 
 
 def is_available(kernel='scatter'):
-    """Check if a CUDA kernel is built and can be registered."""
+    """Check if a CUDA kernel can be compiled and registered."""
     if kernel == 'scatter':
         return _register_scatter()
     elif kernel == 'fused':
@@ -154,12 +175,8 @@ def is_available(kernel='scatter'):
 def make_cuda_p2g(num_grids, kernel='scatter'):
     """Create a CUDA-accelerated p2g function matching the solver interface.
 
-    Args:
-        num_grids: grid resolution
-        kernel: 'scatter' (v1, just the scatter) or 'fused' (v2, full P2G)
-
-    Returns a function compatible with solver.step(p2g_fn=...).
-    Returns None if CUDA is not available.
+    Compiles the kernel automatically if needed.
+    Returns None if nvcc is not available.
     """
     if kernel == 'scatter':
         if not is_available('scatter'):
@@ -176,10 +193,6 @@ def make_cuda_p2g(num_grids, kernel='scatter'):
     elif kernel == 'fused':
         if not is_available('fused'):
             return None
-
-        # The fused kernel has a different interface — it takes raw particle
-        # state and does stress+scatter internally. The step() function needs
-        # to be aware of this. For now, return None and handle in the driver.
         logger.info("Fused CUDA P2G registered — use cuda_p2g_fused() directly")
         return None  # handled specially in the driver
 
