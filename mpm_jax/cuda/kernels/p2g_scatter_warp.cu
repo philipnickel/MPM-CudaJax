@@ -53,13 +53,11 @@ __global__ void p2g_scatter_warp(
     int n_particles
 ) {
     int pid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (pid >= n_particles) return;
     int lane = threadIdx.x & 31;
 
-    // Determine which lanes in this warp are active (have valid particles)
-    bool active = (pid < n_particles);
-    unsigned active_mask = __ballot_sync(0xFFFFFFFF, active);
-
-    if (!active) return;
+    // Get mask of active lanes in this warp
+    unsigned active_mask = __activemask();
 
     ParticleContrib contrib[STENCIL];
     p2g_compute(
