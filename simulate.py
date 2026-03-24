@@ -57,7 +57,7 @@ def visualize_frames(frames, export_path, center=[0.5, 0.5, 0.5],
     xlim = [center[0] - size[0]/2, center[0] + size[0]/2]
     ylim = [center[1] - size[1]/2, center[1] + size[1]/2]
     zlim = [center[2] - size[2]/2, center[2] + size[2]/2]
-    fig = plt.figure()
+    fig = plt.figure(figsize=(4, 3), dpi=72)
     ax = fig.add_subplot(111, projection='3d')
     ax.set_xlim(xlim)
     ax.set_ylim(ylim)
