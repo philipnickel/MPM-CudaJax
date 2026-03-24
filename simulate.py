@@ -1,5 +1,7 @@
 import os
 import time
+import subprocess
+import ctypes
 import numpy as np
 from tqdm import tqdm
 import matplotlib.pyplot as plt
@@ -7,6 +9,36 @@ from matplotlib.animation import FuncAnimation
 import hydra
 from omegaconf import DictConfig, OmegaConf
 import wandb
+
+
+# ---------------------------------------------------------------------------
+# CUDA profiler markers (for nsys --capture-range=cudaProfilerApi)
+# ---------------------------------------------------------------------------
+
+def _get_cudart():
+    """Load libcudart for profiler start/stop. Returns None if unavailable."""
+    for name in ["libcudart.so", "libcudart.so.12", "libcudart.dylib"]:
+        try:
+            return ctypes.CDLL(name)
+        except OSError:
+            continue
+    return None
+
+
+_cudart = None
+
+
+def cuda_profiler_start():
+    global _cudart
+    if _cudart is None:
+        _cudart = _get_cudart()
+    if _cudart:
+        _cudart.cudaProfilerStart()
+
+
+def cuda_profiler_stop():
+    if _cudart:
+        _cudart.cudaProfilerStop()
 
 
 def get_particles(n_particles, center, size):
@@ -193,6 +225,11 @@ def run_jax(cfg: DictConfig):
     frames = []
     frame_metrics = []
     frame_timings = []
+
+    do_profile = cfg.get('profile', False)
+    if do_profile:
+        cuda_profiler_start()
+
     t0 = time.perf_counter()
 
     for frame in tqdm(range(sim.num_frames), desc='JAX'):
@@ -215,6 +252,10 @@ def run_jax(cfg: DictConfig):
         })
 
     elapsed = time.perf_counter() - t0
+
+    if do_profile:
+        jax.block_until_ready(state.x)
+        cuda_profiler_stop()
 
     total_steps = sim.num_frames * sim.steps_per_frame
     return frames, elapsed, total_steps, timer.summary_from_frames(frame_timings), frame_metrics
@@ -334,6 +375,86 @@ def log_results(backend, elapsed, total_steps, summary, frame_metrics, frames, c
 
 
 # ---------------------------------------------------------------------------
+# Nsight profiling integration
+# ---------------------------------------------------------------------------
+
+def log_nsys_profile(cfg):
+    """Extract kernel timings from nsys report and log to wandb.
+
+    Expects nsys to have written a .nsys-rep file. Searches for it in
+    the current directory and common nsys output locations.
+    """
+    import glob
+    import io
+
+    # Find the most recent .nsys-rep file
+    candidates = sorted(glob.glob("*.nsys-rep") + glob.glob("/tmp/*.nsys-rep"),
+                        key=os.path.getmtime, reverse=True)
+    if not candidates:
+        print("No .nsys-rep file found — skipping nsys analysis.")
+        print("Run with: nsys profile --capture-range=cudaProfilerApi -o report python simulate.py profile=true")
+        return
+
+    report_path = candidates[0]
+    print(f"\nExtracting kernel stats from {report_path}...")
+
+    # Extract kernel summary as CSV
+    try:
+        result = subprocess.run(
+            ["nsys", "stats", report_path,
+             "--report", "cuda_gpu_kern_sum",
+             "--format", "csv"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        print("nsys stats failed — nsys not on PATH or timed out.")
+        return
+
+    if result.returncode != 0:
+        print(f"nsys stats failed: {result.stderr}")
+        return
+
+    # Parse CSV (nsys may print header lines before the CSV data)
+    lines = result.stdout.strip().split("\n")
+    csv_lines = [l for l in lines if "," in l and not l.startswith("Processing")]
+    if not csv_lines:
+        print("No kernel data in nsys report.")
+        return
+
+    csv_text = "\n".join(csv_lines)
+    try:
+        import pandas as pd
+        df = pd.read_csv(io.StringIO(csv_text))
+        print("\nCUDA Kernel Summary:")
+        print(df.to_string(index=False))
+
+        # Log as wandb table
+        wandb.log({"nsys_kernel_summary": wandb.Table(dataframe=df)})
+
+        # Log individual kernel times as summary metrics
+        for _, row in df.iterrows():
+            name = str(row.get("Name", row.iloc[-1]))[:50]
+            avg_ns = row.get("Avg (ns)", row.get("Avg", 0))
+            total_ns = row.get("Total Time (ns)", row.get("Total Time", 0))
+            if avg_ns:
+                wandb.log({f"nsys/{name}/avg_ms": float(avg_ns) / 1e6})
+            if total_ns:
+                wandb.log({f"nsys/{name}/total_ms": float(total_ns) / 1e6})
+    except ImportError:
+        print("pandas not installed — logging raw CSV to wandb")
+        wandb.log({"nsys_kernel_csv": wandb.Html(f"<pre>{csv_text}</pre>")})
+
+    # Upload .nsys-rep as artifact
+    artifact = wandb.Artifact(
+        f"nsys-{cfg.get('kernel', {}).get('name', 'jax')}-N{cfg.sim.n_particles}",
+        type="profile",
+    )
+    artifact.add_file(report_path)
+    wandb.log_artifact(artifact)
+    print(f"Uploaded {report_path} as wandb artifact.")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -389,6 +510,11 @@ def main(cfg: DictConfig):
 
     # Log everything to wandb (after all timing is done)
     log_results(backend, elapsed, total_steps, summary, frame_metrics, frames, cfg, export_path)
+
+    # If profiling, extract nsys kernel stats and log as artifact
+    if cfg.get('profile', False):
+        log_nsys_profile(cfg)
+
     wandb.finish()
 
 
