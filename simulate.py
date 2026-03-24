@@ -113,6 +113,14 @@ def run_jax(cfg: DictConfig):
                 "Check nvcc is on PATH and module load gcc is done."
             )
         print("Using CUDA P2G scatter kernel (v1)")
+    elif kernel_name == 'cuda_v4':
+        from mpm_jax.cuda.p2g_cuda import make_cuda_p2g
+        p2g_fn = make_cuda_p2g(sim.num_grids, kernel='smem')
+        if p2g_fn is None:
+            raise RuntimeError(
+                "kernel=cuda_v4 requested but CUDA kernel failed to compile/register."
+            )
+        print("Using CUDA P2G shared-memory scatter kernel (v4)")
     elif kernel_name == 'cuda_v3':
         from mpm_jax.cuda.p2g_cuda import make_cuda_p2g
         p2g_fn = make_cuda_p2g(sim.num_grids, kernel='warp')

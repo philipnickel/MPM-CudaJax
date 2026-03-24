@@ -123,6 +123,10 @@ def _register_warp():
     return _register("p2g_scatter_warp_cuda", "p2g_scatter_warp.cu", "libp2g_scatter_warp.so", "P2GScatterWarp")
 
 
+def _register_smem():
+    return _register("p2g_scatter_smem_cuda", "p2g_scatter_smem.cu", "libp2g_scatter_smem.so", "P2GScatterSmem")
+
+
 def _register_fused():
     return _register("p2g_fused_cuda", "p2g_fused.cu", "libp2g_fused.so", "P2GFused")
 
@@ -164,6 +168,46 @@ def cuda_p2g_scatter_warp(mv, m, index, num_grids):
         ),
         vmap_method="broadcast_all",
     )(mv, m, index)
+
+    return grid_mv, grid_m
+
+
+def cuda_p2g_scatter_smem(mv, m, index, num_grids):
+    """CUDA P2G scatter with shared memory staging via JAX FFI.
+
+    Sorts particles by cell, then uses per-cell shared memory tiles
+    (4x4x4) to accumulate contributions before flushing to global memory.
+    This reduces global atomics from 4*27*N to ~4*64*num_occupied_cells.
+    """
+    G = num_grids
+    G3 = G ** 3
+    N = mv.shape[0]
+
+    index_i32 = index.astype(jnp.int32)
+
+    # Sort particles by their home cell (center stencil node = offset 13)
+    cell_id = index_i32[:, 13]  # (N,) — particle's cell
+    order = jnp.argsort(cell_id)
+
+    mv_sorted = mv[order]        # (N, 27, 3)
+    m_sorted = m[order]           # (N, 27)
+    index_sorted = index_i32[order]  # (N, 27)
+
+    # Build cell_start: CSR-style, cell_start[c] = first particle in cell c
+    # Using searchsorted on the sorted cell IDs
+    cell_id_sorted = cell_id[order]
+    cell_boundaries = jnp.arange(G3 + 1, dtype=jnp.int32)
+    cell_start = jnp.searchsorted(cell_id_sorted, cell_boundaries).astype(jnp.int32)
+
+    grid_mv, grid_m = jax.ffi.ffi_call(
+        "p2g_scatter_smem_cuda",
+        (
+            jax.ShapeDtypeStruct((G3, 3), jnp.float32),
+            jax.ShapeDtypeStruct((G3,), jnp.float32),
+        ),
+        vmap_method="broadcast_all",
+        G=np.int32(G),
+    )(mv_sorted, m_sorted, index_sorted, cell_start)
 
     return grid_mv, grid_m
 
@@ -213,6 +257,8 @@ def is_available(kernel='scatter'):
         return _register_scatter()
     elif kernel == 'warp':
         return _register_warp()
+    elif kernel == 'smem':
+        return _register_smem()
     elif kernel == 'fused':
         return _register_fused()
     return False
@@ -247,6 +293,18 @@ def make_cuda_p2g(num_grids, kernel='scatter'):
             return cuda_p2g_scatter_warp(mv, m, index, num_grids)
 
         return cuda_p2g_v3
+
+    elif kernel == 'smem':
+        if not is_available('smem'):
+            return None
+
+        from mpm_jax.solver import p2g_compute
+
+        def cuda_p2g_v4(v, C, stress, weight, dweight, dpos, index, dt, vol, p_mass, num_grids):
+            mv, m = p2g_compute(v, C, stress, weight, dweight, dpos, dt, vol, p_mass)
+            return cuda_p2g_scatter_smem(mv, m, index, num_grids)
+
+        return cuda_p2g_v4
 
     elif kernel == 'fused':
         if not is_available('fused'):
