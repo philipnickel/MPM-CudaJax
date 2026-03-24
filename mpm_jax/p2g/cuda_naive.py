@@ -1,5 +1,6 @@
 """CUDA P2G with naive atomicAdd scatter."""
 import math
+import numpy as np
 import jax
 import jax.numpy as jnp
 from mpm_jax.state import MPMState, MPMParams
@@ -12,13 +13,13 @@ def make_cuda_naive_p2g(cfg, runtime: CudaRuntime):
 
     mat = cfg.material.elasticity
     E, nu = float(mat.E), float(mat.nu)
-    mu_0 = E / (2.0 * (1.0 + nu))
-    lambda_0 = E * nu / ((1.0 + nu) * (1.0 - 2.0 * nu))
+    mu_0 = np.float32(E / (2.0 * (1.0 + nu)))
+    lambda_0 = np.float32(E * nu / ((1.0 + nu) * (1.0 - 2.0 * nu)))
 
-    block_size = cfg.kernel.get("block_size", 256)
+    block_size = int(cfg.kernel.get("block_size", 256))
 
     def p2g(state: MPMState, params: MPMParams):
-        N = params.n_particles
+        N = int(params.n_particles)
         G = int(params.num_grids)
 
         jax.block_until_ready((state.x, state.v, state.C, state.F))
@@ -33,10 +34,10 @@ def make_cuda_naive_p2g(cfg, runtime: CudaRuntime):
             get_ptr(state.x), get_ptr(state.v),
             get_ptr(state.C), get_ptr(state.F),
             get_ptr(grid_mv), get_ptr(grid_m),
-            params.dt, params.vol, params.p_mass,
-            params.inv_dx, G,
+            np.float32(params.dt), np.float32(params.vol), np.float32(params.p_mass),
+            np.float32(params.inv_dx), np.int32(G),
             mu_0, lambda_0,
-            N,
+            np.int32(N),
         )
 
         return grid_mv, grid_m
