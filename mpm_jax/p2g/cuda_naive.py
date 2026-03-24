@@ -29,7 +29,7 @@ def make_cuda_naive_p2g(cfg, runtime: CudaRuntime):
         grid_dim = math.ceil(N / block_size)
 
         runtime.launch(
-            kernel, grid=grid_dim, block=block_size,
+            kernel, grid_dim, block_size,
             get_ptr(state.x), get_ptr(state.v),
             get_ptr(state.C), get_ptr(state.F),
             get_ptr(grid_mv), get_ptr(grid_m),
