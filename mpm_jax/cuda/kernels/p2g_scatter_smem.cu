@@ -165,10 +165,18 @@ ffi::Error P2GScatterSmemImpl(
     ffi::Buffer<ffi::S32> index,
     ffi::Buffer<ffi::S32> cell_start,
     ffi::ResultBuffer<ffi::F32> grid_mv,
-    ffi::ResultBuffer<ffi::F32> grid_m,
-    int32_t G
+    ffi::ResultBuffer<ffi::F32> grid_m
 ) {
-    int G3 = G * G * G;
+    // Infer G from cell_start size: cell_start has G^3 + 1 elements
+    int G3_plus_1 = static_cast<int>(cell_start.dimensions()[0]);
+    int G3 = G3_plus_1 - 1;
+    // Compute G = cbrt(G3)
+    int G = 1;
+    while (G * G * G < G3) G++;
+    if (G * G * G != G3) {
+        return ffi::Error(ffi::ErrorCode::kInvalidArgument,
+                          "cell_start size is not G^3 + 1 for integer G");
+    }
 
     // Zero output grid
     int zero_blocks = (G3 * 3 + 255) / 256;
@@ -203,5 +211,4 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::Buffer<ffi::S32>>()   // cell_start
         .Ret<ffi::Buffer<ffi::F32>>()   // grid_mv
         .Ret<ffi::Buffer<ffi::F32>>()   // grid_m
-        .Attr<int32_t>("G")
 );

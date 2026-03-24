@@ -206,7 +206,6 @@ def cuda_p2g_scatter_smem(mv, m, index, num_grids):
             jax.ShapeDtypeStruct((G3,), jnp.float32),
         ),
         vmap_method="broadcast_all",
-        G=np.int32(G),
     )(mv_sorted, m_sorted, index_sorted, cell_start)
 
     return grid_mv, grid_m
