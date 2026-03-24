@@ -1,39 +1,66 @@
 import jax.numpy as jnp
-from mpm_jax.solver import MPMState, make_params, simulate_frame
-from mpm_jax.constitutive import get_constitutive
-from mpm_jax.boundary import build_boundary_fns
+from omegaconf import OmegaConf
+from mpm_jax.state import MPMState, make_params
+from mpm_jax.p2g.jax import make_jax_p2g
+from mpm_jax.grid_update import grid_update
+from mpm_jax.g2p import g2p
 
-def _make_grid_x(num_grids):
-    g = jnp.arange(num_grids, dtype=jnp.float32)
-    gx, gy, gz = jnp.meshgrid(g, g, g, indexing='ij')
-    return jnp.stack([gx, gy, gz], axis=-1).reshape(-1, 3)
 
-def test_jelly_simulation_10_frames():
-    from omegaconf import OmegaConf
+def _make_cfg():
+    return OmegaConf.create({
+        "material": {
+            "elasticity": {"name": "CorotatedElasticity", "E": 2e6, "nu": 0.4},
+            "plasticity": {"name": "IdentityPlasticity"},
+        },
+        "kernel": {"name": "jax"},
+    })
+
+
+def test_full_timestep_jax():
+    """One full P2G -> grid_update -> G2P cycle produces valid state."""
     N = 100
-    num_grids = 15
-    x0 = jnp.ones((N, 3)) * 0.5
-    params = make_params(n_particles=N, num_grids=num_grids, dt=3e-4)
-    grid_x = _make_grid_x(num_grids)
-    bc_configs = [
-        {"type": "surface_collider", "point": [1.0, 1.0, 0.02],
-         "normal": [0.0, 0.0, 1.0], "surface": "sticky", "friction": 0.0,
-         "start_time": 0.0, "end_time": 1e3},
-    ]
-    pre_fn, post_fn = build_boundary_fns(bc_configs, grid_x, params.dx, x0, params.dt)
-    elasticity_fn = get_constitutive(OmegaConf.create({"name": "CorotatedElasticity", "E": 2e6, "nu": 0.4}))
-    plasticity_fn = get_constitutive(OmegaConf.create({"name": "IdentityPlasticity"}))
+    params = make_params(n_particles=N, num_grids=10, dt=3e-4)
     state = MPMState(
-        x=x0,
-        v=jnp.broadcast_to(jnp.array([0.0, 0.0, -0.5]), (N, 3)).copy(),
+        x=jnp.full((N, 3), 0.5),
+        v=jnp.zeros((N, 3)),
         C=jnp.zeros((N, 3, 3)),
         F=jnp.tile(jnp.eye(3), (N, 1, 1)),
     )
-    time = 0.0
-    for _ in range(10):
-        state, time = simulate_frame(
-            params, state, elasticity_fn, plasticity_fn,
-            pre_fn, post_fn, steps_per_frame=5, time=time,
-        )
-    assert jnp.mean(state.x[:, 2]) < 0.5
+    cfg = _make_cfg()
+    p2g_fn = make_jax_p2g(cfg)
+
+    grid_mv, grid_m = p2g_fn(state, params)
+    grid_v = grid_update(grid_mv, grid_m, params)
+    new_state = g2p(state, grid_v, params)
+
+    assert jnp.all(jnp.isfinite(new_state.x))
+    assert jnp.all(jnp.isfinite(new_state.v))
+    assert jnp.all(jnp.isfinite(new_state.F))
+
+
+def test_jelly_10_frames():
+    """10 frames of jelly simulation: particles should fall under gravity."""
+    N = 200
+    params = make_params(n_particles=N, num_grids=15, dt=3e-4)
+    state = MPMState(
+        x=jnp.full((N, 3), 0.5),
+        v=jnp.zeros((N, 3)),
+        C=jnp.zeros((N, 3, 3)),
+        F=jnp.tile(jnp.eye(3), (N, 1, 1)),
+    )
+    cfg = _make_cfg()
+    p2g_fn = make_jax_p2g(cfg)
+
+    initial_z = state.x[:, 2].mean()
+
+    for frame in range(10):
+        for step in range(10):
+            grid_mv, grid_m = p2g_fn(state, params)
+            grid_v = grid_update(grid_mv, grid_m, params)
+            state = g2p(state, grid_v, params)
+
+    # Particles should have fallen
+    final_z = state.x[:, 2].mean()
+    assert final_z < initial_z
     assert jnp.all(jnp.isfinite(state.x))
+    assert jnp.all(jnp.isfinite(state.v))
