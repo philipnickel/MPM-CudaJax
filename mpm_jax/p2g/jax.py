@@ -1,4 +1,13 @@
-"""Pure JAX P2G baseline implementation."""
+"""Pure JAX P2G using MLS-MPM formulation (Hu et al. 2018).
+
+P2G scatter (no dweight needed):
+    Dinv = 4 * inv_dx^2
+    stress = -(dt * vol) * Dinv * Kirchhoff_stress
+    affine = stress + p_mass * C
+    mv_i = weight_i * (p_mass * v + affine @ dpos_i)
+
+dpos is in real space: (offset - fx) * dx.
+"""
 import functools
 import jax
 import jax.numpy as jnp
@@ -17,32 +26,35 @@ def make_jax_p2g(cfg):
         w = jnp.stack([0.5*(1.5-fx)**2, 0.75-(fx-1.0)**2, 0.5*(fx-0.5)**2])
         offsets = OFFSET_27.astype(int)
         weight = w[offsets[:,0],0] * w[offsets[:,1],1] * w[offsets[:,2],2]
-        dw = jnp.stack([fx-1.5, -2.0*(fx-1.0), fx-0.5])
-        dweight = inv_dx * jnp.stack([
-            dw[offsets[:,0],0]*w[offsets[:,1],1]*w[offsets[:,2],2],
-            w[offsets[:,0],0]*dw[offsets[:,1],1]*w[offsets[:,2],2],
-            w[offsets[:,0],0]*w[offsets[:,1],1]*dw[offsets[:,2],2],
-        ], axis=-1)
         dpos = (OFFSET_27 - fx[None,:]) * dx
         idx_3d = base[None,:] + offsets
         index = idx_3d[:,0]*num_grids*num_grids + idx_3d[:,1]*num_grids + idx_3d[:,2]
         index = jnp.clip(index, 0, num_grids**3 - 1)
-        return weight, dweight, dpos, index
+        return weight, dpos, index
 
-    def _single_particle_p2g(v_p, C_p, stress_p, weight, dweight, dpos, dt, vol, p_mass):
-        mv = (-dt*vol*(stress_p @ dweight.T).T + p_mass*weight[:,None]*(v_p[None,:] + (C_p @ dpos.T).T))
+    def _single_particle_scatter(v_p, affine_p, weight, dpos, p_mass):
+        mv = weight[:, None] * (p_mass * v_p[None, :] + (affine_p @ dpos.T).T)
         m = weight * p_mass
         return mv, m
 
     compute_weights = jax.vmap(_single_particle_weights, in_axes=(0, None, None, None))
-    p2g_compute = jax.vmap(_single_particle_p2g, in_axes=(0, 0, 0, 0, 0, 0, None, None, None))
+    scatter_vmap = jax.vmap(_single_particle_scatter, in_axes=(0, 0, 0, 0, None))
 
     @functools.partial(jax.jit, static_argnums=(1,))
     def _p2g_jitted(state, num_grids, inv_dx, dx, dt, vol, p_mass):
         F = plasticity_fn(state.F)
-        stress = elasticity_fn(F)
-        weight, dweight, dpos, index = compute_weights(state.x, inv_dx, dx, num_grids)
-        mv, m = p2g_compute(state.v, state.C, stress, weight, dweight, dpos, dt, vol, p_mass)
+        stress = elasticity_fn(F)  # Kirchhoff stress (N, 3, 3)
+
+        # MLS-MPM: stress_term = -(dt * vol) * Dinv * stress
+        Dinv = 4.0 * inv_dx * inv_dx
+        stress_term = -(dt * vol) * Dinv * stress
+
+        # affine = stress_term + p_mass * C
+        affine = stress_term + p_mass * state.C
+
+        weight, dpos, index = compute_weights(state.x, inv_dx, dx, num_grids)
+        mv, m = scatter_vmap(state.v, affine, weight, dpos, p_mass)
+
         grid_mv = jnp.zeros((num_grids**3, 3)).at[index.ravel()].add(mv.reshape(-1, 3))
         grid_m = jnp.zeros((num_grids**3,)).at[index.ravel()].add(m.ravel())
         return grid_mv, grid_m
