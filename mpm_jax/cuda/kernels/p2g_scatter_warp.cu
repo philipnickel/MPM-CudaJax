@@ -18,16 +18,19 @@
 // ---------------------------------------------------------------------------
 
 __device__ __forceinline__ float warp_reduce_peers(float val, unsigned peers) {
+    // All peers must participate in __shfl_sync — can't be conditional.
+    // Use sequential accumulation: each peer sends its value to the leader
+    // via __shfl_sync broadcast.
     int leader = __ffs(peers) - 1;
     int lane = threadIdx.x & 31;
     float sum = 0.0f;
-    if (lane == leader) {
-        unsigned remaining = peers;
-        while (remaining) {
-            int src = __ffs(remaining) - 1;
-            sum += __shfl_sync(peers, val, src);
-            remaining &= remaining - 1;  // clear lowest set bit
-        }
+    unsigned remaining = peers;
+    while (remaining) {
+        int src = __ffs(remaining) - 1;
+        // All peers participate: broadcast src's value to everyone
+        float broadcasted = __shfl_sync(peers, val, src);
+        if (lane == leader) sum += broadcasted;
+        remaining &= remaining - 1;
     }
     return sum;  // only valid in the leader lane
 }
