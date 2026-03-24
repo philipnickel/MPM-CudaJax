@@ -129,7 +129,6 @@ __device__ __forceinline__ Mat3 mat3_inverse(const Mat3& A) {
 
 __device__ Mat3 polar_R(const Mat3& F) {
     Mat3 R = F;
-    #pragma unroll
     for (int iter = 0; iter < 5; iter++) {
         Mat3 Rinv = mat3_inverse(R);
         Mat3 RinvT = mat3_transpose(Rinv);
