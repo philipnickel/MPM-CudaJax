@@ -184,14 +184,21 @@ __device__ void p2g_compute(
     // J = det(F) for the volume term
     float J = mat3_det(pF);
 
-    // --- Corotated Kirchhoff stress: tau = 2*mu*(F-R)*F^T + la*J*(J-1)*I ---
+    // --- Corotated Kirchhoff stress: tau = 2*mu*(F-R)*F^T + la*(J-1)*J*I ---
     Mat3 Ft = mat3_transpose(pF);
     Mat3 tau = mat3_add(
         mat3_scale(mat3_mul(mat3_sub(pF, R), Ft), 2.0f * mu_0),
         mat3_scale(mat3_eye(), lambda_0 * J * (J - 1.0f))
     );
 
-    // --- B-spline weights + weight gradients ---
+    // --- MLS-MPM affine: -(dt*vol)*Dinv*tau + p_mass*C ---
+    float Dinv = 4.0f * inv_dx * inv_dx;
+    Mat3 affine = mat3_add(
+        mat3_scale(tau, -(dt * vol) * Dinv),
+        mat3_scale(pC, p_mass)
+    );
+
+    // --- B-spline weights (no dweight needed) ---
     float fpx[3], fx[3];
     int base[3];
     fpx[0] = px * inv_dx;
@@ -204,19 +211,17 @@ __device__ void p2g_compute(
         fx[d] = fpx[d] - (float)base[d];
     }
 
-    float w[3][3], dw[3][3];
+    float w[3][3];
     #pragma unroll
     for (int d = 0; d < 3; d++) {
         w[d][0] = 0.5f * (1.5f - fx[d]) * (1.5f - fx[d]);
         w[d][1] = 0.75f - (fx[d] - 1.0f) * (fx[d] - 1.0f);
         w[d][2] = 0.5f * (fx[d] - 0.5f) * (fx[d] - 0.5f);
-        dw[d][0] = fx[d] - 1.5f;
-        dw[d][1] = -2.0f * (fx[d] - 1.0f);
-        dw[d][2] = fx[d] - 0.5f;
     }
 
     // --- Compute 27 contributions ---
-    // mv_i = -dt*vol * tau @ dweight_i + p_mass * weight_i * (v + C @ dpos_i)
+    // mv_i = weight_i * (p_mass * v + affine @ dpos_i)
+    // dpos in real space: (offset - fx) * dx
     int idx = 0;
     float pv[3] = {vx, vy, vz};
 
@@ -227,11 +232,6 @@ __device__ void p2g_compute(
     #pragma unroll
     for (int dk = 0; dk < 3; dk++) {
         float weight = w[0][di] * w[1][dj] * w[2][dk];
-
-        float dwt[3];
-        dwt[0] = inv_dx * dw[0][di] *  w[1][dj] *  w[2][dk];
-        dwt[1] = inv_dx *  w[0][di] * dw[1][dj] *  w[2][dk];
-        dwt[2] = inv_dx *  w[0][di] *  w[1][dj] * dw[2][dk];
 
         float dpos[3];
         dpos[0] = ((float)di - fx[0]) * dx;
@@ -249,14 +249,11 @@ __device__ void p2g_compute(
         float mv_out[3];
         #pragma unroll
         for (int d = 0; d < 3; d++) {
-            float stress_dw = 0.0f;
-            float c_dpos = 0.0f;
+            float a_dpos = 0.0f;
             #pragma unroll
-            for (int j = 0; j < 3; j++) {
-                stress_dw += tau.m[d*3+j] * dwt[j];
-                c_dpos += pC.m[d*3+j] * dpos[j];
-            }
-            mv_out[d] = -dt * vol * stress_dw + p_mass * weight * (pv[d] + c_dpos);
+            for (int j = 0; j < 3; j++)
+                a_dpos += affine.m[d*3+j] * dpos[j];
+            mv_out[d] = weight * (p_mass * pv[d] + a_dpos);
         }
 
         out[idx].mv[0] = mv_out[0];
