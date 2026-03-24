@@ -212,14 +212,12 @@ def main(cfg: DictConfig):
     print(f"  mean g2p:         {np.mean([t['g2p_ms'] for t in step_timings]):.3f} ms")
     print(f"  mean step:        {np.mean([t['step_ms'] for t in step_timings]):.3f} ms")
 
-    # Render GIF (skip in benchmark mode)
+    # Render GIF to temp file and upload to wandb (skip in benchmark mode)
     gif_path = None
     if not cfg.get('benchmark', False) and frames:
-        orig_cwd = hydra.utils.get_original_cwd()
-        output_dir = os.path.join(orig_cwd, cfg.output_dir)
-        os.makedirs(output_dir, exist_ok=True)
-        gif_path = os.path.join(output_dir, f"{cfg.tag}_{cfg.kernel.name}.gif")
-        print(f"\nRendering to {gif_path}...")
+        import tempfile
+        gif_path = os.path.join(tempfile.gettempdir(), f"{cfg.tag}_{cfg.kernel.name}.gif")
+        print(f"\nRendering animation...")
         visualize_frames(frames, gif_path, size=[1, 1, 1], c=cfg.material.color)
     elif cfg.get('benchmark', False):
         print("\nBenchmark mode: skipping GIF rendering.")

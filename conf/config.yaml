@@ -4,7 +4,6 @@ defaults:
   - kernel: jax
   - _self_
 
-output_dir: ./output
 tag: jelly
 benchmark: false
 group: null
