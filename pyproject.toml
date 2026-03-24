@@ -14,13 +14,13 @@ dependencies = [
     "tqdm",
     "numpy",
     "wandb",
+    "jax>=0.4.20",
+    "jaxlib>=0.4.20",
+    "pytest",
 ]
 
 [project.optional-dependencies]
-jax = ["jax>=0.4.20", "jaxlib>=0.4.20"]
-jax-cuda = ["jax[cuda12]>=0.4.20"]
-cuda = ["cuda-core"]
-all = ["jax[cuda12]>=0.4.20", "cuda-core"]
+cuda = ["jax[cuda12]>=0.4.20", "cuda-core"]
 
 [tool.setuptools.packages.find]
 include = ["mpm_jax*"]
