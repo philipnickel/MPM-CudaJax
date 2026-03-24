@@ -154,9 +154,10 @@ __device__ void svd3x3(const Mat3& F, Mat3& U, float sigma[3], Mat3& V) {
     // V accumulates the rotation matrices
     V = mat3_eye();
 
-    // 4 sweeps of cyclic Jacobi (pairs: (0,1), (0,2), (1,2))
+    // 6 sweeps of cyclic Jacobi (pairs: (0,1), (0,2), (1,2))
+    // 4 sweeps gives ~1e-2 accuracy, 6 sweeps gives ~1e-6
     #pragma unroll
-    for (int sweep = 0; sweep < 4; sweep++) {
+    for (int sweep = 0; sweep < 6; sweep++) {
         float c, s;
 
         // Pair (0, 1)
