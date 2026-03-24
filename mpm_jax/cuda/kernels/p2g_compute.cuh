@@ -12,7 +12,7 @@
 
 #pragma once
 
-#include <math.h>
+// No #include <math.h> — NVRTC provides CUDA math intrinsics (floorf, sqrtf, etc.)
 
 #define STENCIL 27
 
