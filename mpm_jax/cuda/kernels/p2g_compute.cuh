@@ -191,12 +191,7 @@ __device__ void p2g_compute(
         mat3_scale(mat3_eye(), lambda_0 * J * (J - 1.0f))
     );
 
-    // --- MLS-MPM Q_p matrix (Hu et al. 2018) ---
-    // Q = dt * vol * 4*inv_dx^2 * tau + p_mass * C
-    float coeff = dt * vol * 4.0f * inv_dx * inv_dx;
-    Mat3 Q = mat3_add(mat3_scale(tau, coeff), mat3_scale(pC, p_mass));
-
-    // --- B-spline weights (no dweight needed) ---
+    // --- B-spline weights + weight gradients ---
     float fpx[3], fx[3];
     int base[3];
     fpx[0] = px * inv_dx;
@@ -209,16 +204,19 @@ __device__ void p2g_compute(
         fx[d] = fpx[d] - (float)base[d];
     }
 
-    float w[3][3];
+    float w[3][3], dw[3][3];
     #pragma unroll
     for (int d = 0; d < 3; d++) {
         w[d][0] = 0.5f * (1.5f - fx[d]) * (1.5f - fx[d]);
         w[d][1] = 0.75f - (fx[d] - 1.0f) * (fx[d] - 1.0f);
         w[d][2] = 0.5f * (fx[d] - 0.5f) * (fx[d] - 0.5f);
+        dw[d][0] = fx[d] - 1.5f;
+        dw[d][1] = -2.0f * (fx[d] - 1.0f);
+        dw[d][2] = fx[d] - 0.5f;
     }
 
     // --- Compute 27 contributions ---
-    // MLS-MPM: mv_i = weight_i * (p_mass * v + Q @ dpos_i)
+    // mv_i = -dt*vol * tau @ dweight_i + p_mass * weight_i * (v + C @ dpos_i)
     int idx = 0;
     float pv[3] = {vx, vy, vz};
 
@@ -229,6 +227,11 @@ __device__ void p2g_compute(
     #pragma unroll
     for (int dk = 0; dk < 3; dk++) {
         float weight = w[0][di] * w[1][dj] * w[2][dk];
+
+        float dwt[3];
+        dwt[0] = inv_dx * dw[0][di] *  w[1][dj] *  w[2][dk];
+        dwt[1] = inv_dx *  w[0][di] * dw[1][dj] *  w[2][dk];
+        dwt[2] = inv_dx *  w[0][di] *  w[1][dj] * dw[2][dk];
 
         float dpos[3];
         dpos[0] = ((float)di - fx[0]) * dx;
@@ -246,11 +249,14 @@ __device__ void p2g_compute(
         float mv_out[3];
         #pragma unroll
         for (int d = 0; d < 3; d++) {
-            float q_dpos = 0.0f;
+            float stress_dw = 0.0f;
+            float c_dpos = 0.0f;
             #pragma unroll
-            for (int j = 0; j < 3; j++)
-                q_dpos += Q.m[d*3+j] * dpos[j];
-            mv_out[d] = weight * (p_mass * pv[d] + q_dpos);
+            for (int j = 0; j < 3; j++) {
+                stress_dw += tau.m[d*3+j] * dwt[j];
+                c_dpos += pC.m[d*3+j] * dpos[j];
+            }
+            mv_out[d] = -dt * vol * stress_dw + p_mass * weight * (pv[d] + c_dpos);
         }
 
         out[idx].mv[0] = mv_out[0];

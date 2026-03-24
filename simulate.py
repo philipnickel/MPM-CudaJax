@@ -74,11 +74,11 @@ def simulate(cfg):
         size=list(sim.size),
     )
 
-    # Build initial state
+    # Build initial state (size matches config for correct vol = prod(size)/N)
     state = get_particles(
         sim.n_particles,
         center=list(sim.center),
-        size=[0.5, 0.5, 0.5],
+        size=list(sim.size),
         initial_velocity=list(sim.initial_velocity),
     )
 
@@ -112,7 +112,7 @@ def simulate(cfg):
     state = get_particles(
         sim.n_particles,
         center=list(sim.center),
-        size=[0.5, 0.5, 0.5],
+        size=list(sim.size),
         initial_velocity=list(sim.initial_velocity),
     )
 
