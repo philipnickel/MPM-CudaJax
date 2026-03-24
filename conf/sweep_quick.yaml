@@ -1,0 +1,12 @@
+defaults:
+  - config
+
+# Quick sweep: 2 sizes, JAX only, 5 frames
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      sim.n_particles: 1000,5000
+      sim.num_frames: 5
+
+benchmark: true

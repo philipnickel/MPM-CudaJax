@@ -1,0 +1,12 @@
+defaults:
+  - config
+
+# JAX baseline scaling study: vary particle count
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      sim.n_particles: 1000,5000,10000,50000,100000
+      sim.num_frames: 10
+
+benchmark: true

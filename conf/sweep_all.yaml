@@ -1,0 +1,13 @@
+defaults:
+  - config
+
+# Full sweep: all kernels x problem sizes
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      kernel: jax,cuda_naive,cuda_warp
+      sim.n_particles: 5000,10000,50000,100000
+      sim.num_frames: 10
+
+benchmark: true
