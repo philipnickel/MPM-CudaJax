@@ -1,38 +1,29 @@
 // p2g_scatter_warp.cu — Fused P2G scatter with warp-level reduction.
 //
-// Standalone kernel (no JAX FFI). Each thread handles one particle:
-//   1. Calls p2g_compute to get 27 (momentum, mass, grid_idx) contributions
-//   2. For each contribution, uses __match_any_sync to find warp peers
-//      targeting the same grid node
-//   3. Reduces via warp_reduce_masked (butterfly __shfl_xor_sync)
-//   4. Only the leader (lowest set bit in peer mask) does atomicAdd
-//
-// This reduces global atomics by a factor of k, where k is the average
-// number of warp lanes per unique grid node (typically 2-8 at high density).
+// Each thread handles one particle, computes 27 contributions via p2g_compute,
+// then uses __match_any_sync + warp shuffle reduction so only one lane per
+// unique grid node does the atomicAdd.
 //
 // Requires sm_70+ for __match_any_sync.
-//
 // Grid buffers (grid_mv, grid_m) must be pre-zeroed by the caller.
 
 #include "p2g_compute.cuh"
 
 #define BLOCK_SIZE 256
-#define FULL_MASK 0xFFFFFFFFu
 
 // ---------------------------------------------------------------------------
-// Warp-level reduction helper
+// Warp-level reduction for lanes matching a grid node
+// Uses __shfl_down_sync with the peer mask. The leader (lowest set bit)
+// accumulates the sum.
 // ---------------------------------------------------------------------------
 
-// Reduce `val` across all lanes in `mask` using butterfly shuffle.
-// Returns the sum in ALL lanes of the group (not just the leader).
-__device__ __forceinline__ float warp_reduce_masked(float val, unsigned mask) {
+__device__ __forceinline__ float warp_reduce_peers(float val, unsigned peers) {
+    // Iteratively halve the peer group, accumulating into lower lanes
     for (int delta = 16; delta >= 1; delta >>= 1) {
-        float other = __shfl_xor_sync(mask, val, delta);
-        // Only add if the other lane is actually in our group
-        if (mask & (1u << ((threadIdx.x & 31) ^ delta)))
-            val += other;
+        float other = __shfl_down_sync(peers, val, delta);
+        val += other;
     }
-    return val;
+    return val;  // correct result is in the leader (lowest bit of peers)
 }
 
 // ---------------------------------------------------------------------------
@@ -53,9 +44,13 @@ __global__ void p2g_scatter_warp(
     int n_particles
 ) {
     int pid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (pid >= n_particles) return;
-
     int lane = threadIdx.x & 31;
+
+    // Determine which lanes in this warp are active (have valid particles)
+    bool active = (pid < n_particles);
+    unsigned active_mask = __ballot_sync(0xFFFFFFFF, active);
+
+    if (!active) return;
 
     ParticleContrib contrib[STENCIL];
     p2g_compute(
@@ -69,17 +64,17 @@ __global__ void p2g_scatter_warp(
     for (int i = 0; i < STENCIL; i++) {
         int gid = contrib[i].grid_idx;
 
-        // Find all lanes in this warp targeting the same grid node
-        unsigned peers = __match_any_sync(FULL_MASK, gid);
+        // Find all active lanes targeting the same grid node
+        unsigned peers = __match_any_sync(active_mask, gid);
 
         // Reduce contributions across matching lanes
-        float mv0  = warp_reduce_masked(contrib[i].mv[0], peers);
-        float mv1  = warp_reduce_masked(contrib[i].mv[1], peers);
-        float mv2  = warp_reduce_masked(contrib[i].mv[2], peers);
-        float mass = warp_reduce_masked(contrib[i].m, peers);
+        float mv0  = warp_reduce_peers(contrib[i].mv[0], peers);
+        float mv1  = warp_reduce_peers(contrib[i].mv[1], peers);
+        float mv2  = warp_reduce_peers(contrib[i].mv[2], peers);
+        float mass = warp_reduce_peers(contrib[i].m, peers);
 
         // Only the leader (lowest lane in group) does the atomic
-        int leader = __ffs(peers) - 1;  // __ffs returns 1-indexed
+        int leader = __ffs(peers) - 1;
         if (lane == leader) {
             atomicAdd(&grid_mv[gid*3+0], mv0);
             atomicAdd(&grid_mv[gid*3+1], mv1);
