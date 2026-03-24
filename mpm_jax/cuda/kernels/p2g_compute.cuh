@@ -89,23 +89,109 @@ __device__ __forceinline__ Mat3 mat3_sub(const Mat3& A, const Mat3& B) {
 }
 
 // ---------------------------------------------------------------------------
-// SVD placeholder for 3x3 matrices
+// 3x3 SVD via one-sided Jacobi rotations
 //
-// TODO: Implement proper Jacobi SVD (McAdams et al. 2011) or port the
-// full implementation from p2g_fused.cu. This placeholder sets:
-//   U = I,  sigma = diag(F),  V = I
-// which is INCORRECT for off-diagonal F. It will produce wrong stress
-// values. Replace with real SVD before validation on HPC.
+// Decomposes F = U * diag(sigma) * V^T using:
+//   1. Symmetric eigendecomposition of F^T F = V * diag(sigma^2) * V^T
+//      via cyclic Jacobi rotations (4 sweeps, each sweep = 3 off-diagonal pairs)
+//   2. U = F * V * diag(1/sigma)
+//
+// Reference: Golub & Van Loan, "Matrix Computations", Section 8.4
+// Suitable for MPM where F is typically close to rotation (well-conditioned).
 // ---------------------------------------------------------------------------
 
+// Apply Givens rotation to columns p, q of a 3x3 matrix (in-place).
+// Rotates by angle with cos(theta)=c, sin(theta)=s.
+__device__ __forceinline__ void givens_rotate_cols(Mat3& A, int p, int q, float c, float s) {
+    #pragma unroll
+    for (int i = 0; i < 3; i++) {
+        float ap = A.m[i*3+p];
+        float aq = A.m[i*3+q];
+        A.m[i*3+p] = c * ap + s * aq;
+        A.m[i*3+q] = -s * ap + c * aq;
+    }
+}
+
+// Compute Givens rotation to zero S[p][q] in symmetric matrix S.
+// Returns (c, s) such that the (p,q) element of G^T S G is zero.
+__device__ __forceinline__ void sym_jacobi_rotation(const Mat3& S, int p, int q, float& c, float& s) {
+    float spq = S.m[p*3+q];
+    if (fabsf(spq) < 1e-10f) {
+        c = 1.0f;
+        s = 0.0f;
+        return;
+    }
+    float tau = (S.m[q*3+q] - S.m[p*3+p]) / (2.0f * spq);
+    float t;
+    if (tau >= 0.0f)
+        t = 1.0f / (tau + sqrtf(1.0f + tau * tau));
+    else
+        t = -1.0f / (-tau + sqrtf(1.0f + tau * tau));
+    c = rsqrtf(1.0f + t * t);
+    s = t * c;
+}
+
+// Apply Jacobi rotation to symmetric matrix S (both sides): S <- G^T S G
+__device__ __forceinline__ void sym_rotate(Mat3& S, int p, int q, float c, float s) {
+    float spp = S.m[p*3+p], sqq = S.m[q*3+q], spq = S.m[p*3+q];
+    S.m[p*3+p] = c*c*spp - 2.0f*c*s*spq + s*s*sqq;
+    S.m[q*3+q] = s*s*spp + 2.0f*c*s*spq + c*c*sqq;
+    S.m[p*3+q] = S.m[q*3+p] = 0.0f;  // zeroed by construction
+
+    // Update remaining off-diagonal entries
+    int r = 3 - p - q;  // the third index
+    float srp = S.m[r*3+p], srq = S.m[r*3+q];
+    S.m[r*3+p] = S.m[p*3+r] = c * srp - s * srq;
+    S.m[r*3+q] = S.m[q*3+r] = s * srp + c * srq;
+}
+
 __device__ void svd3x3(const Mat3& F, Mat3& U, float sigma[3], Mat3& V) {
-    // PLACEHOLDER — treats F as if it were already diagonal.
-    // Correct only when F is diagonal; wrong otherwise.
-    U = mat3_eye();
+    // Step 1: S = F^T F (symmetric positive semi-definite)
+    Mat3 Ft = mat3_transpose(F);
+    Mat3 S = mat3_mul(Ft, F);
+
+    // Step 2: Eigendecomposition of S via Jacobi rotations
+    // V accumulates the rotation matrices
     V = mat3_eye();
-    sigma[0] = F.m[0];  // F[0,0]
-    sigma[1] = F.m[4];  // F[1,1]
-    sigma[2] = F.m[8];  // F[2,2]
+
+    // 4 sweeps of cyclic Jacobi (pairs: (0,1), (0,2), (1,2))
+    #pragma unroll
+    for (int sweep = 0; sweep < 4; sweep++) {
+        float c, s;
+
+        // Pair (0, 1)
+        sym_jacobi_rotation(S, 0, 1, c, s);
+        sym_rotate(S, 0, 1, c, s);
+        givens_rotate_cols(V, 0, 1, c, s);
+
+        // Pair (0, 2)
+        sym_jacobi_rotation(S, 0, 2, c, s);
+        sym_rotate(S, 0, 2, c, s);
+        givens_rotate_cols(V, 0, 2, c, s);
+
+        // Pair (1, 2)
+        sym_jacobi_rotation(S, 1, 2, c, s);
+        sym_rotate(S, 1, 2, c, s);
+        givens_rotate_cols(V, 1, 2, c, s);
+    }
+
+    // Step 3: sigma = sqrt(eigenvalues of S)
+    // S is now approximately diagonal
+    #pragma unroll
+    for (int i = 0; i < 3; i++) {
+        sigma[i] = sqrtf(fmaxf(S.m[i*3+i], 0.0f));
+    }
+
+    // Step 4: U = F * V * diag(1/sigma)
+    U = mat3_mul(F, V);
+    #pragma unroll
+    for (int i = 0; i < 3; i++) {
+        float inv_s = (sigma[i] > 1e-8f) ? (1.0f / sigma[i]) : 0.0f;
+        #pragma unroll
+        for (int j = 0; j < 3; j++) {
+            U.m[j*3+i] *= inv_s;  // scale column i of U
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
