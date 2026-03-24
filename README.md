@@ -1,118 +1,84 @@
 # MPM-CudaJax
 
-Unified MLS-MPM (Moving Least Squares Material Point Method) benchmark comparing **JAX**, **PyTorch**, and hand-written **CUDA** implementations.
-
-A single Hydra-configured entry point lets you switch backends and kernels from the command line.
+MLS-MPM (Moving Least Squares Material Point Method) solver in **JAX** with progressively optimised hand-written **CUDA** P2G scatter kernels. Investigates how far JAX/XLA's automatic GPU compilation gets and where custom CUDA is needed.
 
 ## Setup
 
-Requires [uv](https://docs.astral.sh/uv/) and Python 3.11+.
+Requires [uv](https://docs.astral.sh/uv/).
 
 ```bash
-git clone --recurse-submodules git@github.com:philipnickel/MPM-CudaJax.git
+git clone git@github.com:philipnickel/MPM-CudaJax.git
 cd MPM-CudaJax
 ```
 
-If you already cloned without `--recurse-submodules`:
-
+**Local (CPU):**
 ```bash
-git submodule update --init --recursive
+uv run --extra jax python simulate.py sim.num_frames=5
 ```
 
-### DTU HPC (LSF cluster)
-
+**DTU HPC (GPU):**
 ```bash
-# Get an interactive GPU session
-bsub -Is -q gpuv100 -gpu "num=1" -R "rusage[mem=8GB]" -- bash
+module load nvhpc/26.1 gcc/15.2
+export LD_LIBRARY_PATH=/appl/gcc/15.2.0-binutils-2.45/lib64:$LD_LIBRARY_PATH
+export NVCC=/appl/nvhpc/2024_249/Linux_aarch64/24.9/cuda/bin/nvcc
 
-# Load modules (NVHPC bundles CUDA toolkit + nvcc)
-module load nvhpc/26.1
-module load gcc/15.2
-
-# Clone and install
-git clone --recurse-submodules git@github.com:philipnickel/MPM-CudaJax.git
-cd MPM-CudaJax
-
-# Validate JAX sees the GPU
-uv run --extra jax-cuda python -c "import jax; print(jax.devices())"
-
-# Quick benchmark
-uv run --extra jax-cuda python simulate.py backend=jax sim.num_frames=3 benchmark=true
-
-# Build CUDA kernels and run with them
-cd mpm_jax/cuda/kernels && make && cd -
-uv run --extra jax-cuda python simulate.py kernel=cuda_v1 benchmark=true
+uv run --extra jax-cuda python simulate.py sim.num_frames=5 benchmark=true
 ```
 
-### Build CUDA kernels (GPU nodes only)
-
-```bash
-cd mpm_jax/cuda/kernels && make && cd -
-```
+CUDA kernels auto-compile on first use when `nvcc` is on PATH.
 
 ## Usage
 
-All commands use `uv run` — no manual venv or `pip install` needed.
-
-### Run a simulation
-
 ```bash
-# JAX backend (default)
-uv run --python 3.11 --extra all python simulate.py
+# Run simulation (renders GIF to output/)
+uv run --extra jax-cuda python simulate.py
 
-# PyTorch backend
-uv run --python 3.11 --extra all python simulate.py backend=pytorch
+# Benchmark mode (timing only, no GIF, logs to wandb)
+uv run --extra jax-cuda python simulate.py benchmark=true
 
-# Sand instead of jelly
-uv run --python 3.11 --extra all python simulate.py material=sand
+# Switch P2G kernel
+uv run --extra jax-cuda python simulate.py kernel=jax         # XLA default
+uv run --extra jax-cuda python simulate.py kernel=cuda_v1     # naive atomicAdd
+uv run --extra jax-cuda python simulate.py kernel=cuda_v3     # warp-reduction scatter
 
-# Override simulation parameters
-uv run --python 3.11 --extra all python simulate.py sim.num_frames=300 sim.dt=1e-4
+# Override sim params
+uv run --extra jax-cuda python simulate.py sim.n_particles=50000 sim.num_grids=64
 ```
 
-### Benchmark mode (timing only, no GIF)
+## Sweeps
+
+Pre-configured Hydra multirun sweeps:
 
 ```bash
-uv run --python 3.11 --extra all python simulate.py benchmark=true
+# Baseline scaling: vary particle count (JAX only)
+uv run --extra jax-cuda python simulate.py -cn sweep_baseline
+
+# Compare all kernels × particle counts
+uv run --extra jax-cuda python simulate.py -cn sweep_all
+
+# Quick sanity check (2 sizes)
+uv run --extra jax-cuda python simulate.py -cn sweep_quick
 ```
 
-### Switch P2G kernel (JAX backend only)
+## Profiling
+
+Profile any run by setting the `profile` config:
 
 ```bash
-# Pure JAX (default)
-uv run --python 3.11 --extra all python simulate.py kernel=jax
+# Nsight Systems (GPU timeline)
+uv run --extra jax-cuda python simulate.py profile=nsys benchmark=true
 
-# CUDA v1: JAX compute + CUDA scatter (naive atomicAdd)
-uv run --python 3.11 --extra all python simulate.py kernel=cuda_v1
+# Nsight Compute (per-kernel metrics — slow, use few frames)
+uv run --extra jax-cuda python simulate.py profile=ncu sim.num_frames=1 benchmark=true
 
-# CUDA v2: fused stress + weights + scatter in one CUDA kernel
-uv run --python 3.11 --extra all python simulate.py kernel=cuda_v2
+# JAX trace (TensorBoard)
+uv run --extra jax-cuda python simulate.py profile=jax benchmark=true
+
+# Sweep profilers × kernels
+uv run --extra jax-cuda python simulate.py -cn sweep_profile
 ```
 
-### Sweep all backends and kernels (Hydra multirun)
-
-```bash
-# Compare JAX vs PyTorch
-uv run --python 3.11 --extra all python simulate.py -m backend=jax,pytorch benchmark=true
-
-# Sweep all P2G kernels (JAX backend)
-uv run --python 3.11 --extra all python simulate.py -m kernel=jax,cuda_v1,cuda_v2 benchmark=true
-
-# Full sweep: backends × materials × kernels
-uv run --python 3.11 --extra all python simulate.py -m \
-    backend=jax,pytorch \
-    material=jelly,sand \
-    kernel=jax,cuda_v1,cuda_v2 \
-    benchmark=true
-```
-
-All runs log to [wandb](https://wandb.ai) project `MPM-CudaJAX` with per-frame stage timings.
-
-### Run tests
-
-```bash
-uv run --python 3.11 --extra jax --with pytest python -m pytest tests/ -v
-```
+`nsys` and `ncu` auto-relaunch the process under the profiler. Results are extracted and uploaded to wandb as artifacts.
 
 ## Config
 
@@ -120,51 +86,61 @@ Hydra config groups in `conf/`:
 
 | Group | Options | Description |
 |-------|---------|-------------|
-| `backend` | `jax` (default), `pytorch` | Simulation backend |
 | `material` | `jelly` (default), `sand` | Constitutive model |
-| `sim` | `default` | Simulation parameters + boundary conditions |
-| `kernel` | `jax` (default), `cuda_v1`, `cuda_v2` | P2G kernel implementation |
+| `sim` | `default` | Simulation params (n_particles, num_grids, dt, ...) |
+| `kernel` | `jax` (default), `cuda_v1`, `cuda_v3` | P2G scatter implementation |
+| `profile` | `none` (default), `nsys`, `ncu`, `jax` | GPU profiler |
 
-All parameters are overridable from the CLI, e.g. `sim.num_grids=50 sim.rho=2000`.
+All parameters overridable from CLI, e.g. `sim.n_particles=100000 sim.num_grids=128`.
+
+## Tests
+
+```bash
+uv run --extra jax --with pytest python -m pytest tests/ -v
+```
 
 ## Project Structure
 
 ```
 MPM-CudaJax/
-├── simulate.py              # Unified Hydra entry point
-├── conf/                    # Hydra config groups
-│   ├── backend/             #   jax.yaml, pytorch.yaml
+├── simulate.py              # Hydra entry point + wandb logging
+├── Makefile                 # setup, sweep, clean targets
+├── conf/
+│   ├── config.yaml          # defaults
 │   ├── material/            #   jelly.yaml, sand.yaml
 │   ├── sim/                 #   default.yaml
-│   └── kernel/              #   jax.yaml, cuda_v1.yaml, cuda_v2.yaml
-├── mpm_jax/                 # JAX implementation
-│   ├── solver.py            #   vmap-based P2G, G2P, grid update
+│   ├── kernel/              #   jax.yaml, cuda_v1.yaml, cuda_v3.yaml
+│   ├── profile/             #   none.yaml, nsys.yaml, ncu.yaml, jax.yaml
+│   └── sweep_*.yaml         #   pre-configured multirun sweeps
+├── mpm_jax/
+│   ├── solver.py            #   vmap single-particle functions + lax.scan JIT
 │   ├── constitutive.py      #   5 elasticity + 4 plasticity models
 │   ├── boundary.py          #   6 boundary condition types
 │   └── cuda/
-│       ├── p2g_cuda.py      #   JAX FFI registration + Python wrappers
+│       ├── p2g_cuda.py      #   auto-compile + JAX FFI registration
 │       └── kernels/
-│           ├── p2g_scatter.cu   # v1: naive scatter (atomicAdd only)
-│           ├── p2g_fused.cu     # v2: fused stress+weights+scatter
+│           ├── p2g_scatter.cu       # v1: one thread/particle, global atomicAdd
+│           ├── p2g_scatter_warp.cu  # v3: __match_any_sync warp reduction
+│           ├── p2g_scatter_smem.cu  # v4: shared memory staging (WIP)
+│           ├── p2g_fused.cu         # v2: fused stress+scatter (WIP)
 │           └── Makefile
-├── vendor/MPM-PyTorch/      # PyTorch implementation (git submodule)
 └── tests/                   # 24 tests
 ```
 
 ## Architecture
 
-The solver is structured around three embarrassingly parallel phases per timestep:
+Three embarrassingly parallel phases per timestep:
 
-1. **P2G** — per-particle: compute stress (SVD), B-spline weights, affine momentum → scatter to grid (atomicAdd)
-2. **Grid update** — per-node: normalize momentum, apply gravity, boundary conditions
-3. **G2P** — per-particle: gather grid velocities, update position/velocity/deformation gradient
+1. **P2G** — per-particle: stress (SVD) + B-spline weights + affine momentum → scatter to grid
+2. **Grid update** — per-node: normalize momentum, gravity, boundary conditions
+3. **G2P** — per-particle: gather grid velocities, update position/velocity/F
 
-The per-particle functions are written as single-particle JAX functions and batched via `jax.vmap`. The P2G scatter (the reduction) is the only cross-particle operation and the primary CUDA optimisation target.
+Each phase is a `jax.vmap` over a single-particle function. The entire frame (multiple substeps) is JIT-compiled as one XLA program via `jax.lax.scan` — zero Python overhead.
 
-CUDA kernels integrate via `jax.ffi` (Foreign Function Interface) for zero-copy GPU memory access and proper CUDA stream integration.
+The P2G scatter (the only cross-particle reduction) is the CUDA optimisation target. Kernels integrate via `jax.ffi` for zero-copy GPU memory access on the correct CUDA stream. They auto-compile from `.cu` source on first use.
 
 ## References
 
-- Hu et al., "A Moving Least Squares Material Point Method with Displacement Discontinuity and Two-Way Rigid Body Coupling", ACM TOG 2018
+- Hu et al., "A Moving Least Squares Material Point Method", ACM TOG 2018
 - Stomakhin et al., "A Material Point Method for Snow Simulation", ACM TOG 2013
 - Gao et al., "GPU Optimization of Material Point Methods", ACM TOG 2018
