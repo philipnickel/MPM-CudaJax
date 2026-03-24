@@ -239,27 +239,29 @@ __device__ void p2g_compute(
     float sigma[3];
     svd3x3(pF, U, sigma, V);
 
-    // --- Corotated elasticity stress ---
-    // P = 2*mu*(F - R) + lambda*(J-1)*J * F^{-T}
-    // For corotated model with SVD:
-    //   stress_diag[i] = 2*mu*(sigma[i] - 1)*sigma[i] + lambda*(J - 1)*J
-    //   Kirchhoff stress tau = U @ diag(stress_diag) @ V^T
+    // --- Corotated elasticity Kirchhoff stress ---
+    // Matches JAX: tau = 2*mu*(F - R) @ F^T + la*J*(J-1)*I
+    // where R = U @ V^T (rotation from polar decomposition)
     float J = sigma[0] * sigma[1] * sigma[2];
 
-    float stress_diag[3];
-    #pragma unroll
-    for (int i = 0; i < 3; i++) {
-        stress_diag[i] = 2.0f * mu_0 * (sigma[i] - 1.0f) * sigma[i]
-                       + lambda_0 * (J - 1.0f) * J;
-    }
-
-    // tau = U @ diag(stress_diag) @ V^T
+    // R = U @ V^T
     Mat3 Vt = mat3_transpose(V);
-    Mat3 sig_diag = mat3_eye();
-    sig_diag.m[0] = stress_diag[0];
-    sig_diag.m[4] = stress_diag[1];
-    sig_diag.m[8] = stress_diag[2];
-    Mat3 tau = mat3_mul(mat3_mul(U, sig_diag), Vt);
+    Mat3 R = mat3_mul(U, Vt);
+
+    // F^T
+    Mat3 Ft = mat3_transpose(pF);
+
+    // corotated = 2*mu*(F - R) @ F^T
+    Mat3 F_minus_R = mat3_sub(pF, R);
+    Mat3 corotated = mat3_scale(mat3_mul(F_minus_R, Ft), 2.0f * mu_0);
+
+    // volume = la * J * (J - 1) * I
+    float vol_scalar = lambda_0 * J * (J - 1.0f);
+    Mat3 vol_term = mat3_eye();
+    vol_term = mat3_scale(vol_term, vol_scalar);
+
+    // tau = corotated + volume
+    Mat3 tau = mat3_add(corotated, vol_term);
 
     // --- B-spline weights and weight gradients ---
     float fpx[3], fx[3];
