@@ -18,12 +18,13 @@
 // ---------------------------------------------------------------------------
 
 // Reduce val across lanes in `peers` using butterfly XOR shuffle.
-// All active lanes get the sum (not just the leader).
-// Ported from the original tested p2g_scatter_warp.cu.
-__device__ __forceinline__ float warp_reduce_peers(float val, unsigned peers) {
+// IMPORTANT: sync mask must include all active lanes (not just peers),
+// because exited threads can't participate in __shfl.
+// We sync on active_mask but only accumulate from peers.
+__device__ __forceinline__ float warp_reduce_peers(float val, unsigned peers, unsigned active_mask) {
     for (int delta = 16; delta >= 1; delta >>= 1) {
-        float other = __shfl_xor_sync(peers, val, delta);
-        // Only add if the XOR partner is actually in our peer group
+        float other = __shfl_xor_sync(active_mask, val, delta);
+        // Only add if the XOR partner is in our peer group
         if (peers & (1u << ((threadIdx.x & 31) ^ delta)))
             val += other;
     }
@@ -70,10 +71,10 @@ __global__ void p2g_scatter_warp(
         unsigned peers = __match_any_sync(active_mask, gid);
 
         // Reduce contributions across matching lanes
-        float mv0  = warp_reduce_peers(contrib[i].mv[0], peers);
-        float mv1  = warp_reduce_peers(contrib[i].mv[1], peers);
-        float mv2  = warp_reduce_peers(contrib[i].mv[2], peers);
-        float mass = warp_reduce_peers(contrib[i].m, peers);
+        float mv0  = warp_reduce_peers(contrib[i].mv[0], peers, active_mask);
+        float mv1  = warp_reduce_peers(contrib[i].mv[1], peers, active_mask);
+        float mv2  = warp_reduce_peers(contrib[i].mv[2], peers, active_mask);
+        float mass = warp_reduce_peers(contrib[i].m, peers, active_mask);
 
         // Only the leader (lowest lane in group) does the atomic
         int leader = __ffs(peers) - 1;
