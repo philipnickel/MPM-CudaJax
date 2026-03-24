@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-cuda = ["jax[cuda12]>=0.4.20", "cuda-core"]
+cuda = ["jax[cuda12]>=0.4.20", "cuda-core", "cuda-bindings"]
 
 [tool.setuptools.packages.find]
 include = ["mpm_jax*"]
