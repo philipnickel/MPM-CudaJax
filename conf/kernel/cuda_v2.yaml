@@ -1,3 +1,0 @@
-# Fused CUDA P2G: stress + weights + compute + scatter in one kernel.
-# One thread per particle, all intermediate state in registers.
-name: cuda_v2
