@@ -155,8 +155,8 @@ def simulate(cfg):
     return step_timings, frames, total_time
 
 
-def log_to_wandb(cfg, step_timings, total_time):
-    """Log per-frame aggregated timings and summary to wandb."""
+def log_to_wandb(cfg, step_timings, total_time, gif_path=None):
+    """Log per-frame aggregated timings, summary, and animation to wandb."""
     wandb.init(project="mpm-cuda", config=OmegaConf.to_container(cfg))
     sim = cfg.sim
     spf = sim.steps_per_frame
@@ -180,6 +180,8 @@ def log_to_wandb(cfg, step_timings, total_time):
         "n_particles": cfg.sim.n_particles,
         "kernel": cfg.kernel.name,
     })
+    if gif_path and os.path.exists(gif_path):
+        wandb.log({"animation": wandb.Video(gif_path, format="gif")})
     wandb.finish()
 
 
@@ -202,18 +204,19 @@ def main(cfg: DictConfig):
     print(f"  mean step:        {np.mean([t['step_ms'] for t in step_timings]):.3f} ms")
 
     # Render GIF (skip in benchmark mode)
+    gif_path = None
     if not cfg.get('benchmark', False) and frames:
         orig_cwd = hydra.utils.get_original_cwd()
         output_dir = os.path.join(orig_cwd, cfg.output_dir)
         os.makedirs(output_dir, exist_ok=True)
-        export_path = os.path.join(output_dir, f"{cfg.tag}_{cfg.kernel.name}.gif")
-        print(f"\nRendering to {export_path}...")
-        visualize_frames(frames, export_path, size=[1, 1, 1], c=cfg.material.color)
+        gif_path = os.path.join(output_dir, f"{cfg.tag}_{cfg.kernel.name}.gif")
+        print(f"\nRendering to {gif_path}...")
+        visualize_frames(frames, gif_path, size=[1, 1, 1], c=cfg.material.color)
     elif cfg.get('benchmark', False):
         print("\nBenchmark mode: skipping GIF rendering.")
 
-    # Log to wandb
-    log_to_wandb(cfg, step_timings, total_time)
+    # Log to wandb (includes animation if rendered)
+    log_to_wandb(cfg, step_timings, total_time, gif_path=gif_path)
 
 
 if __name__ == "__main__":
