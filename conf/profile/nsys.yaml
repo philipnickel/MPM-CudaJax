@@ -1,0 +1,3 @@
+# Nsight Systems — GPU timeline: kernel durations, memcpy, launch overhead.
+# Re-launches the process under nsys automatically.
+name: nsys

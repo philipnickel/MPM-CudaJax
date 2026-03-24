@@ -16,7 +16,7 @@ MODULES := nvhpc/26.1 gcc/15.2
 LOAD_MODULES := source /etc/profile.d/modules.sh 2>/dev/null; \
                 for m in $(MODULES); do module load $$m 2>/dev/null; done
 
-.PHONY: setup cuda test sweep sweep-quick sweep-all profile clean
+.PHONY: setup cuda test sweep sweep-quick sweep-all clean
 
 setup: cuda
 	uv sync --extra jax-cuda
@@ -40,19 +40,6 @@ sweep-quick:
 sweep-all:
 	@$(LOAD_MODULES); \
 	uv run --extra jax-cuda python simulate.py -cn sweep_all
-
-profile:
-	@$(LOAD_MODULES); \
-	nsys profile \
-		--capture-range=cudaProfilerApi \
-		--capture-range-end=stop \
-		--trace=cuda,nvtx \
-		--stats=true \
-		--force-overwrite=true \
-		-o nsys_report \
-		uv run --extra jax-cuda python simulate.py \
-			sim.n_particles=50000 sim.num_grids=64 sim.num_frames=10 \
-			benchmark=true profile=true
 
 clean:
 	rm -f mpm_jax/cuda/kernels/*.so

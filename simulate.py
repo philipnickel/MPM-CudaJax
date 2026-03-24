@@ -226,10 +226,9 @@ def run_jax(cfg: DictConfig):
     frame_metrics = []
     frame_timings = []
 
-    do_profile = cfg.get('profile', False)
-    if do_profile:
-        cuda_profiler_start()
-
+    # Always bracket the hot loop with profiler markers.
+    # No-ops if not running under nsys.
+    cuda_profiler_start()
     t0 = time.perf_counter()
 
     for frame in tqdm(range(sim.num_frames), desc='JAX'):
@@ -253,10 +252,7 @@ def run_jax(cfg: DictConfig):
 
     elapsed = time.perf_counter() - t0
 
-    if do_profile:
-        jax.block_until_ready(state.x)
-        cuda_profiler_stop()
-
+    cuda_profiler_stop()
     total_steps = sim.num_frames * sim.steps_per_frame
     return frames, elapsed, total_steps, timer.summary_from_frames(frame_timings), frame_metrics
 
@@ -375,46 +371,86 @@ def log_results(backend, elapsed, total_steps, summary, frame_metrics, frames, c
 
 
 # ---------------------------------------------------------------------------
-# Nsight profiling integration
+# Profiler integration (nsys, ncu, jax)
 # ---------------------------------------------------------------------------
 
-def log_nsys_profile(cfg):
-    """Extract kernel timings from nsys report and log to wandb.
+_ENV_INSIDE_PROFILER = "_MPM_INSIDE_PROFILER"
 
-    Expects nsys to have written a .nsys-rep file. Searches for it in
-    the current directory and common nsys output locations.
-    """
+
+def _is_inside_profiler():
+    return os.environ.get(_ENV_INSIDE_PROFILER) == "1"
+
+
+def _relaunch_under_profiler(profile_name, cfg):
+    """Re-launch this process under nsys or ncu. Exits when done."""
+    import sys
+
+    kernel_name = cfg.get('kernel', {}).get('name', 'jax')
+    N = cfg.sim.n_particles
+    report_name = f"profile_{kernel_name}_N{N}"
+
+    # Build the inner command (same args, but with env marker)
+    inner_cmd = [sys.executable] + sys.argv
+
+    if profile_name == "nsys":
+        wrapper = [
+            "nsys", "profile",
+            "--capture-range=cudaProfilerApi",
+            "--capture-range-end=stop",
+            "--trace=cuda,nvtx",
+            "--stats=true",
+            "--force-overwrite=true",
+            "-o", report_name,
+        ]
+    elif profile_name == "ncu":
+        wrapper = [
+            "ncu",
+            "--set", "full",
+            "--csv",
+            "--log-file", f"{report_name}.csv",
+            "--force-overwrite",
+        ]
+    else:
+        return  # not a subprocess profiler
+
+    env = os.environ.copy()
+    env[_ENV_INSIDE_PROFILER] = "1"
+
+    print(f"\nRe-launching under {profile_name}...")
+    print(f"  {' '.join(wrapper + inner_cmd)}\n")
+    result = subprocess.run(wrapper + inner_cmd, env=env)
+    sys.exit(result.returncode)
+
+
+def _extract_nsys_stats(cfg):
+    """Extract kernel timings from the nsys .nsys-rep file and log to wandb."""
     import glob
     import io
 
-    # Find the most recent .nsys-rep file
-    candidates = sorted(glob.glob("*.nsys-rep") + glob.glob("/tmp/*.nsys-rep"),
+    candidates = sorted(glob.glob("profile_*.nsys-rep") + glob.glob("*.nsys-rep"),
                         key=os.path.getmtime, reverse=True)
     if not candidates:
-        print("No .nsys-rep file found — skipping nsys analysis.")
-        print("Run with: nsys profile --capture-range=cudaProfilerApi -o report python simulate.py profile=true")
+        print("No .nsys-rep file found.")
         return
 
     report_path = candidates[0]
     print(f"\nExtracting kernel stats from {report_path}...")
 
-    # Extract kernel summary as CSV
     try:
         result = subprocess.run(
             ["nsys", "stats", report_path,
              "--report", "cuda_gpu_kern_sum",
              "--format", "csv"],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, timeout=60,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
-        print("nsys stats failed — nsys not on PATH or timed out.")
+        print("nsys stats failed.")
         return
 
     if result.returncode != 0:
-        print(f"nsys stats failed: {result.stderr}")
+        print(f"nsys stats error: {result.stderr[:200]}")
         return
 
-    # Parse CSV (nsys may print header lines before the CSV data)
     lines = result.stdout.strip().split("\n")
     csv_lines = [l for l in lines if "," in l and not l.startswith("Processing")]
     if not csv_lines:
@@ -427,24 +463,11 @@ def log_nsys_profile(cfg):
         df = pd.read_csv(io.StringIO(csv_text))
         print("\nCUDA Kernel Summary:")
         print(df.to_string(index=False))
-
-        # Log as wandb table
         wandb.log({"nsys_kernel_summary": wandb.Table(dataframe=df)})
-
-        # Log individual kernel times as summary metrics
-        for _, row in df.iterrows():
-            name = str(row.get("Name", row.iloc[-1]))[:50]
-            avg_ns = row.get("Avg (ns)", row.get("Avg", 0))
-            total_ns = row.get("Total Time (ns)", row.get("Total Time", 0))
-            if avg_ns:
-                wandb.log({f"nsys/{name}/avg_ms": float(avg_ns) / 1e6})
-            if total_ns:
-                wandb.log({f"nsys/{name}/total_ms": float(total_ns) / 1e6})
     except ImportError:
-        print("pandas not installed — logging raw CSV to wandb")
         wandb.log({"nsys_kernel_csv": wandb.Html(f"<pre>{csv_text}</pre>")})
 
-    # Upload .nsys-rep as artifact
+    # Upload raw report as artifact
     artifact = wandb.Artifact(
         f"nsys-{cfg.get('kernel', {}).get('name', 'jax')}-N{cfg.sim.n_particles}",
         type="profile",
@@ -454,18 +477,57 @@ def log_nsys_profile(cfg):
     print(f"Uploaded {report_path} as wandb artifact.")
 
 
+def _extract_ncu_stats(cfg):
+    """Extract Nsight Compute CSV results and log to wandb."""
+    import glob
+    import io
+
+    candidates = sorted(glob.glob("profile_*.csv"), key=os.path.getmtime, reverse=True)
+    if not candidates:
+        print("No ncu CSV file found.")
+        return
+
+    csv_path = candidates[0]
+    print(f"\nLoading ncu results from {csv_path}...")
+
+    try:
+        import pandas as pd
+        df = pd.read_csv(csv_path)
+        print(df.to_string(index=False))
+        wandb.log({"ncu_kernel_metrics": wandb.Table(dataframe=df)})
+    except Exception as e:
+        print(f"Failed to parse ncu CSV: {e}")
+        # Upload raw file anyway
+        pass
+
+    artifact = wandb.Artifact(
+        f"ncu-{cfg.get('kernel', {}).get('name', 'jax')}-N{cfg.sim.n_particles}",
+        type="profile",
+    )
+    artifact.add_file(csv_path)
+    wandb.log_artifact(artifact)
+    print(f"Uploaded {csv_path} as wandb artifact.")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig):
+    profile_name = cfg.get('profile', {}).get('name', 'none')
+
+    # If nsys/ncu requested and we're not already inside the profiler,
+    # re-launch this process wrapped in the profiler.
+    if profile_name in ('nsys', 'ncu') and not _is_inside_profiler():
+        _relaunch_under_profiler(profile_name, cfg)
+        return  # unreachable — _relaunch calls sys.exit
+
     backend = cfg.backend.name
     print(f"Backend: {backend}")
 
     # Init wandb
     kernel_name = cfg.get('kernel', {}).get('name', 'jax')
-    # PyTorch ignores kernel config — always label as 'pytorch'
     effective_kernel = kernel_name if backend == 'jax' else 'pytorch'
     N = cfg.sim.n_particles
     G = cfg.sim.num_grids
@@ -474,8 +536,16 @@ def main(cfg: DictConfig):
         project="MPM-CudaJAX",
         name=f"{backend}_{effective_kernel}_N{N}_G{G}",
         config=wandb_cfg,
-        tags=[backend, effective_kernel, f"N{N}", f"G{G}"],
+        tags=[backend, effective_kernel, f"N{N}", f"G{G}", profile_name],
     )
+
+    # JAX profiler (in-process, writes TensorBoard trace)
+    jax_trace_dir = None
+    if profile_name == 'jax':
+        import jax
+        jax_trace_dir = os.path.join(os.getcwd(), "jax_trace")
+        jax.profiler.start_trace(jax_trace_dir)
+        print(f"JAX profiler started → {jax_trace_dir}")
 
     # Run simulation (timing-critical — no wandb calls inside)
     if backend == "jax":
@@ -484,6 +554,12 @@ def main(cfg: DictConfig):
         frames, elapsed, total_steps, summary, frame_metrics = run_pytorch(cfg)
     else:
         raise ValueError(f"Unknown backend: {backend}")
+
+    # Stop JAX profiler
+    if profile_name == 'jax':
+        import jax
+        jax.profiler.stop_trace()
+        print(f"JAX trace saved to {jax_trace_dir}")
 
     # Print timing summary
     steps_per_sec = total_steps / elapsed
@@ -508,12 +584,19 @@ def main(cfg: DictConfig):
     elif cfg.get('benchmark', False):
         print("\nBenchmark mode: skipping GIF rendering.")
 
-    # Log everything to wandb (after all timing is done)
+    # Log timing results to wandb
     log_results(backend, elapsed, total_steps, summary, frame_metrics, frames, cfg, export_path)
 
-    # If profiling, extract nsys kernel stats and log as artifact
-    if cfg.get('profile', False):
-        log_nsys_profile(cfg)
+    # Extract and log profiler results
+    if profile_name == 'nsys':
+        _extract_nsys_stats(cfg)
+    elif profile_name == 'ncu':
+        _extract_ncu_stats(cfg)
+    elif profile_name == 'jax' and jax_trace_dir:
+        artifact = wandb.Artifact(f"jax-trace-{kernel_name}-N{N}", type="profile")
+        artifact.add_dir(jax_trace_dir)
+        wandb.log_artifact(artifact)
+        print(f"Uploaded JAX trace as wandb artifact.")
 
     wandb.finish()
 

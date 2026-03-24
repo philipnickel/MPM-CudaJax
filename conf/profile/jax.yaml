@@ -1,0 +1,3 @@
+# JAX built-in trace — viewable in TensorBoard.
+# Runs in-process, no subprocess wrapper needed.
+name: jax
