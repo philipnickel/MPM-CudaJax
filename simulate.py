@@ -157,7 +157,8 @@ def simulate(cfg):
 
 def log_to_wandb(cfg, step_timings, total_time, gif_path=None):
     """Log per-frame aggregated timings, summary, and animation to wandb."""
-    wandb.init(project="mpm-cuda", config=OmegaConf.to_container(cfg))
+    name = f"{cfg.kernel.name}_{cfg.tag}_N{cfg.sim.n_particles}_G{cfg.sim.num_grids}"
+    wandb.init(project="mpm-cuda", name=name, config=OmegaConf.to_container(cfg))
     sim = cfg.sim
     spf = sim.steps_per_frame
     for f in range(sim.num_frames):
