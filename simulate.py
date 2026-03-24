@@ -92,8 +92,14 @@ def simulate(cfg):
         grid_x, params.dx, state.x, params.dt, params.p_mass,
     )
 
+    # Initialize CUDA runtime if needed
+    runtime = None
+    if cfg.kernel.name.startswith("cuda"):
+        from mpm_jax.cuda.runtime import CudaRuntime
+        runtime = CudaRuntime()
+
     # Build P2G function
-    p2g_fn = get_p2g_fn(cfg)
+    p2g_fn = get_p2g_fn(cfg, runtime)
     print(f"N={sim.n_particles}, G={sim.num_grids}, kernel={cfg.kernel.name}")
 
     # Warmup: run one step to trigger JIT compilation
