@@ -89,110 +89,53 @@ __device__ __forceinline__ Mat3 mat3_sub(const Mat3& A, const Mat3& B) {
 }
 
 // ---------------------------------------------------------------------------
-// 3x3 SVD via one-sided Jacobi rotations
-//
-// Decomposes F = U * diag(sigma) * V^T using:
-//   1. Symmetric eigendecomposition of F^T F = V * diag(sigma^2) * V^T
-//      via cyclic Jacobi rotations (4 sweeps, each sweep = 3 off-diagonal pairs)
-//   2. U = F * V * diag(1/sigma)
-//
-// Reference: Golub & Van Loan, "Matrix Computations", Section 8.4
-// Suitable for MPM where F is typically close to rotation (well-conditioned).
+// 3x3 matrix inverse (Cramer's rule, register-resident)
 // ---------------------------------------------------------------------------
 
-// Apply Givens rotation to columns p, q of a 3x3 matrix (in-place).
-// Rotates by angle with cos(theta)=c, sin(theta)=s.
-__device__ __forceinline__ void givens_rotate_cols(Mat3& A, int p, int q, float c, float s) {
-    #pragma unroll
-    for (int i = 0; i < 3; i++) {
-        float ap = A.m[i*3+p];
-        float aq = A.m[i*3+q];
-        A.m[i*3+p] = c * ap + s * aq;
-        A.m[i*3+q] = -s * ap + c * aq;
-    }
+__device__ __forceinline__ float mat3_det(const Mat3& A) {
+    return A.m[0] * (A.m[4]*A.m[8] - A.m[5]*A.m[7])
+         - A.m[1] * (A.m[3]*A.m[8] - A.m[5]*A.m[6])
+         + A.m[2] * (A.m[3]*A.m[7] - A.m[4]*A.m[6]);
 }
 
-// Compute Givens rotation to zero S[p][q] in symmetric matrix S.
-// Returns (c, s) such that the (p,q) element of G^T S G is zero.
-__device__ __forceinline__ void sym_jacobi_rotation(const Mat3& S, int p, int q, float& c, float& s) {
-    float spq = S.m[p*3+q];
-    if (fabsf(spq) < 1e-10f) {
-        c = 1.0f;
-        s = 0.0f;
-        return;
-    }
-    float tau = (S.m[q*3+q] - S.m[p*3+p]) / (2.0f * spq);
-    float t;
-    if (tau >= 0.0f)
-        t = 1.0f / (tau + sqrtf(1.0f + tau * tau));
-    else
-        t = -1.0f / (-tau + sqrtf(1.0f + tau * tau));
-    c = rsqrtf(1.0f + t * t);
-    s = t * c;
+__device__ __forceinline__ Mat3 mat3_inverse(const Mat3& A) {
+    float det = mat3_det(A);
+    float inv_det = 1.0f / det;
+    Mat3 B;
+    B.m[0] = (A.m[4]*A.m[8] - A.m[5]*A.m[7]) * inv_det;
+    B.m[1] = (A.m[2]*A.m[7] - A.m[1]*A.m[8]) * inv_det;
+    B.m[2] = (A.m[1]*A.m[5] - A.m[2]*A.m[4]) * inv_det;
+    B.m[3] = (A.m[5]*A.m[6] - A.m[3]*A.m[8]) * inv_det;
+    B.m[4] = (A.m[0]*A.m[8] - A.m[2]*A.m[6]) * inv_det;
+    B.m[5] = (A.m[2]*A.m[3] - A.m[0]*A.m[5]) * inv_det;
+    B.m[6] = (A.m[3]*A.m[7] - A.m[4]*A.m[6]) * inv_det;
+    B.m[7] = (A.m[1]*A.m[6] - A.m[0]*A.m[7]) * inv_det;
+    B.m[8] = (A.m[0]*A.m[4] - A.m[1]*A.m[3]) * inv_det;
+    return B;
 }
 
-// Apply Jacobi rotation to symmetric matrix S (both sides): S <- G^T S G
-__device__ __forceinline__ void sym_rotate(Mat3& S, int p, int q, float c, float s) {
-    float spp = S.m[p*3+p], sqq = S.m[q*3+q], spq = S.m[p*3+q];
-    S.m[p*3+p] = c*c*spp - 2.0f*c*s*spq + s*s*sqq;
-    S.m[q*3+q] = s*s*spp + 2.0f*c*s*spq + c*c*sqq;
-    S.m[p*3+q] = S.m[q*3+p] = 0.0f;  // zeroed by construction
+// ---------------------------------------------------------------------------
+// Polar decomposition via Newton iteration (Higham's method)
+//
+// Computes the rotation factor R in the polar decomposition F = R * S,
+// where R is orthogonal and S is symmetric positive semi-definite.
+//
+// Uses: R_{k+1} = 0.5 * (R_k + R_k^{-T})
+// Starting from R_0 = F, converges quadratically for well-conditioned F.
+// 5 iterations gives ~1e-7 accuracy for F near identity (typical in MPM).
+//
+// Reference: Higham, "Computing the Polar Decomposition — with Applications"
+// ---------------------------------------------------------------------------
 
-    // Update remaining off-diagonal entries
-    int r = 3 - p - q;  // the third index
-    float srp = S.m[r*3+p], srq = S.m[r*3+q];
-    S.m[r*3+p] = S.m[p*3+r] = c * srp - s * srq;
-    S.m[r*3+q] = S.m[q*3+r] = s * srp + c * srq;
-}
-
-__device__ void svd3x3(const Mat3& F, Mat3& U, float sigma[3], Mat3& V) {
-    // Step 1: S = F^T F (symmetric positive semi-definite)
-    Mat3 Ft = mat3_transpose(F);
-    Mat3 S = mat3_mul(Ft, F);
-
-    // Step 2: Eigendecomposition of S via Jacobi rotations
-    // V accumulates the rotation matrices
-    V = mat3_eye();
-
-    // 6 sweeps of cyclic Jacobi (pairs: (0,1), (0,2), (1,2))
-    // 4 sweeps gives ~1e-2 accuracy, 6 sweeps gives ~1e-6
+__device__ Mat3 polar_R(const Mat3& F) {
+    Mat3 R = F;
     #pragma unroll
-    for (int sweep = 0; sweep < 6; sweep++) {
-        float c, s;
-
-        // Pair (0, 1)
-        sym_jacobi_rotation(S, 0, 1, c, s);
-        sym_rotate(S, 0, 1, c, s);
-        givens_rotate_cols(V, 0, 1, c, s);
-
-        // Pair (0, 2)
-        sym_jacobi_rotation(S, 0, 2, c, s);
-        sym_rotate(S, 0, 2, c, s);
-        givens_rotate_cols(V, 0, 2, c, s);
-
-        // Pair (1, 2)
-        sym_jacobi_rotation(S, 1, 2, c, s);
-        sym_rotate(S, 1, 2, c, s);
-        givens_rotate_cols(V, 1, 2, c, s);
+    for (int iter = 0; iter < 5; iter++) {
+        Mat3 Rinv = mat3_inverse(R);
+        Mat3 RinvT = mat3_transpose(Rinv);
+        R = mat3_scale(mat3_add(R, RinvT), 0.5f);
     }
-
-    // Step 3: sigma = sqrt(eigenvalues of S)
-    // S is now approximately diagonal
-    #pragma unroll
-    for (int i = 0; i < 3; i++) {
-        sigma[i] = sqrtf(fmaxf(S.m[i*3+i], 0.0f));
-    }
-
-    // Step 4: U = F * V * diag(1/sigma)
-    U = mat3_mul(F, V);
-    #pragma unroll
-    for (int i = 0; i < 3; i++) {
-        float inv_s = (sigma[i] > 1e-8f) ? (1.0f / sigma[i]) : 0.0f;
-        #pragma unroll
-        for (int j = 0; j < 3; j++) {
-            U.m[j*3+i] *= inv_s;  // scale column i of U
-        }
-    }
+    return R;
 }
 
 // ---------------------------------------------------------------------------
@@ -235,21 +178,15 @@ __device__ void p2g_compute(
         pF.m[i] = F_ptr[i];
     }
 
-    // --- SVD of deformation gradient ---
-    Mat3 U, V;
-    float sigma[3];
-    svd3x3(pF, U, sigma, V);
+    // --- Polar decomposition via Newton iteration ---
+    // R is the rotation factor of F = R * S
+    Mat3 R = polar_R(pF);
+
+    // J = det(F) for the volume term
+    float J = mat3_det(pF);
 
     // --- Corotated elasticity Kirchhoff stress ---
     // Matches JAX: tau = 2*mu*(F - R) @ F^T + la*J*(J-1)*I
-    // where R = U @ V^T (rotation from polar decomposition)
-    float J = sigma[0] * sigma[1] * sigma[2];
-
-    // R = U @ V^T
-    Mat3 Vt = mat3_transpose(V);
-    Mat3 R = mat3_mul(U, Vt);
-
-    // F^T
     Mat3 Ft = mat3_transpose(pF);
 
     // corotated = 2*mu*(F - R) @ F^T
