@@ -1,4 +1,5 @@
 """Pure JAX P2G baseline implementation."""
+import functools
 import jax
 import jax.numpy as jnp
 from mpm_jax.state import MPMState, MPMParams, OFFSET_27
@@ -36,22 +37,20 @@ def make_jax_p2g(cfg):
     compute_weights = jax.vmap(_single_particle_weights, in_axes=(0, None, None, None))
     p2g_compute = jax.vmap(_single_particle_p2g, in_axes=(0, 0, 0, 0, 0, 0, None, None, None))
 
-    def p2g(state: MPMState, params: MPMParams):
-        # Apply plasticity to F
+    @functools.partial(jax.jit, static_argnums=(1,))
+    def _p2g_jitted(state, num_grids, inv_dx, dx, dt, vol, p_mass):
         F = plasticity_fn(state.F)
-        # Compute stress
         stress = elasticity_fn(F)
-        # Compute weights — num_grids must be a Python int for shape computations
-        G = int(params.num_grids)
-        weight, dweight, dpos, index = compute_weights(
-            state.x, params.inv_dx, params.dx, G)
-        # Compute per-particle contributions
-        mv, m = p2g_compute(
-            state.v, state.C, stress, weight, dweight, dpos,
-            params.dt, params.vol, params.p_mass)
-        # Scatter onto grid
-        grid_mv = jnp.zeros((G**3, 3)).at[index.ravel()].add(mv.reshape(-1, 3))
-        grid_m = jnp.zeros((G**3,)).at[index.ravel()].add(m.ravel())
+        weight, dweight, dpos, index = compute_weights(state.x, inv_dx, dx, num_grids)
+        mv, m = p2g_compute(state.v, state.C, stress, weight, dweight, dpos, dt, vol, p_mass)
+        grid_mv = jnp.zeros((num_grids**3, 3)).at[index.ravel()].add(mv.reshape(-1, 3))
+        grid_m = jnp.zeros((num_grids**3,)).at[index.ravel()].add(m.ravel())
         return grid_mv, grid_m
+
+    def p2g(state: MPMState, params: MPMParams):
+        return _p2g_jitted(
+            state, int(params.num_grids),
+            params.inv_dx, params.dx, params.dt, params.vol, params.p_mass,
+        )
 
     return p2g
