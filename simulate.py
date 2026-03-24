@@ -56,11 +56,15 @@ def visualize_frames(frames, export_path, center=[0.5, 0.5, 0.5],
     zlim = [center[2] - size[2]/2, center[2] + size[2]/2]
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
-    ax.set_xlim(xlim); ax.set_ylim(ylim); ax.set_zlim(zlim)
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
+    ax.set_zlim(zlim)
 
     def update(frame):
         ax.cla()
-        ax.set_xlim(xlim); ax.set_ylim(ylim); ax.set_zlim(zlim)
+        ax.set_xlim(xlim)
+        ax.set_ylim(ylim)
+        ax.set_zlim(zlim)
         ax.scatter(frames[frame][:, 0], frames[frame][:, 1], frames[frame][:, 2], s=s, c=c)
         ax.set_title(f'Frame {frame}')
 
@@ -257,73 +261,6 @@ def run_jax(cfg: DictConfig):
     return frames, elapsed, total_steps, timer.summary_from_frames(frame_timings), frame_metrics
 
 
-def run_pytorch(cfg: DictConfig):
-    import sys
-    vendor_path = os.path.join(os.path.dirname(__file__), "vendor", "MPM-PyTorch")
-    if vendor_path not in sys.path:
-        sys.path.insert(0, vendor_path)
-
-    import torch
-    from mpm_pytorch import MPMSolver, set_boundary_conditions, get_constitutive
-
-    sim = cfg.sim
-    mat = cfg.material
-    bench = cfg.get('benchmark', False)
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    n = sim.n_particles
-    cube_np = get_particles(n, center=list(sim.center), size=[0.5, 0.5, 0.5])
-    particles = torch.tensor(cube_np, dtype=torch.float32, device=device)
-    print(f"N={n}, G={sim.num_grids}")
-
-    solver = MPMSolver(particles, enable_train=False, device=device)
-    set_boundary_conditions(solver, sim.boundary_conditions)
-
-    elasticity_name = mat.elasticity.name
-    plasticity_name = mat.plasticity.name
-    elasticity = get_constitutive(elasticity_name, device=device)
-    plasticity = get_constitutive(plasticity_name, device=device)
-
-    x = particles.clone()
-    v = torch.stack([torch.tensor(list(sim.initial_velocity), device=device) for _ in range(n)])
-    C = torch.zeros((n, 3, 3), device=device)
-    F = torch.eye(3, device=device).unsqueeze(0).repeat(n, 1, 1)
-
-    timer = StageTimer()
-    frames = []
-    frame_metrics = []
-    frame_timings = []
-    t0 = time.perf_counter()
-
-    for frame in tqdm(range(sim.num_frames), desc='PyTorch'):
-        if not bench:
-            frames.append(x.detach().cpu().numpy())
-        for _ in range(sim.steps_per_frame):
-            # Full timestep: stress + P2G + grid + G2P + plasticity
-            # PyTorch solver bundles P2G/grid/G2P internally so we
-            # can't split to match JAX's 3-stage breakdown.
-            timer.start('timestep')
-            stress = elasticity(F)
-            x, v, C, F = solver(x, v, C, F, stress)
-            F = plasticity(F)
-            if device.type == 'cuda':
-                torch.cuda.synchronize()
-            timer.stop()
-
-        ft = timer.flush_frame()
-        frame_ms = sum(ft.values())
-        frame_timings.append(ft)
-        frame_metrics.append({
-            'x_mean_z': float(x[:, 2].mean().item()),
-            'v_max': float(torch.abs(v).max().item()),
-            'frame_ms': frame_ms,
-            **{f'{k}_ms': v for k, v in ft.items()},
-        })
-
-    elapsed = time.perf_counter() - t0
-    total_steps = sim.num_frames * sim.steps_per_frame
-    return frames, elapsed, total_steps, timer.summary_from_frames(frame_timings), frame_metrics
-
 
 # ---------------------------------------------------------------------------
 # Wandb logging (all after timing is complete)
@@ -452,7 +389,7 @@ def _extract_nsys_stats(cfg):
         return
 
     lines = result.stdout.strip().split("\n")
-    csv_lines = [l for l in lines if "," in l and not l.startswith("Processing")]
+    csv_lines = [line for line in lines if "," in line and not line.startswith("Processing")]
     if not csv_lines:
         print("No kernel data in nsys report.")
         return
@@ -480,7 +417,6 @@ def _extract_nsys_stats(cfg):
 def _extract_ncu_stats(cfg):
     """Extract Nsight Compute CSV results and log to wandb."""
     import glob
-    import io
 
     candidates = sorted(glob.glob("profile_*.csv"), key=os.path.getmtime, reverse=True)
     if not candidates:
@@ -523,20 +459,17 @@ def main(cfg: DictConfig):
         _relaunch_under_profiler(profile_name, cfg)
         return  # unreachable — _relaunch calls sys.exit
 
-    backend = cfg.backend.name
-    print(f"Backend: {backend}")
-
-    # Init wandb
     kernel_name = cfg.get('kernel', {}).get('name', 'jax')
-    effective_kernel = kernel_name if backend == 'jax' else 'pytorch'
     N = cfg.sim.n_particles
     G = cfg.sim.num_grids
+
+    # Init wandb
     wandb_cfg = OmegaConf.to_container(cfg, resolve=True)
     wandb.init(
         project="MPM-CudaJAX",
-        name=f"{backend}_{effective_kernel}_N{N}_G{G}",
+        name=f"jax_{kernel_name}_N{N}_G{G}",
         config=wandb_cfg,
-        tags=[backend, effective_kernel, f"N{N}", f"G{G}", profile_name],
+        tags=[kernel_name, f"N{N}", f"G{G}", profile_name],
     )
 
     # JAX profiler (in-process, writes TensorBoard trace)
@@ -545,15 +478,10 @@ def main(cfg: DictConfig):
         import jax
         jax_trace_dir = os.path.join(os.getcwd(), "jax_trace")
         jax.profiler.start_trace(jax_trace_dir)
-        print(f"JAX profiler started → {jax_trace_dir}")
+        print(f"JAX profiler started -> {jax_trace_dir}")
 
     # Run simulation (timing-critical — no wandb calls inside)
-    if backend == "jax":
-        frames, elapsed, total_steps, summary, frame_metrics = run_jax(cfg)
-    elif backend == "pytorch":
-        frames, elapsed, total_steps, summary, frame_metrics = run_pytorch(cfg)
-    else:
-        raise ValueError(f"Unknown backend: {backend}")
+    frames, elapsed, total_steps, summary, frame_metrics = run_jax(cfg)
 
     # Stop JAX profiler
     if profile_name == 'jax':
@@ -564,7 +492,7 @@ def main(cfg: DictConfig):
     # Print timing summary
     steps_per_sec = total_steps / elapsed
     ms_per_step = elapsed / total_steps * 1000
-    print(f"\n{backend}: {total_steps} steps in {elapsed:.2f}s ({steps_per_sec:.1f} steps/s, {ms_per_step:.2f} ms/step)")
+    print(f"\njax ({kernel_name}): {total_steps} steps in {elapsed:.2f}s ({steps_per_sec:.1f} steps/s, {ms_per_step:.2f} ms/step)")
 
     total_ms = sum(s['total_ms'] for s in summary.values())
     print(f"\nPer-stage timing (per frame, {cfg.sim.steps_per_frame} substeps each):")
@@ -578,14 +506,14 @@ def main(cfg: DictConfig):
         orig_cwd = hydra.utils.get_original_cwd()
         output_dir = os.path.join(orig_cwd, cfg.output_dir)
         os.makedirs(output_dir, exist_ok=True)
-        export_path = os.path.join(output_dir, f"{cfg.tag}_{backend}.gif")
+        export_path = os.path.join(output_dir, f"{cfg.tag}_{kernel_name}.gif")
         print(f"\nRendering to {export_path}...")
         visualize_frames(frames, export_path, size=[1, 1, 1], c=cfg.material.color)
     elif cfg.get('benchmark', False):
         print("\nBenchmark mode: skipping GIF rendering.")
 
     # Log timing results to wandb
-    log_results(backend, elapsed, total_steps, summary, frame_metrics, frames, cfg, export_path)
+    log_results(kernel_name, elapsed, total_steps, summary, frame_metrics, frames, cfg, export_path)
 
     # Extract and log profiler results
     if profile_name == 'nsys':
@@ -596,7 +524,7 @@ def main(cfg: DictConfig):
         artifact = wandb.Artifact(f"jax-trace-{kernel_name}-N{N}", type="profile")
         artifact.add_dir(jax_trace_dir)
         wandb.log_artifact(artifact)
-        print(f"Uploaded JAX trace as wandb artifact.")
+        print("Uploaded JAX trace as wandb artifact.")
 
     wandb.finish()
 

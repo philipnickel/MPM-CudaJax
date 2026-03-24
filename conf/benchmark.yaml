@@ -1,7 +1,0 @@
-defaults:
-  - _self_
-
-n_particles: 16384
-num_grids: 25
-num_warmup: 10
-num_runs: 100

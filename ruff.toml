@@ -1,0 +1,11 @@
+exclude = ["vendor/"]
+
+[lint]
+ignore = [
+    "E741",  # ambiguous variable name (I for identity matrix is standard in physics)
+    "E731",  # lambda assignment (fine for simple closures in tests/scripts)
+]
+
+[lint.per-file-ignores]
+"tests/*" = ["E402", "F401"]  # late imports and unused imports OK in tests
+"mpm_jax/cuda/benchmark.py" = ["F401"]  # legacy file

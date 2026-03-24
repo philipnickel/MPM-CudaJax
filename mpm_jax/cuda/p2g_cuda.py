@@ -181,7 +181,6 @@ def cuda_p2g_scatter_smem(mv, m, index, num_grids):
     """
     G = num_grids
     G3 = G ** 3
-    N = mv.shape[0]
 
     index_i32 = index.astype(jnp.int32)
 

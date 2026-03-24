@@ -1,4 +1,3 @@
-# Baseline scaling sweep: vary particle count on JAX backend.
 # Usage: uv run --extra jax-cuda python simulate.py --config-name sweep_baseline
 defaults:
   - config  # inherit everything from config.yaml

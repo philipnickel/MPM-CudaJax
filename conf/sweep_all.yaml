@@ -2,7 +2,6 @@
 #
 # Usage: uv run --extra jax-cuda python simulate.py -cn sweep_all
 #
-# Note: kernel config only affects the JAX backend.
 # PyTorch runs ignore the kernel setting.
 # Build CUDA kernels first: cd mpm_jax/cuda/kernels && make
 defaults:

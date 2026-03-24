@@ -1,5 +1,4 @@
 defaults:
-  - backend: jax
   - material: jelly
   - sim: default
   - kernel: jax

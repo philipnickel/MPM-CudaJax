@@ -1,3 +1,0 @@
-[submodule "vendor/MPM-PyTorch"]
-	path = vendor/MPM-PyTorch
-	url = git@github.com:philipnickel/MPM-PyTorch.git
