@@ -13,17 +13,23 @@
 
 // ---------------------------------------------------------------------------
 // Warp-level reduction for lanes matching a grid node
-// Uses __shfl_down_sync with the peer mask. The leader (lowest set bit)
-// accumulates the sum.
+// Uses explicit peer iteration: the leader reads each peer's value via
+// __shfl_sync. Correct for arbitrary (non-contiguous) peer masks.
 // ---------------------------------------------------------------------------
 
 __device__ __forceinline__ float warp_reduce_peers(float val, unsigned peers) {
-    // Iteratively halve the peer group, accumulating into lower lanes
-    for (int delta = 16; delta >= 1; delta >>= 1) {
-        float other = __shfl_down_sync(peers, val, delta);
-        val += other;
+    int leader = __ffs(peers) - 1;
+    int lane = threadIdx.x & 31;
+    float sum = 0.0f;
+    if (lane == leader) {
+        unsigned remaining = peers;
+        while (remaining) {
+            int src = __ffs(remaining) - 1;
+            sum += __shfl_sync(peers, val, src);
+            remaining &= remaining - 1;  // clear lowest set bit
+        }
     }
-    return val;  // correct result is in the leader (lowest bit of peers)
+    return sum;  // only valid in the leader lane
 }
 
 // ---------------------------------------------------------------------------
