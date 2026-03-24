@@ -10,3 +10,4 @@ hydra:
       sim.num_frames: 10
 
 benchmark: true
+group: sweep_baseline_${now:%Y%m%d_%H%M%S}

@@ -1,6 +1,7 @@
 """MLS-MPM simulation with pluggable P2G kernels."""
 import os
 import time
+from datetime import datetime
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
@@ -158,7 +159,8 @@ def simulate(cfg):
 def log_to_wandb(cfg, step_timings, total_time, gif_path=None):
     """Log per-frame aggregated timings, summary, and animation to wandb."""
     name = f"{cfg.kernel.name}_{cfg.tag}_N{cfg.sim.n_particles}_G{cfg.sim.num_grids}"
-    wandb.init(project="mpm-cuda", name=name, config=OmegaConf.to_container(cfg))
+    group = cfg.get("group", None) or datetime.now().strftime("%Y%m%d_%H%M%S")
+    wandb.init(project="mpm-cuda", name=name, group=group, config=OmegaConf.to_container(cfg))
     sim = cfg.sim
     spf = sim.steps_per_frame
     for f in range(sim.num_frames):
