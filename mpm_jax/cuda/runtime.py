@@ -1,5 +1,4 @@
 """CUDA runtime: kernel compilation and launch via cuda.core."""
-import re
 from pathlib import Path
 
 KERNELS_DIR = Path(__file__).parent / "kernels"
@@ -8,22 +7,6 @@ KERNELS_DIR = Path(__file__).parent / "kernels"
 def get_ptr(arr) -> int:
     """Extract raw GPU device pointer from a JAX array."""
     return arr.__cuda_array_interface__['data'][0]
-
-
-def _resolve_includes(code: str, base_dir: Path) -> str:
-    """Resolve #include "..." directives by inlining file contents.
-
-    NVRTC compiles from a string and cannot resolve relative includes.
-    """
-    def replacer(match):
-        filename = match.group(1)
-        include_path = base_dir / filename
-        if include_path.exists():
-            header = include_path.read_text()
-            return _resolve_includes(header, include_path.parent)
-        return match.group(0)  # leave unresolved system includes as-is
-
-    return re.sub(r'#include\s+"([^"]+)"', replacer, code)
 
 
 class CudaRuntime:
@@ -62,11 +45,12 @@ class CudaRuntime:
         if not cu_path.exists():
             raise FileNotFoundError(f"Kernel source not found: {cu_path}")
 
-        code = _resolve_includes(cu_path.read_text(), cu_path.parent)
+        code = cu_path.read_text()
         try:
             prog = Program(code, code_type="c++", options=ProgramOptions(
                 std="c++17",
                 arch=f"sm_{self.dev.arch}",
+                include_path=str(KERNELS_DIR),
             ))
             mod = prog.compile("cubin")
         except Exception as e:
