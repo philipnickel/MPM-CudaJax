@@ -17,22 +17,17 @@
 // __shfl_sync. Correct for arbitrary (non-contiguous) peer masks.
 // ---------------------------------------------------------------------------
 
+// Reduce val across lanes in `peers` using butterfly XOR shuffle.
+// All active lanes get the sum (not just the leader).
+// Ported from the original tested p2g_scatter_warp.cu.
 __device__ __forceinline__ float warp_reduce_peers(float val, unsigned peers) {
-    // All peers must participate in __shfl_sync — can't be conditional.
-    // Use sequential accumulation: each peer sends its value to the leader
-    // via __shfl_sync broadcast.
-    int leader = __ffs(peers) - 1;
-    int lane = threadIdx.x & 31;
-    float sum = 0.0f;
-    unsigned remaining = peers;
-    while (remaining) {
-        int src = __ffs(remaining) - 1;
-        // All peers participate: broadcast src's value to everyone
-        float broadcasted = __shfl_sync(peers, val, src);
-        if (lane == leader) sum += broadcasted;
-        remaining &= remaining - 1;
+    for (int delta = 16; delta >= 1; delta >>= 1) {
+        float other = __shfl_xor_sync(peers, val, delta);
+        // Only add if the XOR partner is actually in our peer group
+        if (peers & (1u << ((threadIdx.x & 31) ^ delta)))
+            val += other;
     }
-    return sum;  // only valid in the leader lane
+    return val;
 }
 
 // ---------------------------------------------------------------------------
