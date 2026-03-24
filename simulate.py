@@ -21,13 +21,33 @@ from mpm_jax.boundary import build_boundary_fns
 
 
 def get_particles(n_particles, center, size, initial_velocity):
-    """Sample particles uniformly in a box."""
+    """Create particles on a regular grid with noisy duplicates (matches PyTorch).
+
+    Creates num^3 particles on a regular grid, then adds num^3 random particles,
+    where num = round(n_particles/2)^(1/3). Total ≈ n_particles.
+    """
+    num = round((n_particles / 2) ** (1/3))
+    center = jnp.array(center)
+    size = jnp.array(size)
+    start = center - size / 2
+    end = center + size / 2
+
+    # Regular grid
+    lx = jnp.linspace(start[0], end[0], num)
+    ly = jnp.linspace(start[1], end[1], num)
+    lz = jnp.linspace(start[2], end[2], num)
+    gx, gy, gz = jnp.meshgrid(lx, ly, lz, indexing='ij')
+    grid_pts = jnp.stack([gx, gy, gz], axis=-1).reshape(-1, 3)
+
+    # Noisy duplicates
     key = jax.random.PRNGKey(0)
-    x = jax.random.uniform(key, (n_particles, 3))
-    x = x * jnp.array(size) + jnp.array(center) - jnp.array(size) / 2
-    v = jnp.tile(jnp.array(initial_velocity), (n_particles, 1))
-    C = jnp.zeros((n_particles, 3, 3))
-    F = jnp.tile(jnp.eye(3), (n_particles, 1, 1))
+    noisy_pts = start + jax.random.uniform(key, grid_pts.shape) * size
+
+    x = jnp.concatenate([grid_pts, noisy_pts], axis=0)
+    n = x.shape[0]
+    v = jnp.tile(jnp.array(initial_velocity), (n, 1))
+    C = jnp.zeros((n, 3, 3))
+    F = jnp.tile(jnp.eye(3), (n, 1, 1))
     return MPMState(x=x, v=v, C=C, F=F)
 
 
@@ -61,9 +81,18 @@ def simulate(cfg):
     sim = cfg.sim
     bench = cfg.get('benchmark', False)
 
-    # Build params
+    # Build initial state first (actual N may differ from config due to grid sampling)
+    state = get_particles(
+        sim.n_particles,
+        center=list(sim.center),
+        size=list(sim.size),
+        initial_velocity=list(sim.initial_velocity),
+    )
+    actual_n = state.x.shape[0]
+
+    # Build params with actual particle count (for correct vol = prod(size)/N)
     params = make_params(
-        n_particles=sim.n_particles,
+        n_particles=actual_n,
         num_grids=sim.num_grids,
         dt=sim.dt,
         gravity=list(sim.gravity),
@@ -72,14 +101,6 @@ def simulate(cfg):
         damping=sim.get("damping", 1.0),
         center=list(sim.center),
         size=list(sim.size),
-    )
-
-    # Build initial state (size matches config for correct vol = prod(size)/N)
-    state = get_particles(
-        sim.n_particles,
-        center=list(sim.center),
-        size=list(sim.size),
-        initial_velocity=list(sim.initial_velocity),
     )
 
     # Build boundary conditions
@@ -108,13 +129,14 @@ def simulate(cfg):
     warmup_state = g2p(state, grid_v, params)
     jax.block_until_ready(warmup_state.x)
 
-    # Reset state for timed run
+    # Reset state for timed run (same particles as before warmup)
     state = get_particles(
         sim.n_particles,
         center=list(sim.center),
         size=list(sim.size),
         initial_velocity=list(sim.initial_velocity),
     )
+    assert state.x.shape[0] == actual_n
 
     step_timings = []
     frames = []
