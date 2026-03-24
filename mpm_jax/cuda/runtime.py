@@ -48,7 +48,6 @@ class CudaRuntime:
         code = cu_path.read_text()
         try:
             prog = Program(code, code_type="c++", options=ProgramOptions(
-                std="c++17",
                 arch=f"sm_{self.dev.arch}",
                 include_path=str(KERNELS_DIR),
             ))
