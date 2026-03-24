@@ -1,11 +1,18 @@
-"""Grid-to-particle transfer: gather velocities, update particle state."""
+"""Grid-to-particle transfer (MLS-MPM formulation, Hu et al. 2018).
+
+Uses C as the velocity gradient — no dweight needed:
+    v_new = sum(weight * v_grid)
+    C_new = 4*inv_dx^2 * sum(weight * v_grid ⊗ dpos)
+    F_new = (I + dt*C_new) @ F
+    x_new = x + dt*v_new
+"""
 import jax
 import jax.numpy as jnp
 from mpm_jax.state import MPMState, MPMParams, OFFSET_27
 
 
 def _single_particle_g2p(grid_v, F_p, x_p, dt, inv_dx, clip_bound):
-    """G2P for one particle. Recomputes weights internally."""
+    """G2P for one particle. Only needs weight and dpos (no dweight)."""
     px = x_p * inv_dx
     base = jnp.floor(px - 0.5).astype(int)
     fx = px - base.astype(jnp.float32)
@@ -18,37 +25,30 @@ def _single_particle_g2p(grid_v, F_p, x_p, dt, inv_dx, clip_bound):
         0.5 * (fx - 0.5) ** 2,
     ])  # (3, 3)
 
-    dw = jnp.stack([
-        fx - 1.5,
-        -2.0 * (fx - 1.0),
-        fx - 0.5,
-    ])  # (3, 3)
-
     offsets = OFFSET_27.astype(int)
     weight = w[offsets[:, 0], 0] * w[offsets[:, 1], 1] * w[offsets[:, 2], 2]
-
-    dweight = inv_dx * jnp.stack([
-        dw[offsets[:, 0], 0] *  w[offsets[:, 1], 1] *  w[offsets[:, 2], 2],
-         w[offsets[:, 0], 0] * dw[offsets[:, 1], 1] *  w[offsets[:, 2], 2],
-         w[offsets[:, 0], 0] *  w[offsets[:, 1], 1] * dw[offsets[:, 2], 2],
-    ], axis=-1)  # (27, 3)
-
     dpos = (OFFSET_27 - fx[None, :]) * dx  # (27, 3)
 
     idx_3d = base[None, :] + offsets
     index = idx_3d[:, 0] * num_grids * num_grids + idx_3d[:, 1] * num_grids + idx_3d[:, 2]
     index = jnp.clip(index, 0, num_grids ** 3 - 1)
 
-    # G2P gather (matches solver.py:154-161)
+    # Gather grid velocities
     gv = grid_v[index]  # (27, 3)
+
+    # New velocity: weighted average
     new_v = (weight[:, None] * gv).sum(axis=0)
+
+    # New C: APIC affine matrix (also serves as velocity gradient in MLS-MPM)
     new_C = 4.0 * inv_dx * inv_dx * (
         weight[:, None, None] * jnp.einsum('ij,ik->ijk', gv, dpos)
     ).sum(axis=0)
-    grad_v = jnp.einsum('ij,ik->ijk', gv, dweight).sum(axis=0)
 
+    # F update: use C as velocity gradient (MLS-MPM key insight)
+    new_F = jnp.clip((jnp.eye(3) + dt * new_C) @ F_p, -2.0, 2.0)
+
+    # Position update
     new_x = jnp.clip(x_p + new_v * dt, clip_bound, 1.0 - clip_bound)
-    new_F = jnp.clip(F_p + dt * grad_v @ F_p, -2.0, 2.0)
 
     return new_x, new_v, new_C, new_F
 
