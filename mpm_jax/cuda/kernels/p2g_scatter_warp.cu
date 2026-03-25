@@ -1,8 +1,8 @@
 // p2g_scatter_warp.cu — Fused P2G scatter with warp-level reduction.
 //
-// Each thread handles one particle (inactive threads use gid=-1).
-// Uses __match_any_sync + __shfl_xor_sync butterfly to reduce
-// contributions from warp lanes targeting the same grid node.
+// Same compute as naive, but uses __match_any_sync to find warp lanes
+// targeting the same grid node, then reduces via sequential __shfl_sync.
+// Only the leader lane does the atomicAdd — fewer global atomics.
 //
 // Requires sm_70+ for __match_any_sync.
 // Grid buffers must be pre-zeroed by the caller.
@@ -11,18 +11,6 @@
 
 #define BLOCK_SIZE 256
 #define FULL_MASK 0xFFFFFFFFu
-
-// Butterfly XOR reduction across peer lanes.
-// All 32 lanes participate in __shfl_xor_sync (FULL_MASK).
-// Only values from actual peers are accumulated.
-__device__ __forceinline__ float warp_reduce_peers(float val, unsigned peers) {
-    for (int delta = 16; delta >= 1; delta >>= 1) {
-        float other = __shfl_xor_sync(FULL_MASK, val, delta);
-        if (peers & (1u << ((threadIdx.x & 31) ^ delta)))
-            val += other;
-    }
-    return val;
-}
 
 extern "C"
 __global__ void p2g_scatter_warp(
@@ -41,7 +29,6 @@ __global__ void p2g_scatter_warp(
     int lane = threadIdx.x & 31;
     bool active = (pid < n_particles);
 
-    // All threads participate in the loop — inactive threads use sentinel gid
     ParticleContrib contrib[STENCIL];
 
     if (active) {
@@ -53,7 +40,6 @@ __global__ void p2g_scatter_warp(
             mu_0, lambda_0, contrib
         );
     } else {
-        // Zero out contributions — sentinel gid = -1 won't match any active lane
         for (int i = 0; i < STENCIL; i++) {
             contrib[i].mv[0] = contrib[i].mv[1] = contrib[i].mv[2] = 0.0f;
             contrib[i].m = 0.0f;
@@ -63,21 +49,44 @@ __global__ void p2g_scatter_warp(
 
     for (int i = 0; i < STENCIL; i++) {
         int gid = contrib[i].grid_idx;
-
-        // All 32 lanes participate — inactive lanes have gid=-1
         unsigned peers = __match_any_sync(FULL_MASK, gid);
-
-        float mv0  = warp_reduce_peers(contrib[i].mv[0], peers);
-        float mv1  = warp_reduce_peers(contrib[i].mv[1], peers);
-        float mv2  = warp_reduce_peers(contrib[i].mv[2], peers);
-        float mass = warp_reduce_peers(contrib[i].m, peers);
-
         int leader = __ffs(peers) - 1;
-        if (lane == leader && gid >= 0) {
-            atomicAdd(&grid_mv[gid*3+0], mv0);
-            atomicAdd(&grid_mv[gid*3+1], mv1);
-            atomicAdd(&grid_mv[gid*3+2], mv2);
-            atomicAdd(&grid_m[gid], mass);
+
+        // Sequential reduction: leader sums values from all peers
+        // All peers participate in __shfl_sync (required for correctness)
+        float mv0 = contrib[i].mv[0];
+        float mv1 = contrib[i].mv[1];
+        float mv2 = contrib[i].mv[2];
+        float m   = contrib[i].m;
+
+        if (lane == leader) {
+            unsigned others = peers & ~(1u << leader);  // exclude self
+            while (others) {
+                int src = __ffs(others) - 1;
+                mv0 += __shfl_sync(peers, contrib[i].mv[0], src);
+                mv1 += __shfl_sync(peers, contrib[i].mv[1], src);
+                mv2 += __shfl_sync(peers, contrib[i].mv[2], src);
+                m   += __shfl_sync(peers, contrib[i].m,      src);
+                others &= others - 1;
+            }
+            if (gid >= 0) {
+                atomicAdd(&grid_mv[gid*3+0], mv0);
+                atomicAdd(&grid_mv[gid*3+1], mv1);
+                atomicAdd(&grid_mv[gid*3+2], mv2);
+                atomicAdd(&grid_m[gid], m);
+            }
+        } else {
+            // Non-leader peers: participate in __shfl_sync calls
+            // The leader reads from us via __shfl_sync(peers, ..., src)
+            // We just need to be present at each __shfl_sync call
+            unsigned others = peers & ~(1u << leader);
+            while (others) {
+                __shfl_sync(peers, contrib[i].mv[0], __ffs(others) - 1);
+                __shfl_sync(peers, contrib[i].mv[1], __ffs(others) - 1);
+                __shfl_sync(peers, contrib[i].mv[2], __ffs(others) - 1);
+                __shfl_sync(peers, contrib[i].m,      __ffs(others) - 1);
+                others &= others - 1;
+            }
         }
     }
 }
