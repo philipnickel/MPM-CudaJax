@@ -1,6 +1,7 @@
 """MLS-MPM simulation with pluggable P2G kernels."""
 import os
 import time
+import tempfile
 from datetime import datetime
 import numpy as np
 import matplotlib.pyplot as plt
@@ -188,7 +189,10 @@ def log_to_wandb(cfg, step_timings, total_time, gif_path=None):
     """Log per-frame aggregated timings, summary, and animation to wandb."""
     name = f"{cfg.kernel.name}_{cfg.tag}_N{cfg.sim.n_particles}_G{cfg.sim.num_grids}"
     group = cfg.get("group", None) or datetime.now().strftime("%Y%m%d_%H%M%S")
-    wandb.init(project="mpm-cuda", name=name, group=group, config=OmegaConf.to_container(cfg))
+    wandb_dir = cfg.get("wandb_dir", "/tmp/wandb")
+    os.makedirs(wandb_dir, exist_ok=True)
+    wandb.init(project="mpm-cuda", name=name, group=group, config=OmegaConf.to_container(cfg),
+               dir=wandb_dir, settings=wandb.Settings(disable_git=True, disable_code=True))
     sim = cfg.sim
     spf = sim.steps_per_frame
     for f in range(sim.num_frames):
@@ -237,7 +241,6 @@ def main(cfg: DictConfig):
     # Render GIF to temp file and upload to wandb (skip in benchmark mode)
     gif_path = None
     if not cfg.get('benchmark', False) and frames:
-        import tempfile
         gif_path = os.path.join(tempfile.gettempdir(), f"{cfg.tag}_{cfg.kernel.name}.gif")
         print(f"\nRendering animation...")
         visualize_frames(frames, gif_path, size=[1, 1, 1], c=cfg.material.color)

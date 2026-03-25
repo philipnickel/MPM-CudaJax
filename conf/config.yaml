@@ -7,3 +7,12 @@ defaults:
 tag: jelly
 benchmark: false
 group: null
+wandb_dir: /tmp/wandb
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
+  sweep:
+    dir: .
+    subdir: .
