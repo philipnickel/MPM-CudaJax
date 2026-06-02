@@ -100,3 +100,42 @@ def build_jit_stages(params, elasticity_fn, plasticity_fn,
         return MPMState(x=new_x, v=new_v, C=new_C, F=new_F)
 
     return jit_p2g_stage, jit_grid_stage, jit_g2p_stage
+
+
+class MPMSolver:
+    """Stateful shell over the functional JAX core.
+
+    Builds one jit'd pure frame function at construction; step()/solve() only
+    call it. `self` is never traced.
+    """
+
+    def __init__(self, params, *, elasticity_fn, plasticity_fn,
+                 pre_fn, post_fn, build_frame, steps_per_frame, init_state,
+                 **frame_opts):
+        self.params = params
+        self.steps_per_frame = steps_per_frame
+        self._init_state = init_state
+        self.state = init_state
+        self._frame = build_frame(
+            params, elasticity_fn, plasticity_fn, pre_fn, post_fn,
+            steps_per_frame, **frame_opts,
+        )
+
+    def step(self):
+        self.state = self._frame(self.state)
+        return self.state
+
+    def solve(self, num_frames, on_frame=None):
+        for f in range(num_frames):
+            self.step()
+            if on_frame is not None:
+                on_frame(f, self.state)
+        return self.state
+
+    def reset(self, init_state):
+        self.state = init_state
+        return self.state
+
+    def reset_to_initial(self):
+        self.state = self._init_state
+        return self.state
