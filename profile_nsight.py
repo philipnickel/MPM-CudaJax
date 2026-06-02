@@ -33,8 +33,6 @@ _JAX_P2G_KERNELS = {
     "cuda_v3_fori_inline",
     "cuda_v4_inline",
     "cuda_v6_inline",
-    "warp_v1_inline",
-    "warp_v3_supercell_tile",
 }
 _P2G_KERNELS = _WARP_BONUS_KERNELS | _JAX_P2G_KERNELS
 
@@ -339,67 +337,6 @@ def _jax_inline_p2g_stage(kernel_name, params, pre_fn, elasticity_fn):
     raise RuntimeError(f"Unsupported CUDA inline P2G kernel={kernel_name!r}.")
 
 
-def _jax_warp_p2g_stage(kernel_name, params, pre_fn, elasticity_fn):
-    import jax
-    import jax.numpy as jnp
-
-    from mpm_jax.solver import StepIntermediates
-
-    if kernel_name == "warp_v1_inline":
-        from mpm_jax.warp_kernels import warp_p2g_inline
-
-        @jax.jit
-        def jit_p2g_stage(state):
-            x, v = pre_fn(state.x, state.v, 0.0)
-            stress = elasticity_fn(state.F)
-            grid_mv, grid_m = warp_p2g_inline(
-                x, v, state.C, stress,
-                params.num_grids, params.dt, params.vol, params.p_mass,
-                params.inv_dx, params.dx,
-            )
-            return grid_mv, grid_m, StepIntermediates(x_post_bc=x, F_pre_plast=state.F)
-
-        return jit_p2g_stage
-
-    if kernel_name == "warp_v3_supercell_tile":
-        from mpm_jax.warp_kernels import (
-            SUPER_CELL_WIDTH,
-            _home_super_cell_id,
-            warp_p2g_supercell_tile,
-        )
-
-        if params.num_grids % SUPER_CELL_WIDTH != 0:
-            raise RuntimeError(
-                f"warp_v3_supercell_tile requires num_grids ({params.num_grids}) "
-                f"divisible by {SUPER_CELL_WIDTH}."
-            )
-        g_super = params.num_grids // SUPER_CELL_WIDTH
-        super_boundaries = jnp.arange(g_super ** 3 + 1, dtype=jnp.int32)
-
-        @jax.jit
-        def jit_p2g_stage(state):
-            x, v = pre_fn(state.x, state.v, 0.0)
-            stress = elasticity_fn(state.F)
-            super_id = _home_super_cell_id(x, params.inv_dx, params.num_grids, SUPER_CELL_WIDTH)
-            order = jnp.argsort(super_id)
-            x_s = x[order]
-            v_s = v[order]
-            C_s = state.C[order]
-            stress_s = stress[order]
-            F_s = state.F[order]
-            super_id_sorted = super_id[order]
-            cell_start = jnp.searchsorted(super_id_sorted, super_boundaries).astype(jnp.int32)
-            grid_mv, grid_m = warp_p2g_supercell_tile(
-                x_s, v_s, C_s, stress_s, cell_start,
-                params.num_grids, params.dt, params.vol, params.p_mass,
-                params.inv_dx, params.dx,
-            )
-            return grid_mv, grid_m, StepIntermediates(x_post_bc=x_s, F_pre_plast=F_s)
-
-        return jit_p2g_stage
-
-    raise RuntimeError(f"Unsupported Warp/JAX P2G kernel={kernel_name!r}.")
-
 
 def _jax_p2g_stage_runner(cfg: DictConfig, nsight):
     import jax
@@ -420,8 +357,6 @@ def _jax_p2g_stage_runner(cfg: DictConfig, nsight):
             params, elasticity_fn, plasticity_fn, pre_fn, post_fn)
     elif kernel_name.startswith("cuda_"):
         jit_p2g_stage = _jax_inline_p2g_stage(kernel_name, params, pre_fn, elasticity_fn)
-    elif kernel_name.startswith("warp_"):
-        jit_p2g_stage = _jax_warp_p2g_stage(kernel_name, params, pre_fn, elasticity_fn)
     else:
         raise RuntimeError(f"Unsupported JAX P2G kernel={kernel_name!r}.")
 

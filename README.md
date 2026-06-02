@@ -125,8 +125,6 @@ pixi run -e gpu python simulate.py kernel=cuda_v2_inline material=jelly_jacobi  
 pixi run -e gpu python simulate.py kernel=cuda_v2_inline kernel.loop_kind=python material=jelly_jacobi
 pixi run -e gpu python simulate.py kernel=cuda_v3_inline material=jelly_jacobi         # Morton sort
 pixi run -e gpu python simulate.py kernel=cuda_v3_inline kernel.cuda_graph=true material=jelly_jacobi
-pixi run -e gpu python simulate.py kernel=warp_v1_inline material=jelly_jacobi
-pixi run -e gpu python simulate.py kernel=warp_v3_supercell_tile material=jelly_jacobi
 pixi run -e gpu python simulate.py kernel=warp_bonus_graph material=jelly_jacobi benchmark=true
 pixi run -e gpu python simulate.py kernel=warp_bonus_v2_graph material=jelly_jacobi benchmark=true
 
@@ -144,8 +142,6 @@ pixi run -e gpu python simulate.py sim.n_particles=1000000 sim.num_grids=64
 | `cuda_v2_inline` | Warp-shuffle coalesced inline CUDA P2G + CUDA G2P. Default `loop_kind=fori`. Override with `kernel.loop_kind=python`. |
 | `cuda_v3_inline` | Morton-sorted inline CUDA P2G + CUDA G2P. `kernel.cuda_graph=true` enables XLA command-buffer (CUDA Graph) replay. |
 | `cuda_v4_inline` | Super-cell-owned grid tile inline CUDA P2G + CUDA G2P. |
-| `warp_v1_inline` | P2G authored as an NVIDIA Warp kernel, called from inside JAX JIT via `warp.jax_experimental.jax_kernel`. |
-| `warp_v3_supercell_tile` | Super-cell-owned Warp tile P2G: sort by home super-cell, accumulate a 4³ shared tile with `tile_scatter_add`, then flush to global grid. |
 | `warp_bonus_graph` | Pure Warp prototype: bins particles by super-cell, runs tiled P2G + grid update + G2P in Warp, and replays captured CUDA graphs without JAX. Supports `material=jelly_jacobi`. |
 | `warp_bonus_v2_graph` | Pure Warp graph path that sorts particle ids only (avoids copying sorted `x/v/C/F` buffers). Supports `material=jelly_jacobi`. |
 
@@ -230,7 +226,7 @@ Hydra config groups in `conf/`:
 |---|---|---|
 | `material` | `jelly` (default), `jelly_jacobi`, `sand` | Constitutive model |
 | `sim` | `default` | n_particles, num_grids, dt, BCs, ... |
-| `kernel` | `jax` (default), `jax_v1_5`, `cuda_v*_inline`, `warp_*` | P2G/G2P implementation |
+| `kernel` | `jax` (default), `jax_v1_5`, `cuda_v*_inline`, `warp_bonus_*` | P2G/G2P implementation |
 | `profile` | `none` (default), `jax`, `warp` | Profiling backend |
 
 Top-level fields: `benchmark`, `tag`, `output_dir`. All overridable from CLI:
@@ -262,12 +258,6 @@ pixi run -e gpu pytest tests/test_cuda_ffi_loader.py tests/test_jax_v1_5.py \
     tests/test_cuda_v2_inline_matches_v1.py -q
 ```
 
-The `warp_v3_supercell_tile` test is isolated from the full suite (it fails under
-pytest's shared CUDA context); run it separately:
-
-```bash
-pixi run -e gpu pytest tests/test_warp_v3_supercell_tile_matches_v1.py -q
-```
 
 ## Project Structure
 
@@ -293,10 +283,9 @@ MPM-CudaJax/
         ├── registry.py      # KERNELS, REMOVED_KERNELS, build_solver(cfg)
         ├── constitutive.py  # 5 elasticity + 4 plasticity models
         ├── boundary.py      # 6 boundary condition types
-        ├── warp_kernels.py  # Warp P2G kernels + JAX wrappers
         ├── warp_graph.py    # WarpBonusSimulator: pure-Warp CUDA graph engine
         ├── blocks/          # Pure math: weights, p2g, g2p, grid, svd, sort, init
-        ├── stepping/        # Frame builders: jax_frames, cuda_frames, warp_frames,
+        ├── stepping/        # Frame builders: jax_frames, cuda_frames,
         │                    #                 warp_graph_frame, substep
         └── cuda/
             ├── p2g_cuda.py  # FFI registration + kernel wrappers

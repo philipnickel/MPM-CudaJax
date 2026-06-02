@@ -5,7 +5,6 @@ def test_every_kernel_has_a_spec():
     expected = {
         "jax", "jax_v1_5",
         "cuda_v1_inline", "cuda_v2_inline", "cuda_v3_inline", "cuda_v4_inline",
-        "warp_v1_inline", "warp_v3_supercell_tile",
         "warp_bonus_graph", "warp_bonus_v2_graph",
     }
     assert set(KERNELS) == expected

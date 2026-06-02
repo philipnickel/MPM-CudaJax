@@ -9,9 +9,6 @@ from mpm_jax.stepping.jax_frames import build_jax_frame, build_jax_v1_5_frame
 from mpm_jax.stepping.cuda_frames import (
     build_cuda_v1_frame, build_cuda_v2_frame, build_cuda_v3_frame, build_cuda_v4_frame,
 )
-from mpm_jax.stepping.warp_frames import (
-    build_warp_v1_frame, build_warp_v3_frame,
-)
 from mpm_jax.stepping.warp_graph_frame import build_warp_graph
 from mpm_jax.types import MPMState, make_params
 from mpm_jax.blocks.grid import build_grid_x
@@ -38,8 +35,6 @@ KERNELS = {
     "cuda_v2_inline":         KernelSpec(MPMSolver, build_cuda_v2_frame, MappingProxyType({"loop_kind": "fori"})),
     "cuda_v3_inline":         KernelSpec(MPMSolver, build_cuda_v3_frame, MappingProxyType({"loop_kind": "fori", "cuda_graph": False})),
     "cuda_v4_inline":         KernelSpec(MPMSolver, build_cuda_v4_frame),
-    "warp_v1_inline":         KernelSpec(MPMSolver, build_warp_v1_frame),
-    "warp_v3_supercell_tile": KernelSpec(MPMSolver, build_warp_v3_frame),
     "warp_bonus_graph":       KernelSpec(WarpGraphSolver, build_warp_graph),
     "warp_bonus_v2_graph":    KernelSpec(WarpGraphSolver, build_warp_graph, MappingProxyType({"indexed_sort": True})),
 }
