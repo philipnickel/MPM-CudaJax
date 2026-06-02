@@ -342,7 +342,7 @@ def cuda_p2g_v3_inline(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
 
     Identical kernel-side reduction as ``cuda_p2g_v2_inline``. Designed to
     be called on Morton-sorted particles (see
-    :func:`mpm_jax.morton.morton_argsort`) so adjacent warp lanes share
+    :func:`mpm_jax.blocks.sort.morton_argsort`) so adjacent warp lanes share
     stencil targets — the sort is what makes the warp reduction productive.
     """
     N = x.shape[0]
@@ -550,7 +550,7 @@ def build_jit_frame_v3_inline(params, elasticity_fn, plasticity_fn,
             "Run `pixi install -e gpu` to build, or pass "
             "use_cuda_g2p=False to fall back to the JAX G2P.")
 
-    from mpm_jax.morton import morton_argsort
+    from mpm_jax.blocks.sort import morton_argsort
     from mpm_jax.solver import (
         MPMState,
         compute_weights_and_indices,

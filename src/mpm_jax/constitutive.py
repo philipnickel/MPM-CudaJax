@@ -2,7 +2,7 @@ import math
 import jax
 import jax.numpy as jnp
 
-from mpm_jax.jacobi_svd import jacobi_svd_3x3
+from mpm_jax.blocks.svd import jacobi_svd_3x3
 
 
 def _lame_params(E, nu):
@@ -31,7 +31,7 @@ def corotated_elasticity_jacobi(E=2e6, nu=0.4):
     Exists to test whether replacing `jnp.linalg.svd` (a host-dispatched
     cuSOLVER call) with a fusable pointwise SVD lets XLA fuse the whole
     stress -> weights -> momentum -> scatter chain into one kernel, avoiding
-    the (N, 27, 3) materialisation. See `mpm_jax/jacobi_svd.py` for details.
+    the (N, 27, 3) materialisation. See `mpm_jax/blocks/svd.py` for details.
     """
     mu, la = _lame_params(E, nu)
 

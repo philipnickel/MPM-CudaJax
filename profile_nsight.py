@@ -274,7 +274,7 @@ def _jax_inline_p2g_stage(kernel_name, params, pre_fn, elasticity_fn):
 
     if kernel_name in {"cuda_v3_inline", "cuda_v3_fori_inline", "cuda_v6_inline"}:
         from mpm_jax.cuda.p2g_cuda import cuda_p2g_v3_inline, is_available
-        from mpm_jax.morton import morton_argsort
+        from mpm_jax.blocks.sort import morton_argsort
 
         if not is_available("v3_inline"):
             raise RuntimeError(f"{kernel_name} P2G kernel is not registered.")
