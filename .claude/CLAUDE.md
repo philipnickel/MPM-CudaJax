@@ -15,7 +15,7 @@ This is a benchmarking/investigation project; the code is shaped by the followin
    - first a **fully-Warp *baseline* solver** that mimics the JAX baseline (simple per-particle kernels, no tiling) to establish comparable baseline performance, then
    - swap the bottleneck kernels for **tile-based** ones.
 
-   Two distinct Warp tracks therefore exist: the **hybrid** `warp_v*` kernels (JAX harness — stress/grid/plasticity — with only P2G swapped to Warp, G2P still CUDA), and the **pure-Warp** `warp_bonus_*` solvers (everything in Warp). *Current state:* the pure-Warp side has the **tiled** variants (`warp_bonus_graph` / `warp_bonus_v2_graph`, super-cell tile P2G); the **fully-Warp baseline** (simple atomic-scatter P2G, no super-cell sort — the `warp_v1_inline` algorithm dropped into the graph engine) is the planned reference point still to be added.
+   The Warp investigation lives **entirely in the pure-Warp `WarpGraphSolver`** (no JAX in the loop). There is intentionally **no hybrid "Warp P2G inside the JAX frame" variant** — mixing backends per-stage doesn't isolate the programming-model comparison, so those were removed. *Current state:* the pure-Warp side has the **tiled** variants (`warp_bonus_graph` / `warp_bonus_v2_graph`, super-cell tile P2G); the **fully-Warp baseline** (simple atomic-scatter P2G, no super-cell sort — mirroring the JAX baseline) is the planned reference point still to be added.
 
 **The analysis method (applied to every variant, in this order):**
 
@@ -84,7 +84,6 @@ src/mpm_jax/
   boundary.py          6 boundary condition types
   callbacks.py         on_frame callback helpers
   p2g_scan.py          jax_v1_5 P2G: lax.scan over 27 offsets, build_jit_stages_scan
-  warp_kernels.py      Warp kernels (v1 inline, v2 tile, v3 supercell tile) + JAX wrappers
   warp_graph.py        WarpBonusSimulator: pure-Warp CUDA graph capture/replay engine
   blocks/              Pure-math building blocks (no JIT, no closures)
     weights.py         compute_weights_and_indices: B-spline weights, grid indices
@@ -98,7 +97,6 @@ src/mpm_jax/
     substep.py         step(): one full P2G2P substep (pure fn, safe to JIT)
     jax_frames.py      build_jax_frame, build_jax_v1_5_frame
     cuda_frames.py     build_cuda_v1_frame .. build_cuda_v4_frame
-    warp_frames.py     build_warp_v1_frame, build_warp_v3_frame
     warp_graph_frame.py build_warp_graph: constructs a WarpGraphSolver from cfg + particles
   cuda/
     p2g_cuda.py        loads prebuilt .so + jax.ffi.register_ffi_target
@@ -149,8 +147,6 @@ Current kernel names:
 | `cuda_v2_inline` | MPMSolver | Warp-shuffle coalesced inline CUDA P2G + CUDA G2P; default `loop_kind=fori` |
 | `cuda_v3_inline` | MPMSolver | Morton-sorted inline CUDA P2G + CUDA G2P; `cuda_graph=true` enables XLA command-buffer replay |
 | `cuda_v4_inline` | MPMSolver | Super-cell-owned grid tile inline CUDA P2G + CUDA G2P |
-| `warp_v1_inline` | MPMSolver | P2G authored as a Warp kernel, called from inside JAX JIT via `warp.jax_experimental.jax_kernel` |
-| `warp_v3_supercell_tile` | MPMSolver | Super-cell-owned Warp tile P2G: sort by home super-cell, accumulate 4³ shared tile |
 | `warp_bonus_graph` | WarpGraphSolver | Pure-Warp CUDA graph: bins by super-cell, runs tiled P2G + grid + G2P without JAX |
 | `warp_bonus_v2_graph` | WarpGraphSolver | Pure-Warp graph that sorts particle ids only (avoids copying sorted x/v/C/F buffers) |
 
@@ -179,7 +175,6 @@ pixi run -e gpu python simulate.py kernel=cuda_v1_inline material=jelly_jacobi  
 pixi run -e gpu python simulate.py kernel=cuda_v2_inline material=jelly_jacobi         # warp-shuffle CUDA (fori loop)
 pixi run -e gpu python simulate.py kernel=cuda_v3_inline material=jelly_jacobi         # Morton-sorted CUDA
 pixi run -e gpu python simulate.py kernel=cuda_v3_inline cuda_graph=true material=jelly_jacobi  # with XLA CUDA graphs
-pixi run -e gpu python simulate.py kernel=warp_v1_inline material=jelly_jacobi
 pixi run -e gpu python simulate.py kernel=warp_bonus_graph material=jelly_jacobi benchmark=true
 
 # loop_kind override (python = unrolled, fori = lax.fori_loop; fori is the default)
