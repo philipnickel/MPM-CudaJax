@@ -8,7 +8,7 @@ from omegaconf import OmegaConf
 
 from mpm_jax.boundary import build_boundary_fns
 from mpm_jax.constitutive import get_constitutive
-from mpm_jax.solver import MPMState, make_params
+from mpm_jax.types import MPMState, make_params
 
 
 def _has_cuda() -> bool:
@@ -30,8 +30,8 @@ def _kernel_available(kind: str) -> bool:
     reason="cuda_v1_inline / g2p_fused .so not built or no GPU",
 )
 def test_warp_v1_inline_matches_cuda_v1_inline():
-    from mpm_jax.cuda.p2g_cuda import build_jit_frame_inline
-    from mpm_jax.warp_kernels import build_jit_frame_warp_inline
+    from mpm_jax.stepping.cuda_frames import build_cuda_v1_frame as build_jit_frame_inline
+    from mpm_jax.stepping.warp_frames import build_warp_v1_frame as build_jit_frame_warp_inline
 
     n = 200
     num_grids = 16

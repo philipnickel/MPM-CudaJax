@@ -9,7 +9,8 @@ from omegaconf import OmegaConf
 
 from mpm_jax.boundary import build_boundary_fns
 from mpm_jax.constitutive import get_constitutive
-from mpm_jax.solver import MPMState, build_jit_frame, make_params
+from mpm_jax.types import MPMState, make_params
+from mpm_jax.stepping.jax_frames import build_jax_frame as build_jit_frame
 from mpm_jax.warp_graph import WarpBonusSimulator
 
 

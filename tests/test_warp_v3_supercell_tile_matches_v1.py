@@ -8,7 +8,7 @@ from omegaconf import OmegaConf
 
 from mpm_jax.boundary import build_boundary_fns
 from mpm_jax.constitutive import get_constitutive
-from mpm_jax.solver import MPMState, make_params
+from mpm_jax.types import MPMState, make_params
 from mpm_jax.warp_kernels import TILE_SIZE
 
 
@@ -31,9 +31,9 @@ def _kernel_available(kind: str) -> bool:
     reason="g2p_fused .so not built or no GPU",
 )
 def test_warp_v3_supercell_tile_matches_warp_v1_inline():
-    from mpm_jax.warp_kernels import (
-        build_jit_frame_warp_inline,
-        build_jit_frame_warp_supercell_tile,
+    from mpm_jax.stepping.warp_frames import (
+        build_warp_v1_frame as build_jit_frame_warp_inline,
+        build_warp_v3_frame as build_jit_frame_warp_supercell_tile,
     )
 
     n = TILE_SIZE * 4

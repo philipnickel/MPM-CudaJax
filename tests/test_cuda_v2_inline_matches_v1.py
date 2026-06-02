@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 from omegaconf import OmegaConf
 
-from mpm_jax.solver import MPMState, make_params
+from mpm_jax.types import MPMState, make_params
 from mpm_jax.constitutive import get_constitutive
 from mpm_jax.boundary import build_boundary_fns
 
@@ -41,9 +41,9 @@ def _kernel_available(kind: str) -> bool:
 )
 def test_cuda_v2_inline_matches_v1_inline():
     """Run a short sim under both inline kernels and compare final state."""
-    from mpm_jax.cuda.p2g_cuda import (
-        build_jit_frame_inline,
-        build_jit_frame_v2_inline,
+    from mpm_jax.stepping.cuda_frames import (
+        build_cuda_v1_frame as build_jit_frame_inline,
+        build_cuda_v2_frame as build_jit_frame_v2_inline,
     )
 
     n = 2000

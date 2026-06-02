@@ -1,8 +1,9 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
-from mpm_jax.solver import MPMState, MPMParams, make_params
-from mpm_jax.solver import grid_update, step
+from mpm_jax.types import MPMState, MPMParams, make_params
+from mpm_jax.blocks.grid import grid_update
+from mpm_jax.solver import step
 
 def test_mpm_state_is_namedtuple():
     N = 10
