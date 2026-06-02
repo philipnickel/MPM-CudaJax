@@ -1,6 +1,5 @@
 """Warp P2G kernels callable from JAX JIT via Warp's experimental FFI."""
 
-import jax
 import jax.numpy as jnp
 import warp as wp
 from warp.jax_experimental import jax_callable, jax_kernel

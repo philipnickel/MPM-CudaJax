@@ -178,7 +178,6 @@ def _warp_bonus_p2g_runner(cfg: DictConfig, nsight):
 def _jax_problem(cfg: DictConfig):
     from simulate import _maybe_enable_cuda_graphs
 
-    kernel_name = cfg.get("kernel", {}).get("name", "jax")
     _maybe_enable_cuda_graphs(cfg)
 
     import jax.numpy as jnp
