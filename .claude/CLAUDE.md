@@ -1,6 +1,27 @@
 # MPM-CudaJax
 
-3D MLS-MPM (Moving Least Squares Material Point Method) solver in **JAX** with progressively optimised hand-written **CUDA** P2G scatter kernels. The point of the project is to investigate where JAX/XLA's automatic GPU compilation is sufficient and where custom CUDA kernels are needed.
+3D MLS-MPM (Moving Least Squares Material Point Method) solver in **JAX**, progressively optimised with hand-written **CUDA** kernels (via JAX FFI) and, as an alternative, an **NVIDIA Warp** (tiled programming model) implementation. The project investigates three questions in sequence: where JAX/XLA's automatic GPU compilation is sufficient, where custom CUDA kernels are needed, and whether the tiled programming model (Warp) can match or beat them.
+
+## Project narrative & analysis method
+
+This is a benchmarking/investigation project; the code is shaped by the following arc. Keep it in mind when adding variants or interpreting results.
+
+**The story (why the code is the way it is):**
+
+1. **Start in JAX.** Implement the full MLS-MPM timestep in pure JAX/XLA (`kernel=jax`) — the baseline. `vmap` over single-particle functions; XLA compiles the whole frame.
+2. **Profile to find the bottlenecks.** Use the JAX profiler trace (`profile=jax`) to locate the *canonical MPM bottlenecks* — chiefly the P2G scatter and the `(N, 27, *)` stencil materialisation.
+3. **Optimise the bottlenecks with custom CUDA.** JAX FFI lets us drop hand-written CUDA kernels in for exactly those bottlenecks (`cuda_v1..v4_inline`) while the rest of the timestep stays in JAX. This answers "where is XLA enough vs. where do we need custom kernels?"
+4. **Try a different programming model — tiled (Warp).** Finally, investigate whether the **tiled programming model** (NVIDIA Warp) can reach similar or better performance. Warp's graph/tile model does not fit inside the JAX-driven frame, so this needs a **separate solver** (`WarpGraphSolver` — pure Warp, CUDA-graph capture/replay, no JAX in the loop). The intended structure deliberately mirrors the JAX→CUDA arc:
+   - first a **fully-Warp *baseline* solver** that mimics the JAX baseline (simple per-particle kernels, no tiling) to establish comparable baseline performance, then
+   - swap the bottleneck kernels for **tile-based** ones.
+
+   Two distinct Warp tracks therefore exist: the **hybrid** `warp_v*` kernels (JAX harness — stress/grid/plasticity — with only P2G swapped to Warp, G2P still CUDA), and the **pure-Warp** `warp_bonus_*` solvers (everything in Warp). *Current state:* the pure-Warp side has the **tiled** variants (`warp_bonus_graph` / `warp_bonus_v2_graph`, super-cell tile P2G); the **fully-Warp baseline** (simple atomic-scatter P2G, no super-cell sort — the `warp_v1_inline` algorithm dropped into the graph engine) is the planned reference point still to be added.
+
+**The analysis method (applied to every variant, in this order):**
+
+1. **JAX trace** (`profile=jax`) — on a *representative* particle count, identify where time goes for the jax/cuda-based variants.
+2. **`ncu` (Nsight Compute), from the CLI** — same particle count, get roofline / occupancy / memory-throughput for the initial deeper per-kernel analysis.
+3. **`nsight-python`** (`profile_nsight.py`) — automate sweeping metrics across variants *and* particle counts. This is the broad sweep, run across **multiple architectures / systems** (e.g. A100 / H100 / GH200).
 
 ## Package manager: pixi
 
