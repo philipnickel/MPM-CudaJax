@@ -834,3 +834,40 @@ def make_fused_stages(params, elasticity_cfg, plasticity_cfg, pre_particle_fn, p
         return MPMState(x=new_x, v=new_v, C=new_C, F=new_F)
 
     return jit_p2g_fused_stage, jit_grid_stage, jit_g2p_no_plast_stage
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatible re-exports
+# All FFI helpers and wrappers above are fully defined before this import, so
+# there is no load-time cycle: cuda_frames defers its p2g_cuda import to
+# function-call time (not module top level).
+# ---------------------------------------------------------------------------
+from mpm_jax.stepping.cuda_frames import (  # noqa: E402
+    build_cuda_v1_frame as build_jit_frame_inline,
+    build_cuda_v2_frame as build_jit_frame_v2_inline,
+    build_cuda_v3_frame as build_jit_frame_v3_inline,
+    build_cuda_v4_frame as build_jit_frame_v4_inline,
+)
+
+__all__ = [
+    # FFI registration
+    "is_available",
+    # FFI op wrappers
+    "cuda_p2g_fused",
+    "cuda_p2g_inline",
+    "cuda_p2g_v2_inline",
+    "cuda_p2g_v3_inline",
+    "cuda_p2g_v4_inline",
+    "cuda_g2p_fused",
+    # Super-cell helpers
+    "V4_SUPER_CELL_WIDTH",
+    "_home_cell_id",
+    "_home_super_cell_id",
+    # Stage builder
+    "make_fused_stages",
+    # Frame builders (canonical names live in stepping/cuda_frames.py)
+    "build_jit_frame_inline",
+    "build_jit_frame_v2_inline",
+    "build_jit_frame_v3_inline",
+    "build_jit_frame_v4_inline",
+]
