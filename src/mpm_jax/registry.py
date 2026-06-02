@@ -64,7 +64,7 @@ def build_solver(cfg):
         raise ValueError(f"kernel={name} removed. {REMOVED_KERNELS[name]}")
     spec = KERNELS[name]
     particles_np = get_particles(int(cfg.sim.n_particles),
-                                 center=list(cfg.sim.center), size=[0.5, 0.5, 0.5])
+                                 center=list(cfg.sim.center), size=list(cfg.sim.size))
 
     if spec.solver_cls is WarpGraphSolver:
         return spec.build_frame(cfg, particles=particles_np, **dict(spec.defaults))

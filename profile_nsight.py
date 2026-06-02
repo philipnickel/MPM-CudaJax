@@ -66,7 +66,7 @@ def _warp_bonus_sim(cfg: DictConfig):
     baseline = kernel_name == "warp_baseline_graph"
     n = int(cfg.sim.n_particles)
     precompute_stress = not (indexed_sort and n >= 150_000_000)
-    particles = get_particles(n, center=list(cfg.sim.center), size=[0.5, 0.5, 0.5])
+    particles = get_particles(n, center=list(cfg.sim.center), size=list(cfg.sim.size))
     sim = WarpBonusSimulator(
         particles,
         cfg,
@@ -188,7 +188,7 @@ def _jax_problem(cfg: DictConfig):
     sim = cfg.sim
     mat = cfg.material
     n = int(sim.n_particles)
-    cube_np = get_particles(n, center=list(sim.center), size=[0.5, 0.5, 0.5])
+    cube_np = get_particles(n, center=list(sim.center), size=list(sim.size))
     particles = jnp.array(cube_np, dtype=jnp.float32)
 
     params = make_params(
