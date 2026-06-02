@@ -31,7 +31,7 @@ def _kernel_available(kind: str) -> bool:
 )
 def test_warp_v1_inline_matches_cuda_v1_inline():
     from mpm_jax.cuda.p2g_cuda import build_jit_frame_inline
-    from mpm_jax.warp_p2g import build_jit_frame_warp_inline
+    from mpm_jax.warp_kernels import build_jit_frame_warp_inline
 
     n = 200
     num_grids = 16

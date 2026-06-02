@@ -10,7 +10,7 @@ from omegaconf import OmegaConf
 from mpm_jax.boundary import build_boundary_fns
 from mpm_jax.constitutive import get_constitutive
 from mpm_jax.solver import MPMState, build_jit_frame, make_params
-from mpm_jax.warp_bonus import WarpBonusSimulator
+from mpm_jax.warp_graph import WarpBonusSimulator
 
 
 def _has_cuda() -> bool:

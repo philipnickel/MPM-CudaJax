@@ -62,7 +62,7 @@ def _require_nsight():
 def _warp_bonus_sim(cfg: DictConfig):
     import warp as wp
 
-    from mpm_jax.warp_bonus import WarpBonusSimulator
+    from mpm_jax.warp_graph import WarpBonusSimulator
 
     kernel_name = cfg.get("kernel", {}).get("name", "warp_bonus_graph")
     indexed_sort = kernel_name == "warp_bonus_v2_graph"
@@ -89,7 +89,7 @@ def _p2g_annotation_name(cfg: DictConfig):
 def _warp_bonus_p2g_runner(cfg: DictConfig, nsight):
     import warp as wp
 
-    from mpm_jax import warp_bonus as wb
+    from mpm_jax import warp_graph as wb
 
     sim = _warp_bonus_sim(cfg)
     indexed_sort = sim.indexed_sort
@@ -348,7 +348,7 @@ def _jax_warp_p2g_stage(kernel_name, params, pre_fn, elasticity_fn):
     from mpm_jax.solver import StepIntermediates
 
     if kernel_name == "warp_v1_inline":
-        from mpm_jax.warp_p2g import warp_p2g_inline
+        from mpm_jax.warp_kernels import warp_p2g_inline
 
         @jax.jit
         def jit_p2g_stage(state):
@@ -364,7 +364,7 @@ def _jax_warp_p2g_stage(kernel_name, params, pre_fn, elasticity_fn):
         return jit_p2g_stage
 
     if kernel_name == "warp_v2_tile":
-        from mpm_jax.warp_p2g import TILE_SIZE, warp_p2g_inline_tile
+        from mpm_jax.warp_kernels import TILE_SIZE, warp_p2g_inline_tile
 
         if params.n_particles % TILE_SIZE != 0:
             raise RuntimeError(
@@ -386,7 +386,7 @@ def _jax_warp_p2g_stage(kernel_name, params, pre_fn, elasticity_fn):
         return jit_p2g_stage
 
     if kernel_name == "warp_v3_supercell_tile":
-        from mpm_jax.warp_p2g import (
+        from mpm_jax.warp_kernels import (
             SUPER_CELL_WIDTH,
             _home_super_cell_id,
             warp_p2g_supercell_tile,
@@ -473,7 +473,7 @@ def _p2g_runner(cfg: DictConfig, nsight):
 def _warp_bonus_step_runner(cfg: DictConfig, nsight):
     import warp as wp
 
-    from mpm_jax import warp_bonus as wb
+    from mpm_jax import warp_graph as wb
 
     sim = _warp_bonus_sim(cfg)
     total_sim = _warp_bonus_sim(cfg) if bool(cfg.nsight.get("include_step_total", True)) else None

@@ -59,7 +59,7 @@ def visualize_frames(frames, export_path, center=[0.5, 0.5, 0.5],
 def run_warp_bonus(cfg: DictConfig):
     """Run the pure-Warp graph-captured tiled prototype."""
     import warp as wp
-    from mpm_jax.warp_bonus import WarpBonusSimulator
+    from mpm_jax.warp_graph import WarpBonusSimulator
 
     sim = cfg.sim
     kernel_name = cfg.get('kernel', {}).get('name', 'warp_bonus_graph')
@@ -319,17 +319,17 @@ def run_jax(cfg: DictConfig):
                 params, elasticity_fn, plasticity_fn,
                 pre_fn, post_fn, sim.steps_per_frame)
         elif kernel_name == 'warp_v1_inline':
-            from mpm_jax.warp_p2g import build_jit_frame_warp_inline
+            from mpm_jax.warp_kernels import build_jit_frame_warp_inline
             jit_frame = build_jit_frame_warp_inline(
                 params, elasticity_fn, plasticity_fn,
                 pre_fn, post_fn, sim.steps_per_frame)
         elif kernel_name == 'warp_v2_tile':
-            from mpm_jax.warp_p2g import build_jit_frame_warp_tile
+            from mpm_jax.warp_kernels import build_jit_frame_warp_tile
             jit_frame = build_jit_frame_warp_tile(
                 params, elasticity_fn, plasticity_fn,
                 pre_fn, post_fn, sim.steps_per_frame)
         elif kernel_name == 'warp_v3_supercell_tile':
-            from mpm_jax.warp_p2g import build_jit_frame_warp_supercell_tile
+            from mpm_jax.warp_kernels import build_jit_frame_warp_supercell_tile
             jit_frame = build_jit_frame_warp_supercell_tile(
                 params, elasticity_fn, plasticity_fn,
                 pre_fn, post_fn, sim.steps_per_frame)
