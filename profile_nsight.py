@@ -17,7 +17,7 @@ import hydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
-from simulate import get_particles
+from mpm_jax.blocks.init import get_particles
 
 _UNSUPPORTED_ANALYZE_CONFIG_KEYS = {"configs"}
 _SCRIPT_NSIGHT_KEYS = {"phase", "include_step_total", "write_json", "plot", "sweep", "configs", "analyze"}
@@ -179,7 +179,7 @@ def _jax_problem(cfg: DictConfig):
     from simulate import _maybe_enable_cuda_graphs
 
     kernel_name = cfg.get("kernel", {}).get("name", "jax")
-    _maybe_enable_cuda_graphs(kernel_name)
+    _maybe_enable_cuda_graphs(cfg)
 
     import jax.numpy as jnp
 
@@ -701,10 +701,10 @@ def _configured_kernel_names(cfg: DictConfig):
 
 
 def _prepare_process_for_kernels(kernel_names: set[str]):
-    if "cuda_v6_inline" in kernel_names:
-        from simulate import _maybe_enable_cuda_graphs
-
-        _maybe_enable_cuda_graphs("cuda_v6_inline")
+    # cuda_v6_inline was removed; CUDA graph capture for cuda_v3_inline is now
+    # handled per-run in _jax_problem() by passing the full cfg to
+    # _maybe_enable_cuda_graphs(cfg).
+    pass
 
 
 def _value_for_metric(metric_values, metrics: list[str], metric: str):
