@@ -15,7 +15,7 @@ This is a benchmarking/investigation project; the code is shaped by the followin
    - first a **fully-Warp *baseline* solver** that mimics the JAX baseline (simple per-particle kernels, no tiling) to establish comparable baseline performance, then
    - swap the bottleneck kernels for **tile-based** ones.
 
-   The Warp investigation lives **entirely in the pure-Warp `WarpGraphSolver`** (no JAX in the loop). There is intentionally **no hybrid "Warp P2G inside the JAX frame" variant** — mixing backends per-stage doesn't isolate the programming-model comparison, so those were removed. *Current state:* the pure-Warp side has the **tiled** variants (`warp_bonus_graph` / `warp_bonus_v2_graph`, super-cell tile P2G); the **fully-Warp baseline** (simple atomic-scatter P2G, no super-cell sort — mirroring the JAX baseline) is the planned reference point still to be added.
+   The Warp investigation lives **entirely in the pure-Warp `WarpGraphSolver`** (no JAX in the loop). There is intentionally **no hybrid "Warp P2G inside the JAX frame" variant** — mixing backends per-stage doesn't isolate the programming-model comparison, so those were removed. *Current state:* the pure-Warp side has a **baseline** (`warp_baseline_graph` — simple per-particle atomic-scatter P2G, no super-cell sort, mirrors the JAX baseline; robust across grid sizes) and **tiled** variants (`warp_bonus_graph` / `warp_bonus_v2_graph`, super-cell tile P2G). Note the tiled variants only win in a narrow band (≈G=32) and degrade catastrophically at high grid resolution (G=64); the baseline is the robust pure-Warp default.
 
 **The analysis method (applied to every variant, in this order):**
 
@@ -147,6 +147,7 @@ Current kernel names:
 | `cuda_v2_inline` | MPMSolver | Warp-shuffle coalesced inline CUDA P2G + CUDA G2P; default `loop_kind=fori` |
 | `cuda_v3_inline` | MPMSolver | Morton-sorted inline CUDA P2G + CUDA G2P; `cuda_graph=true` enables XLA command-buffer replay |
 | `cuda_v4_inline` | MPMSolver | Super-cell-owned grid tile inline CUDA P2G + CUDA G2P |
+| `warp_baseline_graph` | WarpGraphSolver | Pure-Warp CUDA graph **baseline**: per-particle atomic-scatter P2G, no super-cell sort (mirrors the JAX baseline; robust across grid sizes) |
 | `warp_bonus_graph` | WarpGraphSolver | Pure-Warp CUDA graph: bins by super-cell, runs tiled P2G + grid + G2P without JAX |
 | `warp_bonus_v2_graph` | WarpGraphSolver | Pure-Warp graph that sorts particle ids only (avoids copying sorted x/v/C/F buffers) |
 
