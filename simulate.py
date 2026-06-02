@@ -111,35 +111,28 @@ def _run_jax_solver(solver, cfg: DictConfig):
         # HashGrid builds an acceleration structure around JAX positions.
         wp.init()
         grid = wp.HashGrid(dim_x=sim.num_grids, dim_y=sim.num_grids, dim_z=sim.num_grids)
-        dx = float(solver.params.dx)
-
-        def on_frame(frame, st):
-            # Bookkeeping with Warp: copy jnp array into a wp array.
-            # Zero-copy via DLPack since both are on the GPU; fall back to CPU.
-            try:
-                wp_x = wp.from_dlpack(st.x)
-                grid.build(wp_x, radius=dx)
-                frames.append(wp_x.numpy())
-            except Exception:
-                frames.append(np.array(st.x))
-            frame_metrics.append({
-                'x_mean_z': float(st.x[:, 2].mean()),
-                'v_max': float(jnp.abs(st.v).max()),
-                'frame_ms': 0.0,
-                'timestep_ms': 0.0,
-            })
 
         t0 = time.perf_counter()
         with jax.profiler.TraceAnnotation("render_loop", kernel=kernel_name):
             for frame in tqdm(range(sim.num_frames), desc='JAX'):
                 with jax.profiler.StepTraceAnnotation("frame", step_num=frame):
+                    # capture current state BEFORE advancing (frame 0 == initial config)
+                    try:
+                        wp_x = wp.from_dlpack(solver.state.x)
+                        grid.build(wp_x, radius=float(solver.params.dx))
+                        frames.append(wp_x.numpy())
+                    except Exception:
+                        frames.append(np.array(solver.state.x))
                     t_frame = time.perf_counter()
                     solver.step()
                     jax.block_until_ready(solver.state.x)
                     frame_ms = (time.perf_counter() - t_frame) * 1000
-                    on_frame(frame, solver.state)
-                    frame_metrics[-1]['frame_ms'] = frame_ms
-                    frame_metrics[-1]['timestep_ms'] = frame_ms
+                    frame_metrics.append({
+                        'x_mean_z': float(solver.state.x[:, 2].mean()),
+                        'v_max': float(jnp.abs(solver.state.v).max()),
+                        'frame_ms': frame_ms,
+                        'timestep_ms': frame_ms,
+                    })
         elapsed = time.perf_counter() - t0
 
     total_steps = sim.num_frames * solver.steps_per_frame
