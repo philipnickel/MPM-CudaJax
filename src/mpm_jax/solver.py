@@ -8,50 +8,8 @@ from mpm_jax.blocks.weights import compute_weights_and_indices
 from mpm_jax.blocks.p2g import p2g_compute, p2g_scatter, p2g
 from mpm_jax.blocks.g2p import g2p
 from mpm_jax.blocks.grid import grid_update
-
-
-# ---------------------------------------------------------------------------
-# Orchestrator
-# ---------------------------------------------------------------------------
-
-def step(params, state, stress, pre_particle_fn, post_grid_fn, time, p2g_fn=None):
-    """One full P2G2P step.
-
-    Pure function — safe to JIT when closures are captured.
-    Optionally accepts a custom p2g_fn to swap the scatter implementation.
-    """
-    p2g_fn = p2g_fn or p2g
-
-    # Pre-particle BCs
-    with jax.named_scope("pre_particle"):
-        x, v = pre_particle_fn(state.x, state.v, time)
-
-    # Weights (vmap over particles)
-    with jax.named_scope("weights"):
-        weight, dweight, dpos, index = compute_weights_and_indices(
-            x, params.inv_dx, params.dx, params.num_grids)
-
-    # P2G: compute + scatter
-    with jax.named_scope("p2g"):
-        grid_mv, grid_m = p2g_fn(
-            v, state.C, stress, weight, dweight, dpos, index,
-            params.dt, params.vol, params.p_mass, params.num_grids)
-
-    # Grid update
-    with jax.named_scope("grid_update"):
-        grid_mv = grid_update(grid_mv, grid_m, params.gravity, params.dt, params.damping)
-
-    # Post-grid BCs
-    with jax.named_scope("post_grid"):
-        grid_mv = post_grid_fn(grid_mv, grid_m, time)
-
-    # G2P (vmap over particles)
-    with jax.named_scope("g2p"):
-        new_x, new_v, new_C, new_F = g2p(
-            grid_mv, weight, dweight, dpos, index,
-            state.F, x, params.dt, params.inv_dx, params.clip_bound)
-
-    return MPMState(x=new_x, v=new_v, C=new_C, F=new_F)
+from mpm_jax.stepping.substep import step
+from mpm_jax.stepping.jax_frames import build_jax_frame as build_jit_frame
 
 
 def build_jit_step(params, elasticity_fn, plasticity_fn,
@@ -73,32 +31,6 @@ def build_jit_step(params, elasticity_fn, plasticity_fn,
             return state._replace(F=plasticity_fn(state.F))
 
     return jit_step
-
-
-def build_jit_frame(params, elasticity_fn, plasticity_fn,
-                    pre_particle_fn, post_grid_fn, steps_per_frame, p2g_fn=None):
-    """Build a JIT-compiled frame function using lax.scan.
-
-    One XLA program, zero Python loop overhead.
-    """
-    _p2g_fn = p2g_fn or p2g
-
-    @jax.jit
-    def jit_frame(state):
-        def scan_body(state, _):
-            with jax.named_scope("elasticity"):
-                stress = elasticity_fn(state.F)
-            with jax.named_scope("substep"):
-                state = step(params, state, stress, pre_particle_fn, post_grid_fn,
-                             0.0, p2g_fn=_p2g_fn)
-            with jax.named_scope("plasticity"):
-                state = state._replace(F=plasticity_fn(state.F))
-            return state, None
-        for _ in range(steps_per_frame):
-            state, _ = scan_body(state, None)
-        return state
-
-    return jit_frame
 
 
 def simulate_frame(params, state, elasticity_fn, plasticity_fn,
