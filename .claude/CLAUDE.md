@@ -23,6 +23,29 @@ This is a benchmarking/investigation project; the code is shaped by the followin
 2. **`ncu` (Nsight Compute), from the CLI** — same particle count, get roofline / occupancy / memory-throughput for the initial deeper per-kernel analysis.
 3. **`nsight-python`** (`profile_nsight.py`) — automate sweeping metrics across variants *and* particle counts. This is the broad sweep, run across **multiple architectures / systems** (e.g. A100 / H100 / GH200).
 
+## Standard benchmark settings
+
+All performance comparisons use one fixed, well-resolved configuration (adapted from the Taichi / MLS-MPM high-performance benchmark) so numbers are comparable across variants and architectures **and the simulation stays numerically stable** — under-resolution (too few particles per cell) makes MLS-MPM go unstable, which corrupts wall-clock timings (the falling material explodes, particles clamp to the bounds and cluster, and the atomic-scatter P2G becomes contention-bound; see below).
+
+- **8 particles per cell** — the MLS-MPM resolution sweet spot (2³ per cell). Do not benchmark below this.
+- **∆x = 8×10⁻³** → `sim.num_grids = 125` (the solver uses `dx = 1/num_grids`). The particle-filled region then spans **100³ active cells**.
+- **Particles uniformly sampled in [0.1, 0.9]³** → `sim.center = [0.5, 0.5, 0.5]`, region side 0.8. 100³ active cells × 8 ppc = **8 M particles** → `sim.n_particles = 8_000_000`.
+- **APIC transfer** (codebase default) + **linear/corotated elasticity** for simplicity (`material=jelly` / `jelly_jacobi`; the pure-Warp `warp_*graph` paths require `jelly_jacobi`).
+- Per-particle volume follows the region: `vol = 0.8³ / N` (`make_params` computes `vol = prod(sim.size)/n`, so set `sim.size=[0.8,0.8,0.8]`).
+
+**Phase definitions** (kept broad so timing reflects real work, and to attribute the grid step):
+- **P2G**: compute force from the deformation gradient F; scatter mass + elastic force + APIC affine momentum to grid nodes; normalize grid velocity and apply gravity. *(The grid normalize+gravity step is grouped under P2G for timing.)*
+- **G2P**: gather velocity from the grid; gather velocity gradient (if needed) + the APIC affine velocity field; update F; advect particles.
+
+**Reproduce:**
+```bash
+pixi run -e gpu python simulate.py kernel=<k> material=jelly_jacobi \
+    sim.num_grids=125 sim.n_particles=8000000 \
+    sim.center=[0.5,0.5,0.5] sim.size=[0.8,0.8,0.8] benchmark=true
+```
+
+> ⚠️ **Wiring gap (TODO):** `build_solver` (in `src/mpm_jax/registry.py`) currently hard-codes the particle-sampling region to `size=[0.5,0.5,0.5]`, independent of `sim.size` (which only feeds `vol`). Until the particle region is wired to config (use `sim.size`, or add a `sim.particle_size`) and a `conf/sim/benchmark.yaml` preset is added, the `sim.size` override above changes `vol` but NOT the sampled region, so the [0.1,0.9]³ / 8-ppc setup is not yet reproducible end-to-end.
+
 ## Package manager: pixi
 
 **Always use `pixi` to install, sync, and run.** Never invoke `pip`, `pip install`, `python -m pip`, or a bare `python` from the system interpreter — those will miss the project's locked environment.
