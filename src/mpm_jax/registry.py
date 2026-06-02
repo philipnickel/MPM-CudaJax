@@ -35,6 +35,7 @@ KERNELS = {
     "cuda_v2_inline":         KernelSpec(MPMSolver, build_cuda_v2_frame, MappingProxyType({"loop_kind": "fori"})),
     "cuda_v3_inline":         KernelSpec(MPMSolver, build_cuda_v3_frame, MappingProxyType({"loop_kind": "fori", "cuda_graph": False})),
     "cuda_v4_inline":         KernelSpec(MPMSolver, build_cuda_v4_frame),
+    "warp_baseline_graph":    KernelSpec(WarpGraphSolver, build_warp_graph, MappingProxyType({"baseline": True})),
     "warp_bonus_graph":       KernelSpec(WarpGraphSolver, build_warp_graph),
     "warp_bonus_v2_graph":    KernelSpec(WarpGraphSolver, build_warp_graph, MappingProxyType({"indexed_sort": True})),
 }

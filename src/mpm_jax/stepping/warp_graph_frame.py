@@ -2,7 +2,7 @@ from mpm_jax.warp_graph import WarpBonusSimulator
 from mpm_jax.solver import WarpGraphSolver
 
 
-def build_warp_graph(cfg, *, particles, indexed_sort=False, **_ignored):
+def build_warp_graph(cfg, *, particles, indexed_sort=False, baseline=False, **_ignored):
     """Construct a pure-Warp capture/replay solver.
 
     `cfg` is the resolved Hydra config; `particles` is the (N, 3) numpy init.
@@ -18,12 +18,12 @@ def build_warp_graph(cfg, *, particles, indexed_sort=False, **_ignored):
             f"kernel={kernel_name} currently supports material=jelly_jacobi "
             "only: CorotatedElasticityJacobi + IdentityPlasticity."
         )
-    if int(cfg.sim.num_grids) % 2 != 0:
+    if (not baseline) and int(cfg.sim.num_grids) % 2 != 0:
         raise RuntimeError(f"kernel={kernel_name} requires sim.num_grids divisible by 2.")
 
     n = int(cfg.sim.n_particles)
     precompute_stress = not (indexed_sort and n >= 150_000_000)
     engine = WarpBonusSimulator(particles, cfg, indexed_sort=indexed_sort,
-                                precompute_stress=precompute_stress)
+                                precompute_stress=precompute_stress, baseline=baseline)
     engine.warmup()
     return WarpGraphSolver(engine)

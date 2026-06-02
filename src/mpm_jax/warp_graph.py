@@ -306,6 +306,67 @@ def _p2g_supercell_stress_tile_kernel(
 
 
 @wp.kernel
+def _p2g_baseline_kernel(
+    x: wp.array[wp.vec3],
+    v: wp.array[wp.vec3],
+    C: wp.array[wp.mat33],
+    stress: wp.array[wp.mat33],
+    G: int,
+    dt: float,
+    vol: float,
+    p_mass: float,
+    inv_dx: float,
+    dx: float,
+    grid_mv: wp.array[wp.vec3],
+    grid_m: wp.array[float],
+):
+    p = wp.tid()
+    xp = x[p]
+    vp = v[p]
+    Cp = C[p]
+    sp = stress[p]
+
+    px = xp * inv_dx
+    b0 = int(wp.floor(px[0] - 0.5))
+    b1 = int(wp.floor(px[1] - 0.5))
+    b2 = int(wp.floor(px[2] - 0.5))
+    fx0 = px[0] - float(b0)
+    fx1 = px[1] - float(b1)
+    fx2 = px[2] - float(b2)
+
+    for ox in range(3):
+        wx = _quad_weight(fx0, ox)
+        dwx = _quad_dweight(fx0, ox)
+        for oy in range(3):
+            wy = _quad_weight(fx1, oy)
+            dwy = _quad_dweight(fx1, oy)
+            for oz in range(3):
+                wz = _quad_weight(fx2, oz)
+                dwz = _quad_dweight(fx2, oz)
+
+                weight = wx * wy * wz
+                dweight = wp.vec3(
+                    inv_dx * dwx * wy * wz,
+                    inv_dx * wx * dwy * wz,
+                    inv_dx * wx * wy * dwz,
+                )
+                dpos = wp.vec3(
+                    (float(ox) - fx0) * dx,
+                    (float(oy) - fx1) * dx,
+                    (float(oz) - fx2) * dx,
+                )
+                mv = -dt * vol * (sp * dweight) + p_mass * weight * (vp + Cp * dpos)
+                mass = p_mass * weight
+
+                gi = wp.clamp(b0 + ox, 0, G - 1)
+                gj = wp.clamp(b1 + oy, 0, G - 1)
+                gk = wp.clamp(b2 + oz, 0, G - 1)
+                idx = gi * G * G + gj * G + gk
+                wp.atomic_add(grid_mv, idx, mv)
+                wp.atomic_add(grid_m, idx, mass)
+
+
+@wp.kernel
 def _p2g_supercell_stress_tile_indexed_kernel(
     ids: wp.array[int],
     x: wp.array[wp.vec3],
@@ -740,6 +801,7 @@ class WarpBonusSimulator:
         *,
         indexed_sort: bool = False,
         precompute_stress: bool = True,
+        baseline: bool = False,
     ):
         wp.init()
         self.device = wp.get_device("cuda:0")
@@ -783,10 +845,11 @@ class WarpBonusSimulator:
         self.Cs = None
         self.Fs = None
         self.stress = None
+        self.baseline = baseline
         self.precompute_stress = indexed_sort and precompute_stress
-        if self.precompute_stress:
+        if baseline or self.precompute_stress:
             self.stress = wp.empty_like(self.F)
-        elif not indexed_sort:
+        if (not indexed_sort) and (not baseline):
             self.xs = wp.empty_like(self.x)
             self.vs = wp.empty_like(self.v)
             self.Cs = wp.empty_like(self.C)
@@ -804,7 +867,9 @@ class WarpBonusSimulator:
         self.compiled = False
         self.indexed_sort = indexed_sort
         self._capture_timing_events = None
-        if indexed_sort:
+        if baseline:
+            self.p2g_kernel = _p2g_baseline_kernel
+        elif indexed_sort:
             self.p2g_kernel = (
                 _p2g_supercell_stress_tile_indexed_kernel
                 if self.precompute_stress
@@ -836,6 +901,44 @@ class WarpBonusSimulator:
             wp.record_event(end)
 
     def _substep(self):
+        if self.baseline:
+            evt = self._timing_begin("zero_grid")
+            wp.launch(_zero_float_kernel, dim=self.G3, inputs=[self.grid_m], device=self.device)
+            wp.launch(_zero_vec3_kernel, dim=self.G3, inputs=[self.grid_mv], device=self.device)
+            self._timing_end(evt)
+
+            evt = self._timing_begin("stress")
+            wp.launch(_compute_stress_kernel, dim=self.n,
+                      inputs=[self.F, self.stress, self.mu, self.la], device=self.device)
+            self._timing_end(evt)
+
+            evt = self._timing_begin("p2g")
+            wp.launch(self.p2g_kernel, dim=self.n,
+                      inputs=[self.x, self.v, self.C, self.stress,
+                              self.G, self.dt, self.vol, self.p_mass, self.inv_dx, self.dx,
+                              self.grid_mv, self.grid_m],
+                      device=self.device)
+            self._timing_end(evt)
+
+            evt = self._timing_begin("grid_update")
+            wp.launch(_grid_update_kernel, dim=self.G3,
+                      inputs=[self.grid_mv, self.grid_m, self.G, self.dt, self.damping,
+                              self.gravity, self.floor_bound], device=self.device)
+            self._timing_end(evt)
+
+            evt = self._timing_begin("g2p")
+            wp.launch(_g2p_kernel, dim=self.n,
+                      inputs=[self.x, self.F, self.grid_mv,
+                              self.x2, self.v2, self.C2, self.F2,
+                              self.G, self.dt, self.inv_dx, self.dx, self.clip_bound],
+                      device=self.device)
+            self._timing_end(evt)
+
+            self.x, self.x2 = self.x2, self.x
+            self.v, self.v2 = self.v2, self.v
+            self.C, self.C2 = self.C2, self.C
+            self.F, self.F2 = self.F2, self.F
+            return
         evt = self._timing_begin("bin")
         wp.launch(_zero_int_kernel, dim=self.Gs3, inputs=[self.counts], device=self.device)
         wp.launch(

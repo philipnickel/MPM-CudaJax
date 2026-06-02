@@ -1,0 +1,5 @@
+# warp_baseline_graph — pure NVIDIA Warp graph-captured baseline MPM step.
+# Simple per-particle atomic-scatter P2G (no super-cell sort / no tiling),
+# mirrors the JAX baseline. Keeps the full timestep in Warp and replays the
+# per-frame CUDA graph.
+name: warp_baseline_graph

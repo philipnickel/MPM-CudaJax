@@ -22,7 +22,7 @@ from mpm_jax.blocks.init import get_particles
 _UNSUPPORTED_ANALYZE_CONFIG_KEYS = {"configs"}
 _SCRIPT_NSIGHT_KEYS = {"phase", "include_step_total", "write_json", "plot", "sweep", "configs", "analyze"}
 
-_WARP_BONUS_KERNELS = {"warp_bonus_graph", "warp_bonus_v2_graph"}
+_WARP_BONUS_KERNELS = {"warp_baseline_graph", "warp_bonus_graph", "warp_bonus_v2_graph"}
 _JAX_P2G_KERNELS = {
     "jax",
     "jax_v1_5",
@@ -63,6 +63,7 @@ def _warp_bonus_sim(cfg: DictConfig):
 
     kernel_name = cfg.get("kernel", {}).get("name", "warp_bonus_graph")
     indexed_sort = kernel_name == "warp_bonus_v2_graph"
+    baseline = kernel_name == "warp_baseline_graph"
     n = int(cfg.sim.n_particles)
     precompute_stress = not (indexed_sort and n >= 150_000_000)
     particles = get_particles(n, center=list(cfg.sim.center), size=[0.5, 0.5, 0.5])
@@ -71,6 +72,7 @@ def _warp_bonus_sim(cfg: DictConfig):
         cfg,
         indexed_sort=indexed_sort,
         precompute_stress=precompute_stress,
+        baseline=baseline,
     )
 
     sim._substep()
