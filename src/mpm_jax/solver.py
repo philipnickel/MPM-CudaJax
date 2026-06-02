@@ -139,3 +139,38 @@ class MPMSolver:
     def reset_to_initial(self):
         self.state = self._init_state
         return self.state
+
+
+class WarpGraphSolver(MPMSolver):
+    """Pure-Warp graph backend. Wraps the capture/replay engine; no JAX frame."""
+
+    def __init__(self, engine):
+        # Intentionally does NOT call super().__init__: there is no jit'd _frame.
+        self._engine = engine
+        self.steps_per_frame = engine.steps_per_frame
+
+    def step(self):
+        import warp as wp
+        self._engine.launch_frame()
+        wp.synchronize_device(self._engine.device)
+        return self.state
+
+    def solve(self, num_frames, on_frame=None):
+        if on_frame is None:
+            self._engine.run_frames(num_frames)
+            return self.state
+        import warp as wp
+        for f in range(num_frames):
+            self._engine.launch_frame()
+            wp.synchronize_device(self._engine.device)
+            on_frame(f, self.state)
+        return self.state
+
+    @property
+    def state(self):
+        return self._engine
+
+    @state.setter
+    def state(self, _value):
+        # State is owned by the Warp engine; ignore external assignment.
+        pass
