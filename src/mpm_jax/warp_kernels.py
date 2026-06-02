@@ -583,10 +583,3 @@ def _home_super_cell_id(x, inv_dx, G, sc=SUPER_CELL_WIDTH):
     sj = home[:, 1] // sc
     sk = home[:, 2] // sc
     return (si * (Gs * Gs) + sj * Gs + sk).astype(jnp.int32)
-
-
-from mpm_jax.stepping.warp_frames import (
-    build_warp_v1_frame as build_jit_frame_warp_inline,
-    build_warp_v2_tile_frame as build_jit_frame_warp_tile,
-    build_warp_v3_frame as build_jit_frame_warp_supercell_tile,
-)

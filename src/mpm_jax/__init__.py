@@ -13,7 +13,6 @@ _SOLVER_EXPORTS = {
     "grid_update",
     "g2p",
     "build_jit_step",
-    "build_jit_frame",
     "build_jit_stages",
     "StepIntermediates",
 }

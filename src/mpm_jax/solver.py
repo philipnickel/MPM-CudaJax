@@ -9,7 +9,6 @@ from mpm_jax.blocks.p2g import p2g_compute, p2g_scatter, p2g
 from mpm_jax.blocks.g2p import g2p
 from mpm_jax.blocks.grid import grid_update
 from mpm_jax.stepping.substep import step
-from mpm_jax.stepping.jax_frames import build_jax_frame as build_jit_frame
 
 
 def build_jit_step(params, elasticity_fn, plasticity_fn,

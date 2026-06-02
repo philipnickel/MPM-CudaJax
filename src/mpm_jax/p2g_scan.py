@@ -187,6 +187,3 @@ def build_jit_stages_scan(params, elasticity_fn, plasticity_fn,
         return MPMState(x=new_x, v=new_v, C=new_C, F=new_F)
 
     return jit_p2g_stage, jit_grid_stage, jit_g2p_stage
-
-
-from mpm_jax.stepping.jax_frames import build_jax_v1_5_frame as build_jit_frame_scan
