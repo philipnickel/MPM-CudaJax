@@ -82,13 +82,16 @@ cuda-version = "12.*"
 cuda-nvcc = "*"
 nsight-compute = ">=2025.2,<2025.3"
 gxx = "*"
-warp-lang = "*"
 
 [tool.pixi.feature.gpu.pypi-dependencies]
 nsight-python = "*"
+warp-lang = "==1.14.0"
 
 [tool.pixi.feature.gpu.system-requirements]
 cuda = "12.0"
+# Warp 1.14 ships a manylinux_2_34 aarch64 wheel (GH200) and a manylinux_2_28
+# x86_64 wheel (H100). Declare the glibc floor so uv accepts the aarch64 wheel.
+libc = { family = "glibc", version = "2.34" }
 
 # HPC / module-system environment. Unlike `gpu` (which bundles a full
 # conda-forge CUDA 12 stack), `hpc` brings NO CUDA libs of its own and
