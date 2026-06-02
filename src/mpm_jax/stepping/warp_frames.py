@@ -6,8 +6,9 @@ jax_kernel.
 
 Warp kernel defs and helpers stay in ``mpm_jax.warp_kernels``; this module
 only assembles the per-frame scan/loop around them.  Imports from
-``warp_kernels`` are deferred to function call time so that ``warp_kernels``
-can re-export these names at its end without creating a load-time cycle.
+``warp_kernels`` (and from ``mpm_jax.solver``) are deferred to function
+call time because Warp is a heavy, optional GPU dependency — importing it
+at module load time would break CPU-only installs.
 """
 
 import jax
@@ -17,8 +18,8 @@ import jax.numpy as jnp
 def build_warp_v1_frame(params, elasticity_fn, plasticity_fn,
                         pre_fn, post_fn, steps_per_frame, **_ignored):
     """Build a fully JIT'd frame using Warp P2G via JAX FFI."""
-    # Deferred to avoid load-time cycle: warp_kernels re-exports this function
-    # at its bottom, so a top-level import here would create a circular dependency.
+    # Deferred: warp_kernels is a GPU-only dependency; defer so CPU installs
+    # work and Warp is not imported until this builder is actually called.
     from mpm_jax.solver import (  # pylint: disable=import-outside-toplevel
         MPMState,
         compute_weights_and_indices,
@@ -86,8 +87,8 @@ def build_warp_v1_frame(params, elasticity_fn, plasticity_fn,
 def build_warp_v2_tile_frame(params, elasticity_fn, plasticity_fn,
                              pre_fn, post_fn, steps_per_frame, **_ignored):
     """Build a fully JIT'd frame using tiled Warp P2G via JAX FFI."""
-    # Deferred to avoid load-time cycle: warp_kernels re-exports this function
-    # at its bottom, so a top-level import here would create a circular dependency.
+    # Deferred: warp_kernels is a GPU-only dependency; defer so CPU installs
+    # work and Warp is not imported until this builder is actually called.
     from mpm_jax.solver import (  # pylint: disable=import-outside-toplevel
         MPMState,
         compute_weights_and_indices,
@@ -155,8 +156,8 @@ def build_warp_v2_tile_frame(params, elasticity_fn, plasticity_fn,
 def build_warp_v3_frame(params, elasticity_fn, plasticity_fn,
                         pre_fn, post_fn, steps_per_frame, **_ignored):
     """Build a frame using a super-cell-owned Warp tile P2G kernel."""
-    # Deferred to avoid load-time cycle: warp_kernels re-exports this function
-    # at its bottom, so a top-level import here would create a circular dependency.
+    # Deferred: warp_kernels is a GPU-only dependency; defer so CPU installs
+    # work and Warp is not imported until this builder is actually called.
     from mpm_jax.solver import (  # pylint: disable=import-outside-toplevel
         MPMState,
         compute_weights_and_indices,

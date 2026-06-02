@@ -72,7 +72,7 @@ def build_solver(cfg):
                                  center=list(cfg.sim.center), size=[0.5, 0.5, 0.5])
 
     if spec.solver_cls is WarpGraphSolver:
-        return build_warp_graph(cfg, particles=particles_np, **dict(spec.defaults))
+        return spec.build_frame(cfg, particles=particles_np, **dict(spec.defaults))
 
     sim, mat = cfg.sim, cfg.material
     params = make_params(

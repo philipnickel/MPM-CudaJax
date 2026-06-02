@@ -1,5 +1,4 @@
 import jax
-import jax.numpy as jnp
 
 from mpm_jax.stepping.substep import step  # neutral home — no import back into solver
 from mpm_jax.types import MPMState
@@ -39,10 +38,12 @@ def build_jax_v1_5_frame(params, elasticity_fn, plasticity_fn,
     Avoids materialising the (N, 27, *) HBM intermediates of the default P2G
     path by scanning over the 27 offsets one at a time.
     """
-    # Deferred import breaks the jax_frames <-> p2g_scan cycle: p2g_scan
-    # re-exports build_jit_frame_scan = build_jax_v1_5_frame from here, so a
-    # top-level import of _p2g_scan from p2g_scan would be circular.
-    # By the time this function is *called*, all modules are fully initialised.
+    # jax_v1_5 always Python-unrolls the stencil-scan substep; loop_kind is
+    # accepted only for signature uniformity with other frame builders and is ignored.
+    # Deferred import: p2g_scan imports from mpm_jax.types and mpm_jax.blocks,
+    # but not from jax_frames — no actual cycle.  The import stays deferred so
+    # that p2g_scan (a less commonly used path) is only loaded when this builder
+    # is actually called.
     from mpm_jax.p2g_scan import _p2g_scan  # pylint: disable=import-outside-toplevel
 
     @jax.jit

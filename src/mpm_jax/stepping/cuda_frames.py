@@ -5,16 +5,14 @@ optionally G2P) through hand-written CUDA kernels registered via JAX FFI.
 
 FFI helpers stay in ``mpm_jax.cuda.p2g_cuda``; this module only assembles
 the per-frame scan/loop around them.  Imports from ``p2g_cuda`` are deferred
-to function call time so that ``p2g_cuda`` can re-export these names at its
-end without creating a load-time cycle.
+to function call time because ``p2g_cuda`` is a heavy, GPU-only dependency
+that may not be loaded on CPU-only installs.
 """
 
 import jax
 import jax.numpy as jnp
 
 from mpm_jax.types import MPMState
-from mpm_jax.blocks.weights import compute_weights_and_indices
-from mpm_jax.blocks.g2p import g2p
 from mpm_jax.blocks.grid import grid_update
 
 
@@ -31,8 +29,7 @@ def build_cuda_v1_frame(params, elasticity_fn, plasticity_fn,
     — a single XLA program per frame.  Stress and plasticity stay in JAX
     (model-agnostic); only the two scatter/gather kernels are CUDA.
     """
-    # Deferred to avoid load-time cycle: p2g_cuda re-exports this function at
-    # its bottom, so a top-level import here would create a circular dependency.
+    # Deferred: p2g_cuda is a GPU-only dependency; defer so CPU installs work.
     from mpm_jax.cuda.p2g_cuda import (  # pylint: disable=import-outside-toplevel
         is_available,
         cuda_p2g_inline,

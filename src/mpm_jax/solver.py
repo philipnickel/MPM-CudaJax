@@ -1,11 +1,11 @@
 import jax
-import jax.numpy as jnp
 
 from mpm_jax.types import (
-    MPMState, StepIntermediates, MPMParams, OFFSET_27, make_params,
+    MPMState, StepIntermediates,
+    MPMParams, make_params,  # noqa: F401  (re-exported via __init__._SOLVER_EXPORTS)
 )
 from mpm_jax.blocks.weights import compute_weights_and_indices
-from mpm_jax.blocks.p2g import p2g_compute, p2g_scatter, p2g
+from mpm_jax.blocks.p2g import p2g_compute, p2g_scatter, p2g  # noqa: F401  (p2g_compute, p2g_scatter re-exported)
 from mpm_jax.blocks.g2p import g2p
 from mpm_jax.blocks.grid import grid_update
 from mpm_jax.stepping.substep import step
@@ -47,9 +47,9 @@ def simulate_frame(params, state, elasticity_fn, plasticity_fn,
 # Per-stage JIT path: one JIT per stage, host-side loop drives them.
 # ---------------------------------------------------------------------------
 #
-# Trade-off vs build_jit_frame: extra Python dispatch + 2 sync points per
-# substep, but enables per-stage timing and clean CUDA interop without
-# baking the boundary into the traced graph.
+# Trade-off vs build_jax_frame (in stepping/jax_frames.py): extra Python
+# dispatch + 2 sync points per substep, but enables per-stage timing and
+# clean CUDA interop without baking the boundary into the traced graph.
 
 def build_jit_stages(params, elasticity_fn, plasticity_fn,
                      pre_particle_fn, post_grid_fn, p2g_fn=None):
@@ -58,7 +58,7 @@ def build_jit_stages(params, elasticity_fn, plasticity_fn,
     Returns:
         (jit_p2g_stage, jit_grid_stage, jit_g2p_stage)
 
-    Signatures (time fixed at 0.0 internally to match build_jit_frame —
+    Signatures (time fixed at 0.0 internally to match build_jax_frame —
     boundary conditions don't see substep time in the JIT'd path):
         jit_p2g_stage(state)             -> (grid_mv, grid_m, intermediates)
         jit_grid_stage(grid_mv, grid_m)  -> grid_v
