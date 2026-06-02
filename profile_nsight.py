@@ -34,7 +34,6 @@ _JAX_P2G_KERNELS = {
     "cuda_v4_inline",
     "cuda_v6_inline",
     "warp_v1_inline",
-    "warp_v2_tile",
     "warp_v3_supercell_tile",
 }
 _P2G_KERNELS = _WARP_BONUS_KERNELS | _JAX_P2G_KERNELS
@@ -354,28 +353,6 @@ def _jax_warp_p2g_stage(kernel_name, params, pre_fn, elasticity_fn):
             x, v = pre_fn(state.x, state.v, 0.0)
             stress = elasticity_fn(state.F)
             grid_mv, grid_m = warp_p2g_inline(
-                x, v, state.C, stress,
-                params.num_grids, params.dt, params.vol, params.p_mass,
-                params.inv_dx, params.dx,
-            )
-            return grid_mv, grid_m, StepIntermediates(x_post_bc=x, F_pre_plast=state.F)
-
-        return jit_p2g_stage
-
-    if kernel_name == "warp_v2_tile":
-        from mpm_jax.warp_kernels import TILE_SIZE, warp_p2g_inline_tile
-
-        if params.n_particles % TILE_SIZE != 0:
-            raise RuntimeError(
-                f"warp_v2_tile requires n_particles divisible by {TILE_SIZE}; "
-                f"got {params.n_particles}."
-            )
-
-        @jax.jit
-        def jit_p2g_stage(state):
-            x, v = pre_fn(state.x, state.v, 0.0)
-            stress = elasticity_fn(state.F)
-            grid_mv, grid_m = warp_p2g_inline_tile(
                 x, v, state.C, stress,
                 params.num_grids, params.dt, params.vol, params.p_mass,
                 params.inv_dx, params.dx,

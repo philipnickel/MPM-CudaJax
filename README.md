@@ -126,7 +126,6 @@ pixi run -e gpu python simulate.py kernel=cuda_v2_inline kernel.loop_kind=python
 pixi run -e gpu python simulate.py kernel=cuda_v3_inline material=jelly_jacobi         # Morton sort
 pixi run -e gpu python simulate.py kernel=cuda_v3_inline kernel.cuda_graph=true material=jelly_jacobi
 pixi run -e gpu python simulate.py kernel=warp_v1_inline material=jelly_jacobi
-pixi run -e gpu python simulate.py kernel=warp_v2_tile material=jelly_jacobi sim.n_particles=1000000
 pixi run -e gpu python simulate.py kernel=warp_v3_supercell_tile material=jelly_jacobi
 pixi run -e gpu python simulate.py kernel=warp_bonus_graph material=jelly_jacobi benchmark=true
 pixi run -e gpu python simulate.py kernel=warp_bonus_v2_graph material=jelly_jacobi benchmark=true
@@ -146,7 +145,6 @@ pixi run -e gpu python simulate.py sim.n_particles=1000000 sim.num_grids=64
 | `cuda_v3_inline` | Morton-sorted inline CUDA P2G + CUDA G2P. `kernel.cuda_graph=true` enables XLA command-buffer (CUDA Graph) replay. |
 | `cuda_v4_inline` | Super-cell-owned grid tile inline CUDA P2G + CUDA G2P. |
 | `warp_v1_inline` | P2G authored as an NVIDIA Warp kernel, called from inside JAX JIT via `warp.jax_experimental.jax_kernel`. |
-| `warp_v2_tile` | Experimental Warp tile P2G via `warp.jax_experimental.jax_callable`; tile-loads 64-particle blocks. |
 | `warp_v3_supercell_tile` | Super-cell-owned Warp tile P2G: sort by home super-cell, accumulate a 4³ shared tile with `tile_scatter_add`, then flush to global grid. |
 | `warp_bonus_graph` | Pure Warp prototype: bins particles by super-cell, runs tiled P2G + grid update + G2P in Warp, and replays captured CUDA graphs without JAX. Supports `material=jelly_jacobi`. |
 | `warp_bonus_v2_graph` | Pure Warp graph path that sorts particle ids only (avoids copying sorted `x/v/C/F` buffers). Supports `material=jelly_jacobi`. |

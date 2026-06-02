@@ -77,7 +77,7 @@ src/mpm_jax/
     substep.py         step(): one full P2G2P substep (pure fn, safe to JIT)
     jax_frames.py      build_jax_frame, build_jax_v1_5_frame
     cuda_frames.py     build_cuda_v1_frame .. build_cuda_v4_frame
-    warp_frames.py     build_warp_v1_frame, build_warp_v2_tile_frame, build_warp_v3_frame
+    warp_frames.py     build_warp_v1_frame, build_warp_v3_frame
     warp_graph_frame.py build_warp_graph: constructs a WarpGraphSolver from cfg + particles
   cuda/
     p2g_cuda.py        loads prebuilt .so + jax.ffi.register_ffi_target
@@ -129,7 +129,6 @@ Current kernel names:
 | `cuda_v3_inline` | MPMSolver | Morton-sorted inline CUDA P2G + CUDA G2P; `cuda_graph=true` enables XLA command-buffer replay |
 | `cuda_v4_inline` | MPMSolver | Super-cell-owned grid tile inline CUDA P2G + CUDA G2P |
 | `warp_v1_inline` | MPMSolver | P2G authored as a Warp kernel, called from inside JAX JIT via `warp.jax_experimental.jax_kernel` |
-| `warp_v2_tile` | MPMSolver | Tile P2G via `warp.jax_experimental.jax_callable`; tile-loads 64-particle blocks |
 | `warp_v3_supercell_tile` | MPMSolver | Super-cell-owned Warp tile P2G: sort by home super-cell, accumulate 4³ shared tile |
 | `warp_bonus_graph` | WarpGraphSolver | Pure-Warp CUDA graph: bins by super-cell, runs tiled P2G + grid + G2P without JAX |
 | `warp_bonus_v2_graph` | WarpGraphSolver | Pure-Warp graph that sorts particle ids only (avoids copying sorted x/v/C/F buffers) |
