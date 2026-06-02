@@ -1,3 +1,5 @@
+import numpy as np
+import pytest
 import jax.numpy as jnp
 from omegaconf import OmegaConf
 from mpm_jax.types import MPMState, make_params
@@ -28,6 +30,7 @@ def test_step_returns_and_mutates_state():
     out = s.step()
     assert out is s.state
     assert s.state.x.shape == x0.shape
+    assert not jnp.array_equal(s.state.x, x0)
 
 
 def test_solve_equals_n_steps_and_fires_hook():
@@ -43,10 +46,6 @@ def test_reset_restores_state():
     s.step()
     s.reset_to_initial()
     assert s.state is init
-
-
-import numpy as np
-import pytest
 
 
 def _warp_available():

@@ -166,6 +166,14 @@ class WarpGraphSolver(MPMSolver):
             on_frame(f, self.state)
         return self.state
 
+    def reset(self, init_state):
+        raise NotImplementedError(
+            "WarpGraphSolver state is owned by the Warp engine; re-create the solver to reset.")
+
+    def reset_to_initial(self):
+        raise NotImplementedError(
+            "WarpGraphSolver state is owned by the Warp engine; re-create the solver to reset.")
+
     @property
     def state(self):
         return self._engine

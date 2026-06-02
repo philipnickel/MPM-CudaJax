@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Callable
 
 from mpm_jax.solver import MPMSolver, WarpGraphSolver
@@ -16,21 +17,25 @@ from mpm_jax.stepping.warp_graph_frame import build_warp_graph
 class KernelSpec:
     solver_cls: type
     build_frame: Callable
-    defaults: dict = field(default_factory=dict)
+    defaults: MappingProxyType = field(default_factory=lambda: MappingProxyType({}))
 
 
+# NOTE: for the two WarpGraphSolver entries, `build_frame` is NOT a frame builder
+# with the (params, elasticity_fn, plasticity_fn, pre_fn, post_fn, steps_per_frame, **opts)
+# signature — it is `build_warp_graph(cfg, *, particles, **opts) -> WarpGraphSolver`.
+# build_solver() (added later) MUST special-case `spec.solver_cls is WarpGraphSolver`.
 KERNELS = {
     "jax":                    KernelSpec(MPMSolver, build_jax_frame),
     "jax_v1_5":               KernelSpec(MPMSolver, build_jax_v1_5_frame),
     "cuda_v1_inline":         KernelSpec(MPMSolver, build_cuda_v1_frame),
-    "cuda_v2_inline":         KernelSpec(MPMSolver, build_cuda_v2_frame, {"loop_kind": "fori"}),
-    "cuda_v3_inline":         KernelSpec(MPMSolver, build_cuda_v3_frame, {"loop_kind": "fori", "cuda_graph": False}),
+    "cuda_v2_inline":         KernelSpec(MPMSolver, build_cuda_v2_frame, MappingProxyType({"loop_kind": "fori"})),
+    "cuda_v3_inline":         KernelSpec(MPMSolver, build_cuda_v3_frame, MappingProxyType({"loop_kind": "fori", "cuda_graph": False})),
     "cuda_v4_inline":         KernelSpec(MPMSolver, build_cuda_v4_frame),
     "warp_v1_inline":         KernelSpec(MPMSolver, build_warp_v1_frame),
     "warp_v2_tile":           KernelSpec(MPMSolver, build_warp_v2_tile_frame),
     "warp_v3_supercell_tile": KernelSpec(MPMSolver, build_warp_v3_frame),
     "warp_bonus_graph":       KernelSpec(WarpGraphSolver, build_warp_graph),
-    "warp_bonus_v2_graph":    KernelSpec(WarpGraphSolver, build_warp_graph, {"indexed_sort": True}),
+    "warp_bonus_v2_graph":    KernelSpec(WarpGraphSolver, build_warp_graph, MappingProxyType({"indexed_sort": True})),
 }
 
 REMOVED_KERNELS = {
