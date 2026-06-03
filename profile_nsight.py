@@ -24,7 +24,6 @@ _SCRIPT_NSIGHT_KEYS = {"phase", "include_step_total", "write_json", "plot", "swe
 
 _WARP_BONUS_KERNELS = {"warp_baseline_graph", "warp_bonus_graph", "warp_bonus_v2_graph"}
 _JAX_P2G_KERNELS = {
-    "jax",
     "jax_v1_5",
     "cuda_v1_inline",
     "cuda_v2_inline",
@@ -343,16 +342,11 @@ def _jax_inline_p2g_stage(kernel_name, params, pre_fn, elasticity_fn):
 def _jax_p2g_stage_runner(cfg: DictConfig, nsight):
     import jax
 
-    from mpm_jax.solver import build_jit_stages
-
-    kernel_name = cfg.get("kernel", {}).get("name", "jax")
+    kernel_name = cfg.get("kernel", {}).get("name", "jax_v1_5")
     params, pre_fn, post_fn, elasticity_fn, plasticity_fn, state = _jax_problem(cfg)
     annotation_name = _p2g_annotation_name(cfg)
 
-    if kernel_name == "jax":
-        jit_p2g_stage, _, _ = build_jit_stages(
-            params, elasticity_fn, plasticity_fn, pre_fn, post_fn)
-    elif kernel_name == "jax_v1_5":
+    if kernel_name == "jax_v1_5":
         from mpm_jax.p2g_scan import build_jit_stages_scan
 
         jit_p2g_stage, _, _ = build_jit_stages_scan(

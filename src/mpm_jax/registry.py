@@ -5,7 +5,7 @@ from typing import Callable
 import jax.numpy as jnp
 
 from mpm_jax.solver import MPMSolver, WarpGraphSolver
-from mpm_jax.stepping.jax_frames import build_jax_frame, build_jax_v1_5_frame
+from mpm_jax.stepping.jax_frames import build_jax_v1_5_frame
 from mpm_jax.stepping.cuda_frames import (
     build_cuda_v1_frame, build_cuda_v2_frame, build_cuda_v3_frame, build_cuda_v4_frame,
 )
@@ -29,7 +29,6 @@ class KernelSpec:
 # signature — it is `build_warp_graph(cfg, *, particles, **opts) -> WarpGraphSolver`.
 # build_solver() (added later) MUST special-case `spec.solver_cls is WarpGraphSolver`.
 KERNELS = {
-    "jax":                    KernelSpec(MPMSolver, build_jax_frame),
     "jax_v1_5":               KernelSpec(MPMSolver, build_jax_v1_5_frame),
     "cuda_v1_inline":         KernelSpec(MPMSolver, build_cuda_v1_frame),
     "cuda_v2_inline":         KernelSpec(MPMSolver, build_cuda_v2_frame, MappingProxyType({"loop_kind": "fori"})),
@@ -41,6 +40,7 @@ KERNELS = {
 }
 
 REMOVED_KERNELS = {
+    "jax": "Use jax_v1_5 as the JAX baseline.",
     "cuda_v1": "Use cuda_v1_inline (scatter-only variant removed).",
     "cuda_v2": "Use cuda_v2_inline.",
     "cuda_v4": "Use cuda_v4_inline.",

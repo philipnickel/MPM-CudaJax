@@ -38,8 +38,6 @@ def build_jax_v1_5_frame(params, elasticity_fn, plasticity_fn,
     Avoids materialising the (N, 27, *) HBM intermediates of the default P2G
     path by scanning over the 27 offsets one at a time.
     """
-    # jax_v1_5 always Python-unrolls the stencil-scan substep; loop_kind is
-    # accepted only for signature uniformity with other frame builders and is ignored.
     # Deferred import: p2g_scan imports from mpm_jax.types and mpm_jax.blocks,
     # but not from jax_frames — no actual cycle.  The import stays deferred so
     # that p2g_scan (a less commonly used path) is only loaded when this builder
@@ -73,6 +71,10 @@ def build_jax_v1_5_frame(params, elasticity_fn, plasticity_fn,
                 new_F = plasticity_fn(new_F)
             return MPMState(x=new_x, v=new_v, C=new_C, F=new_F), None
 
+        if loop_kind == "fori":
+            state = jax.lax.fori_loop(
+                0, steps_per_frame, lambda _, s: scan_body(s, None)[0], state)
+            return state
         for _ in range(steps_per_frame):
             state, _ = scan_body(state, None)
         return state

@@ -1,5 +1,4 @@
-# Pure-JAX P2G with lax.scan over the 27 stencil offsets.
-# Avoids the (N, 27, *) intermediate that the default jax path materialises,
-# but still pays 27 small XLA kernel launches per substep -- slower than
-# cuda_fused (which keeps the 27-loop in registers), faster than jax.
+# Pure-JAX/XLA baseline with lax.scan over the 27 stencil offsets.
+# Avoids the (N, 27, *) intermediate that the older jax path materialised,
+# at the cost of one scatter per stencil offset.
 name: jax_v1_5

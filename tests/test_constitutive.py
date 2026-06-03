@@ -1,7 +1,7 @@
 import jax.numpy as jnp
 from mpm_jax.constitutive import (
     corotated_elasticity, sigma_elasticity, stvk_elasticity,
-    fluid_elasticity, volume_elasticity,
+    stvk_elasticity_jacobi, fluid_elasticity, volume_elasticity,
     ELASTICITY,
 )
 
@@ -22,6 +22,12 @@ def test_sigma_elasticity_identity_F_gives_zero_stress():
 
 def test_stvk_identity_F_gives_zero_stress():
     fn = stvk_elasticity(E=2e6, nu=0.4)
+    stress = fn(_make_F_batch(10))
+    assert stress.shape == (10, 3, 3)
+    assert jnp.allclose(stress, 0.0, atol=1e-3)
+
+def test_stvk_jacobi_identity_F_gives_zero_stress():
+    fn = stvk_elasticity_jacobi(E=2e6, nu=0.4)
     stress = fn(_make_F_batch(10))
     assert stress.shape == (10, 3, 3)
     assert jnp.allclose(stress, 0.0, atol=1e-3)
@@ -48,11 +54,12 @@ def test_elasticity_registry():
     assert "CorotatedElasticity" in ELASTICITY
     assert "SigmaElasticity" in ELASTICITY
     assert "StVKElasticity" in ELASTICITY
+    assert "StVKElasticityJacobi" in ELASTICITY
     assert "FluidElasticity" in ELASTICITY
     assert "VolumeElasticity" in ELASTICITY
 
 from mpm_jax.constitutive import (
-    identity_plasticity, drucker_prager_plasticity,
+    identity_plasticity, drucker_prager_plasticity, drucker_prager_plasticity_jacobi,
     von_mises_plasticity, sigma_plasticity,
     PLASTICITY, get_constitutive,
 )
@@ -63,8 +70,16 @@ def test_identity_plasticity_returns_F_unchanged():
     result = fn(F)
     assert jnp.allclose(result, F)
 
+
 def test_drucker_prager_preserves_shape():
     fn = drucker_prager_plasticity(E=2e6, nu=0.4, friction_angle=25.0, cohesion=0.0)
+    F = _make_F_batch(10)
+    result = fn(F)
+    assert result.shape == (10, 3, 3)
+    assert jnp.allclose(result, F, atol=1e-2)
+
+def test_drucker_prager_jacobi_preserves_shape():
+    fn = drucker_prager_plasticity_jacobi(E=2e6, nu=0.4, friction_angle=25.0, cohesion=0.0)
     F = _make_F_batch(10)
     result = fn(F)
     assert result.shape == (10, 3, 3)
@@ -87,6 +102,7 @@ def test_sigma_plasticity_clamps_jacobian():
 def test_plasticity_registry():
     assert "IdentityPlasticity" in PLASTICITY
     assert "DruckerPragerPlasticity" in PLASTICITY
+    assert "DruckerPragerPlasticityJacobi" in PLASTICITY
     assert "VonMisesPlasticity" in PLASTICITY
     assert "SigmaPlasticity" in PLASTICITY
 

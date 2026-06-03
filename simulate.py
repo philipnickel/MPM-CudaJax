@@ -44,6 +44,164 @@ def visualize_frames(frames, export_path, center=[0.5, 0.5, 0.5],
     plotter.close()
 
 
+def _color_to_rgb(color):
+    colors = {
+        "blue": (0.25, 0.45, 1.0),
+        "orange": (1.0, 0.55, 0.15),
+        "white": (0.92, 0.94, 1.0),
+    }
+    if isinstance(color, str):
+        return colors.get(color, (0.8, 0.8, 0.8))
+    return tuple(color)
+
+
+def visualize_frames_warp_usd(frames, export_path, color='white', radius=0.008, fps=30):
+    import warp.render
+
+    renderer = warp.render.UsdRenderer(export_path, up_axis='Z', fps=fps, scaling=1.0)
+    renderer.render_ground(size=1.0)
+    rgb = _color_to_rgb(color)
+    for i, points in enumerate(frames):
+        renderer.begin_frame(i / fps)
+        renderer.render_points(
+            name="particles",
+            points=np.asarray(points, dtype=np.float32),
+            radius=radius,
+            colors=rgb,
+            as_spheres=True,
+        )
+        renderer.end_frame()
+    renderer.save()
+
+
+def visualize_frames_warp_opengl(frames, export_path, color='white', radius=0.008,
+                                 fps=30, width=960, height=720, write_usd_path=None):
+    import imageio.v2 as imageio
+    import pyglet
+
+    pyglet.options['headless'] = True
+
+    import warp as wp
+    import warp.render
+
+    renderer = wp.render.OpenGLRenderer(
+        title="MPM-CudaJax",
+        headless=True,
+        screen_width=width,
+        screen_height=height,
+        near_plane=0.01,
+        far_plane=10.0,
+        camera_fov=35.0,
+        camera_pos=(1.65, 1.65, 1.25),
+        camera_front=(-0.62, -0.62, -0.48),
+        camera_up=(0.0, 0.0, 1.0),
+        background_color=(0.78, 0.82, 0.86),
+        draw_grid=False,
+        draw_sky=False,
+        draw_axis=False,
+        show_info=False,
+        fps=fps,
+        vsync=False,
+    )
+
+    rgb = _color_to_rgb(color)
+    pixels = wp.zeros((height, width, 3), dtype=wp.float32)
+    images = []
+
+    try:
+        for i, points in enumerate(frames):
+            renderer.begin_frame(i / fps)
+            renderer.render_ground(size=1.0)
+            renderer.render_points(
+                name="particles",
+                points=np.asarray(points, dtype=np.float32),
+                radius=radius,
+                colors=rgb,
+                as_spheres=True,
+            )
+            renderer.end_frame()
+            renderer.get_pixels(pixels, split_up_tiles=False, mode='rgb')
+            img = np.clip(pixels.numpy() * 255.0, 0, 255).astype(np.uint8)
+            images.append(img)
+    finally:
+        renderer.clear()
+
+    imageio.mimsave(export_path, images, fps=fps)
+    if write_usd_path:
+        visualize_frames_warp_usd(frames, write_usd_path, color=color, radius=radius, fps=fps)
+
+
+def _ensure_ovrtx_render_product(stage_path, width=960, height=540):
+    from pxr import Gf, Usd, UsdGeom, UsdRender
+
+    stage = Usd.Stage.Open(str(stage_path))
+    if stage is None:
+        raise RuntimeError(f"Failed to open USD stage: {stage_path}")
+
+    UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
+
+    camera_path = "/Render/ViewCamera"
+    product_path = "/Render/Camera"
+    camera = UsdGeom.Camera.Define(stage, camera_path)
+    camera.CreateFocalLengthAttr(30.0)
+    camera.CreateHorizontalApertureAttr(20.955)
+    camera.CreateVerticalApertureAttr(15.2908)
+    camera.CreateClippingRangeAttr(Gf.Vec2f(0.01, 10.0))
+
+    eye = Gf.Vec3d(2.4, 2.2, 1.7)
+    target = Gf.Vec3d(0.5, 0.5, 0.28)
+    up = Gf.Vec3d(0.0, 0.0, 1.0)
+    view = Gf.Matrix4d().SetLookAt(eye, target, up)
+    xform = UsdGeom.Xformable(camera)
+    xform.ClearXformOpOrder()
+    xform.AddTransformOp().Set(view.GetInverse())
+
+    stage.DefinePrim("/Render")
+    camera_product = UsdRender.Product.Define(stage, product_path)
+    camera_product.CreateResolutionAttr(Gf.Vec2i(width, height))
+    camera_product.GetCameraRel().SetTargets([camera_path])
+    camera_product.GetOrderedVarsRel().SetTargets(["/Render/Camera/LdrColor"])
+
+    ldr_color = UsdRender.Var.Define(stage, "/Render/Camera/LdrColor")
+    ldr_color.CreateSourceNameAttr("LdrColor")
+
+    root = stage.GetPrimAtPath("/root")
+    if root.IsValid():
+        stage.SetDefaultPrim(root)
+    stage.GetRootLayer().Save()
+    return product_path
+
+
+def visualize_frames_ovrtx_mp4(frames, export_path, color='white', radius=0.008,
+                               fps=30, width=960, height=540, write_usd_path=None):
+    import imageio.v2 as imageio
+
+    usd_path = write_usd_path or os.path.splitext(export_path)[0] + ".ovrtx.usd"
+    visualize_frames_warp_usd(frames, usd_path, color=color, radius=radius, fps=fps)
+    product_path = _ensure_ovrtx_render_product(usd_path, width=width, height=height)
+
+    import ovrtx
+
+    print("Creating OVRTX renderer. First run may compile shaders...")
+    renderer = ovrtx.Renderer()
+    renderer.open_usd(str(usd_path))
+
+    with imageio.get_writer(export_path, fps=fps, codec="libx264", quality=8,
+                            macro_block_size=1) as writer:
+        for frame in tqdm(range(len(frames)), desc='OVRTX render'):
+            renderer.update_from_usd_time(frame / fps)
+            products = renderer.step(
+                render_products={product_path},
+                delta_time=1.0 / fps,
+            )
+            product = products[product_path]
+            if not product.frames:
+                raise RuntimeError("OVRTX returned no frames.")
+            var = product.frames[0].render_vars["LdrColor"].map(device=ovrtx.Device.CPU)
+            pixels = np.from_dlpack(var)
+            writer.append_data(np.asarray(pixels[..., :3]))
+
+
 # ---------------------------------------------------------------------------
 # Unified run path
 # ---------------------------------------------------------------------------
@@ -61,7 +219,7 @@ def _maybe_enable_cuda_graphs(cfg: DictConfig):
     WHILE (the lax.scan substep loop) into command buffers, which the GPU
     runtime executes as a single replayed graph per substep.
     """
-    kernel_name = cfg.get('kernel', {}).get('name', 'jax')
+    kernel_name = cfg.get('kernel', {}).get('name', 'jax_v1_5')
     if kernel_name != 'cuda_v3_inline':
         return
     if not cfg.get('kernel', {}).get('cuda_graph', False):
@@ -80,7 +238,7 @@ def _run_jax_solver(solver, cfg: DictConfig):
     import jax.numpy as jnp
 
     sim = cfg.sim
-    kernel_name = cfg.get('kernel', {}).get('name', 'jax')
+    kernel_name = cfg.get('kernel', {}).get('name', 'jax_v1_5')
     bench = cfg.get('benchmark', False)
 
     def _warmup_metrics(s):
@@ -240,7 +398,7 @@ def main(cfg: DictConfig):
             "profile=jax, and profile=warp are supported."
         )
 
-    kernel_name = cfg.get('kernel', {}).get('name', 'jax')
+    kernel_name = cfg.get('kernel', {}).get('name', 'jax_v1_5')
     is_warp_bonus = kernel_name in {'warp_bonus_graph', 'warp_bonus_v2_graph'}
 
     # CUDA Graphs toggle must happen before any `import jax` in this process
@@ -291,9 +449,43 @@ def main(cfg: DictConfig):
         orig_cwd = hydra.utils.get_original_cwd()
         output_dir = os.path.join(orig_cwd, cfg.output_dir)
         os.makedirs(output_dir, exist_ok=True)
-        export_path = os.path.join(output_dir, f"{cfg.tag}_{kernel_name}.gif")
-        print(f"\nRendering to {export_path}...")
-        visualize_frames(frames, export_path, size=[1, 1, 1], c=cfg.material.color)
+        render_cfg = cfg.get('render', {})
+        render_backend = render_cfg.get('backend', 'pyvista_gif')
+        fps = int(render_cfg.get('fps', 30))
+        radius = float(render_cfg.get('point_radius', 0.008))
+        if render_backend == 'warp_opengl':
+            export_path = os.path.join(output_dir, f"{cfg.tag}_{kernel_name}.gif")
+            usd_path = None
+            if bool(render_cfg.get('write_usd', False)):
+                usd_path = os.path.join(output_dir, f"{cfg.tag}_{kernel_name}.usd")
+            print(f"\nRendering with Warp OpenGL to {export_path}...")
+            visualize_frames_warp_opengl(
+                frames, export_path, color=cfg.material.color, radius=radius,
+                fps=fps, width=int(render_cfg.get('width', 960)),
+                height=int(render_cfg.get('height', 720)), write_usd_path=usd_path,
+            )
+        elif render_backend == 'warp_usd':
+            export_path = os.path.join(output_dir, f"{cfg.tag}_{kernel_name}.usd")
+            print(f"\nRendering with Warp USD to {export_path}...")
+            visualize_frames_warp_usd(
+                frames, export_path, color=cfg.material.color, radius=radius, fps=fps)
+        elif render_backend == 'ovrtx_mp4':
+            export_path = os.path.join(output_dir, f"{cfg.tag}_{kernel_name}.mp4")
+            usd_path = None
+            if bool(render_cfg.get('write_usd', False)):
+                usd_path = os.path.join(output_dir, f"{cfg.tag}_{kernel_name}.ovrtx.usd")
+            print(f"\nRendering with OVRTX to {export_path}...")
+            visualize_frames_ovrtx_mp4(
+                frames, export_path, color=cfg.material.color, radius=radius,
+                fps=fps, width=int(render_cfg.get('width', 960)),
+                height=int(render_cfg.get('height', 540)), write_usd_path=usd_path,
+            )
+        elif render_backend == 'pyvista_gif':
+            export_path = os.path.join(output_dir, f"{cfg.tag}_{kernel_name}.gif")
+            print(f"\nRendering to {export_path}...")
+            visualize_frames(frames, export_path, size=[1, 1, 1], c=cfg.material.color, fps=fps)
+        else:
+            raise RuntimeError(f"Unsupported render.backend={render_backend!r}.")
     elif cfg.get('benchmark', False):
         print("\nBenchmark mode: skipping GIF rendering.")
 

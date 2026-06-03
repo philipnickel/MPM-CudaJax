@@ -126,6 +126,7 @@ nvidia-cudnn-cu12 = "*"
 default = { features = ["cpu", "dev"], solve-group = "cpu" }
 gpu = { features = ["gpu", "dev"], solve-group = "gpu" }
 hpc = { features = ["hpc", "dev"], solve-group = "hpc" }
+rendering = { features = ["gpu", "rendering", "dev"], solve-group = "rendering" }
 
 [tool.pixi.tasks]
 test = "pytest tests/ -v"
@@ -147,8 +148,27 @@ sweep = "python simulate.py -cn sweep_baseline"
 sweep-quick = "python simulate.py -cn sweep_quick"
 sweep-all = "python simulate.py -cn sweep_all"
 
+[tool.pixi.feature.gpu.target.linux-64.pypi-dependencies]
+pyglet = ">=2.0"
+usd-core = ">=26.5, <27"
+
+[tool.pixi.feature.rendering]
+platforms = ["linux-64"]
+
+[tool.pixi.feature.rendering.dependencies]
+imageio-ffmpeg = "*"
+
+[tool.pixi.feature.rendering.system-requirements]
+libc = { family = "glibc", version = "2.35" }
+
+[tool.pixi.feature.rendering.tasks]
+render-snow-preview = "python scripts/render_ovrtx_smoke.py output/snow_warp_5000_jax_v1_5.usd output/ovrtx_snow_preview.png"
+
 [tool.pixi.feature.hpc.tasks]
 sim = "python simulate.py"
 sweep = "python simulate.py -cn sweep_baseline"
 sweep-quick = "python simulate.py -cn sweep_quick"
 sweep-all = "python simulate.py -cn sweep_all"
+
+[tool.pixi.feature.rendering.target.linux-64.pypi-dependencies]
+ovrtx = "==0.3.0.312915"

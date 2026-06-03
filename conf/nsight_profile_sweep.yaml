@@ -7,16 +7,20 @@ defaults:
   - _self_
 
 kernel:
-  name: jax
+  name: jax_v1_5
 
 material:
   elasticity:
-    name: CorotatedElasticityJacobi
+    name: StVKElasticityJacobi
     E: 2e6
     nu: 0.4
   plasticity:
-    name: IdentityPlasticity
-  color: blue
+    name: DruckerPragerPlasticityJacobi
+    E: 2e6
+    nu: 0.4
+    friction_angle: 25.0
+    cohesion: 0.0
+  color: orange
 
 nsight:
   phase: p2g
@@ -40,7 +44,6 @@ nsight:
     title: P2G Stage Throughput Sweep
   sweep:
     kernels:
-      - jax
       - jax_v1_5
       - cuda_v1_inline
       - cuda_v2_inline

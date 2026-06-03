@@ -28,7 +28,7 @@ pixi install
 pixi run python simulate.py sim.num_frames=20
 ```
 A jelly cube falls onto a sticky floor and renders to
-`output/jelly_jax.gif`. With `sim.num_frames=20` it takes a few seconds.
+`output/jelly_jacobi_jax_v1_5.gif`. With `sim.num_frames=20` it takes a few seconds.
 
 **Have an NVIDIA GPU (Linux)?** Install the `gpu` env (this also builds
 the custom CUDA kernels via CMake — `nvcc` and `gxx` ship from
@@ -118,8 +118,7 @@ pixi run -e gpu python simulate.py
 pixi run -e gpu python simulate.py benchmark=true
 
 # Pick a kernel
-pixi run -e gpu python simulate.py kernel=jax                                          # XLA baseline
-pixi run -e gpu python simulate.py kernel=jax_v1_5                                     # scan over stencil offsets
+pixi run -e gpu python simulate.py kernel=jax_v1_5                                     # JAX/XLA baseline
 pixi run -e gpu python simulate.py kernel=cuda_v1_inline material=jelly_jacobi
 pixi run -e gpu python simulate.py kernel=cuda_v2_inline material=jelly_jacobi         # warp-shuffle (default: fori loop)
 pixi run -e gpu python simulate.py kernel=cuda_v2_inline kernel.loop_kind=python material=jelly_jacobi
@@ -137,8 +136,7 @@ pixi run -e gpu python simulate.py sim.n_particles=1000000 sim.num_grids=64
 
 | `kernel=` | What it does |
 |---|---|
-| `jax` | Pure JAX/XLA. cuSOLVER SVD, vmap'd compute, `jnp.at[].add()` scatter, `lax.fori_loop` over substeps. |
-| `jax_v1_5` | Pure JAX/XLA, but P2G scans over the 27 stencil offsets (`lax.scan`) to avoid `(N, 27, *)` HBM intermediates. |
+| `jax_v1_5` | Pure JAX/XLA baseline. P2G scans over the 27 stencil offsets (`lax.scan`) to avoid `(N, 27, *)` HBM intermediates. |
 | `cuda_v1_inline` | Inline-weight CUDA P2G (one thread/particle, global `atomicAdd`) + CUDA G2P; no `(N, 27, *)` tensors. |
 | `cuda_v2_inline` | Warp-shuffle coalesced inline CUDA P2G + CUDA G2P. Default `loop_kind=fori`. Override with `kernel.loop_kind=python`. |
 | `cuda_v3_inline` | Morton-sorted inline CUDA P2G + CUDA G2P. `kernel.cuda_graph=true` enables XLA command-buffer (CUDA Graph) replay. |
@@ -151,6 +149,7 @@ Removed kernels (raise `ValueError` with a migration message):
 
 | Old name | Replacement |
 |---|---|
+| `jax` | `jax_v1_5` |
 | `cuda_v1`, `cuda_v2`, `cuda_v4` | `cuda_v1_inline`, `cuda_v2_inline`, `cuda_v4_inline` |
 | `cuda_fused` | Deprecated; use an inline kernel and `profile=jax` |
 | `cuda_v2_fori_inline` | `kernel=cuda_v2_inline` (fori is the default) |
@@ -192,7 +191,7 @@ pixi run -e gpu python simulate.py -cn sweep_profile
 Each combination gets its own `multirun/<date>/<run>/` subdir with a `results.json`. Sweeps
 should use Hydra multirun so log parsers see the expected directory structure.
 
-For an ad-hoc sweep: `pixi run -e gpu python simulate.py -m sim.n_particles=5000,50000,200000 kernel=jax,cuda_v2_inline benchmark=true`.
+For an ad-hoc sweep: `pixi run -e gpu python simulate.py -m sim.n_particles=5000,50000,200000 kernel=jax_v1_5,cuda_v2_inline benchmark=true`.
 
 ## Profiling
 
@@ -217,7 +216,7 @@ pixi run -e gpu python simulate.py profile=warp benchmark=true \
 
 ```bash
 pixi run -e gpu python profile_nsight.py -cn nsight_profile \
-    kernel=jax material=jelly_jacobi nsight.phase=p2g sim.n_particles=4096
+    kernel=jax_v1_5 material=jelly_jacobi nsight.phase=p2g sim.n_particles=4096
 ```
 
 ## Config
@@ -226,9 +225,9 @@ Hydra config groups in `conf/`:
 
 | Group | Options | Description |
 |---|---|---|
-| `material` | `jelly` (default), `jelly_jacobi`, `sand` | Constitutive model |
+| `material` | `sand_jacobi` (default), `jelly_jacobi` | Constitutive model |
 | `sim` | `default` | n_particles, num_grids, dt, BCs, ... |
-| `kernel` | `jax` (default), `jax_v1_5`, `cuda_v*_inline`, `warp_bonus_*` | P2G/G2P implementation |
+| `kernel` | `jax_v1_5` (default), `cuda_v*_inline`, `warp_bonus_*` | P2G/G2P implementation |
 | `profile` | `none` (default), `jax`, `warp` | Profiling backend |
 
 Top-level fields: `benchmark`, `tag`, `output_dir`. All overridable from CLI:
@@ -273,9 +272,9 @@ MPM-CudaJax/
 ├── conf/
 │   ├── config.yaml
 │   ├── nsight_profile.yaml
-│   ├── material/            # jelly.yaml, jelly_jacobi.yaml, sand.yaml
+│   ├── material/            # sand_jacobi.yaml, jelly_jacobi.yaml
 │   ├── sim/default.yaml
-│   ├── kernel/              # jax.yaml, jax_v1_5.yaml, cuda_v*.yaml, warp_*.yaml
+│   ├── kernel/              # jax_v1_5.yaml, cuda_v*.yaml, warp_*.yaml
 │   ├── profile/             # none.yaml, jax.yaml, warp.yaml
 │   └── sweep_*.yaml
 └── src/

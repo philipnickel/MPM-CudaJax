@@ -416,9 +416,9 @@ def make_fused_stages(params, elasticity_cfg, plasticity_cfg, pre_particle_fn, p
       * Plasticity is applied at the START of the step (kernel returns the
         corrected F). The G2P stage uses that corrected F and skips the
         separate plasticity_fn call.
-      * Constitutive model is hard-coded to Corotated elasticity with snow-
-        style singular-value clamping (Stomakhin 2013). Identity plasticity
-        is realised by setting theta_c = theta_s = 1e9 (no clamp).
+      * Constitutive model is hard-coded to Corotated elasticity with optional
+        singular-value clamping. Identity plasticity is realised by setting
+        theta_c = theta_s = 1e9 (no clamp).
 
     Returns (jit_p2g_fused_stage, jit_grid_stage, jit_g2p_no_plast_stage)
     or raises if the kernel isn't available or the material config is
@@ -438,20 +438,14 @@ def make_fused_stages(params, elasticity_cfg, plasticity_cfg, pre_particle_fn, p
             f"cuda_fused kernel only supports CorotatedElasticity, "
             f"got {elasticity_cfg.name}.")
 
-    # Map plasticity config to (theta_c, theta_s, hardening_coeff). The kernel
-    # implements snow-style clamping; with theta_c=theta_s=1e9 there's no clamp,
-    # i.e. effectively identity plasticity.
+    # Map plasticity config to (theta_c, theta_s, hardening_coeff). With
+    # theta_c=theta_s=1e9 there's no clamp, i.e. effectively identity plasticity.
     plast_name = plasticity_cfg.name
     if plast_name == "IdentityPlasticity":
         theta_c, theta_s, hardening = 1e9, 1e9, 0.0
-    elif plast_name == "SnowPlasticity":
-        theta_c = float(plasticity_cfg.get("theta_c", 0.025))
-        theta_s = float(plasticity_cfg.get("theta_s", 0.0075))
-        hardening = float(plasticity_cfg.get("hardening", 10.0))
     else:
         raise NotImplementedError(
-            f"cuda_fused kernel only supports IdentityPlasticity or "
-            f"SnowPlasticity, got {plast_name}.")
+            f"cuda_fused kernel only supports IdentityPlasticity, got {plast_name}.")
 
     E = float(elasticity_cfg.E)
     nu = float(elasticity_cfg.nu)
