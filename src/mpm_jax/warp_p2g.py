@@ -300,13 +300,3 @@ def warp_p2g_supercell_tile(jax_p2g, x_sorted, v_sorted, C_sorted, stress_sorted
     )
     return grid_mv_flat.reshape((g3, 3)), grid_m
 
-
-def _home_super_cell_id(x, inv_dx, G, sc=SUPER_CELL_WIDTH):
-    px = x * inv_dx
-    base = jnp.floor(px - 0.5).astype(jnp.int32)
-    home = jnp.clip(base + 1, 0, G - 1)
-    Gs = G // sc
-    si = home[:, 0] // sc
-    sj = home[:, 1] // sc
-    sk = home[:, 2] // sc
-    return (si * (Gs * Gs) + sj * Gs + sk).astype(jnp.int32)

@@ -141,18 +141,6 @@ pixi run -e gpu python simulate.py sim.n_particles=1000000 sim.num_grids=64
 | `cuda_v4_inline` | Super-cell-owned grid tile inline CUDA P2G + CUDA G2P. |
 | `warp_v3_supercell_tile` | Hybrid JAX/Warp backend: JAX frame + stress/sort/grid/G2P orchestration, Warp `jax_callable` tiled P2G (`wp.launch_tiled` + `tile_scatter_add`). Default `kernel.graph_mode=jax`. |
 
-Removed kernels (raise `ValueError` with a migration message):
-
-| Old name | Replacement |
-|---|---|
-| `jax` | `jax_v1_5` |
-| `cuda_v1`, `cuda_v2`, `cuda_v4` | `cuda_v1_inline`, `cuda_v2_inline`, `cuda_v4_inline` |
-| `cuda_fused` | Removed; use an inline backend and `profile=jax` |
-| `cuda_v2_fori_inline` | `kernel=cuda_v2_inline` (fori is the default) |
-| `cuda_v3_fori_inline` | `kernel=cuda_v3_inline kernel.loop_kind=fori` |
-| `cuda_v6_inline` | `kernel=cuda_v3_inline kernel.cuda_graph=true` |
-| `warp_baseline_graph`, `warp_bonus_graph`, `warp_bonus_v2_graph` | Removed pure-Warp solver path; use `warp_v3_supercell_tile` for fair JAX-loop Warp comparisons |
-
 ## Architecture
 
 Three embarrassingly parallel phases per timestep:
@@ -273,12 +261,12 @@ MPM-CudaJax/
     └── mpm_jax/
         ├── types.py         # MPMState, MPMParams, make_params
         ├── solver.py        # MPMSolver
-        ├── registry.py      # KERNELS, REMOVED_KERNELS, build_solver(cfg)
+        ├── registry.py      # KERNELS, build_solver(cfg)
         ├── constitutive.py  # sand Jacobi elasticity + plasticity
         ├── boundary.py      # sticky surface collider
         ├── blocks/          # Pure math: weights, g2p, grid, svd, sort, init
         ├── backends.py      # Backend interface + shared JAX-owned frame loop
-        ├── stepping/        # Warp tiled P2G bridge helpers
+        ├── warp_p2g.py      # Warp tiled P2G bridge + jax_callable wrapper
         └── cuda/
             ├── p2g_cuda.py  # FFI registration + kernel wrappers
             ├── _lib/        # built .so files (gitignored)

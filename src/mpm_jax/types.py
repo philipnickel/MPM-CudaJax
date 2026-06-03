@@ -23,12 +23,6 @@ class MPMParams(NamedTuple):
     p_mass: float
     n_particles: int
 
-# Precomputed 27 offsets for 3x3x3 neighborhood
-OFFSET_27 = jnp.array(
-    [[i, j, k] for i in range(3) for j in range(3) for k in range(3)],
-    dtype=jnp.float32,
-)  # (27, 3)
-
 def make_params(
     n_particles: int,
     num_grids: int = 25,

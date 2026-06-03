@@ -213,10 +213,10 @@ def _supercell_boundaries(params, super_cell_width):
 def _cuda_v4_prepare(params, state, stress):
     from mpm_jax.cuda.p2g_cuda import (  # pylint: disable=import-outside-toplevel
         V4_SUPER_CELL_WIDTH,
-        _home_super_cell_id,
     )
+    from mpm_jax.blocks.sort import home_super_cell_id  # pylint: disable=import-outside-toplevel
 
-    super_id = _home_super_cell_id(
+    super_id = home_super_cell_id(
         state.x, params.inv_dx, params.num_grids, V4_SUPER_CELL_WIDTH)
     order = jnp.argsort(super_id)
     super_id_sorted = super_id[order]
@@ -258,12 +258,12 @@ def cuda_v4_backend(**_opts):
 
 
 def _warp_prepare(params, state, stress):
-    from mpm_jax.stepping.warp_hybrid_frame import (  # pylint: disable=import-outside-toplevel
+    from mpm_jax.warp_p2g import (  # pylint: disable=import-outside-toplevel
         SUPER_CELL_WIDTH,
-        _home_super_cell_id,
     )
+    from mpm_jax.blocks.sort import home_super_cell_id  # pylint: disable=import-outside-toplevel
 
-    super_id = _home_super_cell_id(state.x, params.inv_dx, params.num_grids, SUPER_CELL_WIDTH)
+    super_id = home_super_cell_id(state.x, params.inv_dx, params.num_grids, SUPER_CELL_WIDTH)
     order = jnp.argsort(super_id)
     super_id_sorted = super_id[order]
     cell_start = jnp.searchsorted(
@@ -277,7 +277,7 @@ def _warp_prepare(params, state, stress):
 
 def _warp_p2g(jax_p2g):
     def p2g(params, prepared):
-        from mpm_jax.stepping.warp_hybrid_frame import (  # pylint: disable=import-outside-toplevel
+        from mpm_jax.warp_p2g import (  # pylint: disable=import-outside-toplevel
             warp_p2g_supercell_tile,
         )
 
@@ -291,7 +291,7 @@ def _warp_p2g(jax_p2g):
 
 
 def warp_v3_supercell_backend(*, graph_mode="jax", num_grids=None, **_opts):
-    from mpm_jax.stepping.warp_hybrid_frame import (  # pylint: disable=import-outside-toplevel
+    from mpm_jax.warp_p2g import (  # pylint: disable=import-outside-toplevel
         SUPER_CELL_WIDTH,
         _make_jax_p2g_supercell_tile,
     )

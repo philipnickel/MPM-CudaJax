@@ -3,8 +3,6 @@
 # Usage: pixi run -e gpu python simulate.py -cn sweep_all
 #
 # Build CUDA kernels first: pixi install -e gpu
-# Note: cuda_v6_inline was removed; CUDA-Graph capture of cuda_v3_inline is
-# tested via: kernel=cuda_v3_inline kernel.cuda_graph=true
 defaults:
   - config
   - _self_

@@ -94,9 +94,9 @@ conf/                  Hydra config groups
   profile/             none.yaml, jax.yaml
   sweep_*.yaml         pre-baked Hydra multirun sweeps
 src/mpm_jax/
-  types.py             MPMState, MPMParams, make_params, OFFSET_27
+  types.py             MPMState, MPMParams, make_params
   solver.py            MPMSolver
-  registry.py          KERNELS dict, REMOVED_KERNELS dict, build_solver(cfg)
+  registry.py          KERNELS dict, build_solver(cfg)
   constitutive.py      sand Jacobi elasticity + plasticity
   boundary.py          sticky surface collider
   callbacks.py         on_frame callback helpers
@@ -107,10 +107,9 @@ src/mpm_jax/
     g2p.py             g2p: Grid-to-Particle gather + APIC update
     grid.py            grid_update: momentum normalise + gravity + damping; build_grid_x
     svd.py             3x3 Jacobi SVD (used by Warp paths)
-    sort.py            morton_argsort, _home_super_cell_id
+    sort.py            morton_argsort, home_super_cell_id
     init.py            get_particles: uniform particle initialisation
-  stepping/
-    warp_hybrid_frame.py Warp tiled P2G kernel + jax_callable bridge
+  warp_p2g.py          Warp tiled P2G kernel + jax_callable bridge
   cuda/
     p2g_cuda.py        loads prebuilt .so + jax.ffi.register_ffi_target
     _lib/              prebuilt .so files (gitignored, populated by CMake)
@@ -145,7 +144,6 @@ Three embarrassingly parallel phases per substep:
 Kernel selection is a registry, not an if/elif chain. `src/mpm_jax/registry.py` defines:
 
 - `KERNELS: dict[str, KernelSpec]` — maps `kernel.name` to a `KernelSpec(solver_cls, backend_factory, defaults)`. `build_solver(cfg)` reads this dict, builds particles/params/BCs/constitutive functions, creates the backend object, and passes it to `MPMSolver`.
-- `REMOVED_KERNELS: dict[str, str]` — migration messages for removed/renamed kernels.
 
 Current kernel names:
 
@@ -161,14 +159,6 @@ Current kernel names:
 Material baseline:
 - `material=sand_jacobi` is the default JAX/CUDA material path: StVK elasticity + Drucker-Prager plasticity, both using the in-repo Jacobi SVD.
 - The Warp backend is part of the same JAX loop as the CUDA/JAX variants, so `profile=jax` and ordinary benchmark timing apply.
-
-Removed/renamed kernels (error message from `build_solver`):
-- `jax` → use `jax_v1_5` as the JAX baseline.
-- `cuda_v1`, `cuda_v2`, `cuda_v4` → use the `_inline` variants.
-- `cuda_fused` → removed; use an inline backend and `profile=jax`.
-- `cuda_v2_fori_inline` → use `kernel=cuda_v2_inline loop_kind=fori` (now the default).
-- `cuda_v3_fori_inline` → use `kernel=cuda_v3_inline loop_kind=fori`.
-- `cuda_v6_inline` → use `kernel=cuda_v3_inline cuda_graph=true`.
 
 ## Common commands
 
@@ -249,7 +239,7 @@ CMake auto-detects the local GPU arch when `MPM_CUDA_ARCH` is unset.
   5. Register it in `src/mpm_jax/registry.py` `KERNELS` dict as `KernelSpec(MPMSolver, cuda_vX_backend)`.
   6. Add `conf/kernel/cuda_vX_inline.yaml`.
   7. Rebuild: `pixi run -e gpu rebuild-cuda` (or `pixi reinstall mpm-cudajax`).
-- **Adding a new Warp-in-JAX kernel:** put the Warp operation/bridge in `src/mpm_jax/stepping/` or a dedicated module, expose it through a `Backend` factory in `src/mpm_jax/backends.py`, and register that factory.
+- **Adding a new Warp-in-JAX kernel:** put the Warp operation/bridge in a dedicated module, expose it through a `Backend` factory in `src/mpm_jax/backends.py`, and register that factory.
 - Boundary conditions and constitutive models are registry-based (`REGISTRY` dict in `constitutive.py`, `build_boundary_fns` in `boundary.py`); add a function and a config entry.
 - **No `block_until_ready` inside the timed region in benchmark mode.** Both timing modes dispatch all frames back-to-back and sync exactly once after the loop; elapsed/num_frames is the average. Per-stage breakdown comes from `profile=jax` (TensorBoard trace) or `profile_nsight.py`, not from `simulate.py`'s output.
 - `simulate.py` enables XLA CUDA graph capture for `kernel=cuda_v3_inline cuda_graph=true` by setting `XLA_FLAGS` before JAX is imported. This must happen before any `import jax` in the process.

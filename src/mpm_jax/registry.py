@@ -36,21 +36,6 @@ KERNELS = {
     "warp_v3_supercell_tile": KernelSpec(MPMSolver, warp_v3_supercell_backend),
 }
 
-REMOVED_KERNELS = {
-    "jax": "Use jax_v1_5 as the JAX baseline.",
-    "cuda_v1": "Use cuda_v1_inline (scatter-only variant removed).",
-    "cuda_v2": "Use cuda_v2_inline.",
-    "cuda_v4": "Use cuda_v4_inline.",
-    "cuda_fused": "Removed; use an inline backend and profile=jax.",
-    "cuda_v2_fori_inline": "Use kernel=cuda_v2_inline with loop_kind=fori.",
-    "cuda_v3_fori_inline": "Use kernel=cuda_v3_inline with loop_kind=fori.",
-    "cuda_v6_inline": "Use kernel=cuda_v3_inline with cuda_graph=true.",
-    "warp_baseline_graph": "Pure-Warp solver removed; use warp_v3_supercell_tile for Warp-in-JAX comparisons.",
-    "warp_bonus_graph": "Pure-Warp solver removed; use warp_v3_supercell_tile.",
-    "warp_bonus_v2_graph": "Pure-Warp solver removed; use warp_v3_supercell_tile.",
-}
-
-
 def build_solver(cfg):
     """Construct the solver for cfg.kernel.name from the registry.
 
@@ -59,8 +44,6 @@ def build_solver(cfg):
     registered backend factory.
     """
     name = cfg.kernel.name
-    if name in REMOVED_KERNELS:
-        raise ValueError(f"kernel={name} removed. {REMOVED_KERNELS[name]}")
     spec = KERNELS[name]
     particles_np = get_particles(int(cfg.sim.n_particles),
                                  center=list(cfg.sim.center), size=list(cfg.sim.size))

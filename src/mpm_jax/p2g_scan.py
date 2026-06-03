@@ -20,10 +20,10 @@ import jax.numpy as jnp
 
 import jax
 
-from mpm_jax.types import OFFSET_27
+from mpm_jax.blocks.weights import OFFSET_27
 
 
-# 27 integer stencil offsets in (i, j, k) order matching solver.OFFSET_27.
+# 27 integer stencil offsets in (i, j, k) order.
 # Materialise as int32 once at import; the per-stencil B-spline indices and
 # index arithmetic are integer ops.
 OFFSET_27_INT = OFFSET_27.astype(jnp.int32)  # (27, 3)

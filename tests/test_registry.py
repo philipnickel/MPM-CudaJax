@@ -1,4 +1,4 @@
-from mpm_jax.registry import KERNELS, REMOVED_KERNELS, KernelSpec
+from mpm_jax.registry import KERNELS, KernelSpec
 
 
 def test_every_kernel_has_a_spec():
@@ -12,13 +12,6 @@ def test_every_kernel_has_a_spec():
         assert isinstance(spec, KernelSpec)
         assert spec.solver_cls is not None
         assert callable(spec.backend_factory)
-
-
-def test_removed_kernels_listed():
-    for name in ("jax", "cuda_v1", "cuda_v2", "cuda_v4", "cuda_fused",
-                 "cuda_v2_fori_inline", "cuda_v3_fori_inline", "cuda_v6_inline",
-                 "warp_baseline_graph", "warp_bonus_graph", "warp_bonus_v2_graph"):
-        assert name in REMOVED_KERNELS
 
 
 def test_build_solver_dispatches_jax_baseline_kernel():
@@ -47,12 +40,12 @@ def test_build_solver_dispatches_jax_baseline_kernel():
     solver.step()
 
 
-def test_build_solver_rejects_removed_kernel():
+def test_build_solver_rejects_unknown_kernel():
     import pytest
     from omegaconf import OmegaConf
     from mpm_jax.registry import build_solver
-    cfg = OmegaConf.create({"kernel": {"name": "cuda_v6_inline"}, "sim": {}, "material": {}})
-    with pytest.raises(ValueError, match="cuda_v3_inline"):
+    cfg = OmegaConf.create({"kernel": {"name": "unknown_kernel"}, "sim": {}, "material": {}})
+    with pytest.raises(KeyError):
         build_solver(cfg)
 
 

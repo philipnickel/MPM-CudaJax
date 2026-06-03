@@ -295,38 +295,6 @@ def cuda_p2g_v4_inline(x_sorted, v_sorted, C_sorted, stress_sorted, cell_start,
     return grid_mv, grid_m
 
 
-def _home_cell_id(x, inv_dx, G):
-    """Home cell = center stencil node for the quadratic B-spline.
-
-    Used by the cuda_v4_inline backend for the cell-major sort.
-    """
-    px = x * inv_dx
-    base = jnp.floor(px - 0.5).astype(jnp.int32)
-    home = base + 1
-    home = jnp.clip(home, 0, G - 1)
-    flat = home[:, 0] * (G * G) + home[:, 1] * G + home[:, 2]
-    return flat.astype(jnp.int32)
-
-
-def _home_super_cell_id(x, inv_dx, G, sc=V4_SUPER_CELL_WIDTH):
-    """Home super-cell id for the v4_inline cell-major sort.
-
-    A super-cell covers ``sc^3`` grid cells. The sort key is the super-cell
-    that contains the particle's home cell. Used by the cuda_v4_inline backend
-    to feed the kernel a CSR layout indexed by super-cell.
-    """
-    px = x * inv_dx
-    base = jnp.floor(px - 0.5).astype(jnp.int32)
-    home = base + 1
-    home = jnp.clip(home, 0, G - 1)
-    Gs = G // sc
-    si = home[:, 0] // sc
-    sj = home[:, 1] // sc
-    sk = home[:, 2] // sc
-    flat = si * (Gs * Gs) + sj * Gs + sk
-    return flat.astype(jnp.int32)
-
-
 def cuda_g2p_fused(x, F, grid_v, num_grids, dt, inv_dx, dx, clip_bound):
     """Fused CUDA G2P via JAX FFI.
 
@@ -371,6 +339,4 @@ __all__ = [
     "cuda_g2p_fused",
     # Super-cell helpers
     "V4_SUPER_CELL_WIDTH",
-    "_home_cell_id",
-    "_home_super_cell_id",
 ]
