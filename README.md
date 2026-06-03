@@ -1,13 +1,15 @@
 # MPM-CudaJax
 
 3D MLS-MPM (Moving Least Squares Material Point Method) solver in **JAX**
-with hand-written **CUDA** kernels integrated via JAX FFI. Investigates
-where JAX/XLA's automatic GPU compilation is sufficient and where custom
-CUDA wins.
+with hand-written **CUDA** and **Warp** kernels. Investigates where
+JAX/XLA's automatic GPU compilation is sufficient and where custom kernels
+win.
 
-The current CLI uses one fully JIT-compiled frame path. Use `profile=jax`
-to emit a TensorBoard trace with JAX host annotations and compiled
-`jax.named_scope` regions for P2G, grid update, G2P, and related stages.
+The solver uses a **registry-based class API**: `build_solver(cfg)` reads
+`KERNELS[kernel.name]`, constructs an `MPMSolver` (or `WarpGraphSolver`),
+and returns it ready to call. `solver.step()` advances one frame;
+`solver.solve(num_frames, on_frame=...)` runs the full simulation with an
+optional IO callback.
 
 ## Quickstart
 
@@ -50,10 +52,7 @@ Outputs:
 - GIF renders → `output/<tag>_<kernel>.gif`
 - Hydra logs / config snapshots → `outputs/<date>/<run>/`
 - Multirun sweep results → `multirun/<date>/<run>/`
-- Built CUDA `.so` files → `mpm_jax/cuda/_lib/` (rebuilds on `.cu` edit via `editable.rebuild=true`)
-
-If you want a guided tour of the kernel variants and what each one does,
-see [Kernel variants](#kernel-variants) below.
+- Built CUDA `.so` files → `src/mpm_jax/cuda/_lib/` (rebuilds on `.cu` edit via `editable.rebuild=true`)
 
 ## Setup
 
@@ -78,7 +77,7 @@ pixi run -e gpu python simulate.py
 
 CUDA kernels are built by [scikit-build-core](https://scikit-build-core.readthedocs.io/)
 + CMake during `pixi install -e gpu`. Output `.so` files land in
-`mpm_jax/cuda/_lib/` and are loaded at runtime via
+`src/mpm_jax/cuda/_lib/` and are loaded at runtime via
 `jax.ffi.register_ffi_target`. The build is best-effort: when `nvcc` is
 missing (the default CPU env) CMake's `check_language(CUDA)` returns
 early, the wheel installs cleanly, and the JAX baseline still works.
@@ -90,11 +89,24 @@ MPM_CUDA_ARCH=sm_90 pixi install -e gpu     # Hopper
 # default is 'native' (CMake auto-detects the local GPU)
 ```
 
-**DTU HPC:** no `module load` is needed — conda-forge ships `cuda-nvcc`
-and `gxx` inside the `gpu` env. Just:
+**DTU HPC:** no `module load` is needed for the `gpu` env — conda-forge ships `cuda-nvcc`
+and `gxx` inside the `gpu` env. For clusters where the conda-forge CUDA
+lags the driver, use the `hpc` env with `module load` instead:
 ```bash
+# gpu env (self-contained):
 MPM_CUDA_ARCH=sm_90 pixi install -e gpu
+
+# hpc env (links against site-provided CUDA toolkit):
+module load nvhpc/24.1
+MPM_CUDA_ARCH=sm_90 pixi install -e hpc
+pixi run -e hpc python simulate.py ...
 ```
+
+**Warp 1.14:** The `gpu` env pins `warp-lang==1.14.0` from PyPI.
+conda-forge only carries 1.13, which has a tile-kernel bug on
+sm_120/Blackwell GPUs. The `glibc 2.34` system-requirement lets both the
+`manylinux_2_34` aarch64 wheel (GH200) and the `manylinux_2_28` x86_64
+wheel (H100/A100) resolve correctly.
 
 ## Usage
 
@@ -106,59 +118,64 @@ pixi run -e gpu python simulate.py
 pixi run -e gpu python simulate.py benchmark=true
 
 # Pick a kernel
-pixi run -e gpu python simulate.py kernel=jax        # XLA baseline
-pixi run -e gpu python simulate.py kernel=jax_v1_5   # scan over stencil offsets
-pixi run -e gpu python simulate.py kernel=warp_v1_inline material=jelly_jacobi
-pixi run -e gpu python simulate.py kernel=warp_v2_tile material=jelly_jacobi sim.n_particles=1000000
-pixi run -e gpu python simulate.py kernel=warp_v3_supercell_tile material=jelly_jacobi
+pixi run -e gpu python simulate.py kernel=jax                                          # XLA baseline
+pixi run -e gpu python simulate.py kernel=jax_v1_5                                     # scan over stencil offsets
+pixi run -e gpu python simulate.py kernel=cuda_v1_inline material=jelly_jacobi
+pixi run -e gpu python simulate.py kernel=cuda_v2_inline material=jelly_jacobi         # warp-shuffle (default: fori loop)
+pixi run -e gpu python simulate.py kernel=cuda_v2_inline kernel.loop_kind=python material=jelly_jacobi
+pixi run -e gpu python simulate.py kernel=cuda_v3_inline material=jelly_jacobi         # Morton sort
+pixi run -e gpu python simulate.py kernel=cuda_v3_inline kernel.cuda_graph=true material=jelly_jacobi
+pixi run -e gpu python simulate.py kernel=warp_baseline_graph material=jelly_jacobi benchmark=true
 pixi run -e gpu python simulate.py kernel=warp_bonus_graph material=jelly_jacobi benchmark=true
 pixi run -e gpu python simulate.py kernel=warp_bonus_v2_graph material=jelly_jacobi benchmark=true
-pixi run -e gpu python simulate.py kernel=cuda_v2_inline material=jelly_jacobi
-pixi run -e gpu python simulate.py kernel=cuda_v3_inline material=jelly_jacobi
 
 # Override sim params
 pixi run -e gpu python simulate.py sim.n_particles=1000000 sim.num_grids=64
 ```
 
-`kernel=cuda_fused` is deprecated in the CLI path. The benchmark driver now
-uses one fully JIT-compiled frame shape and relies on JAX traces for stage
-breakdown.
-
 ## Kernel variants
-
-Numbered `cuda_vN_inline` labels follow the project plan (course lectures L1–L4).
-The old scatter-only `cuda_v1`, `cuda_v2`, and `cuda_v4` kernels were removed
-because they kept the JAX-side `(N, 27, *)` materialisation bottleneck.
-`cuda_fused` is a deprecated exploratory path that fully fused P2G + G2P.
 
 | `kernel=` | What it does |
 |---|---|
-| `jax` | Pure JAX/XLA. cuSOLVER SVD, vmap'd compute, `jnp.at[].add()` scatter. |
-| `jax_v1_5` | Pure JAX/XLA, but P2G scans over the 27 stencil offsets to avoid a large P2G intermediate. |
-| `warp_v1_inline` | Inline P2G authored as an NVIDIA Warp kernel and called from inside JAX JIT through `warp.jax_experimental.jax_kernel`. |
-| `warp_v2_tile` | Experimental Warp tile P2G called through `warp.jax_experimental.jax_callable`; tile-loads 64-particle blocks before Warp-native atomic scatter. |
-| `warp_v3_supercell_tile` | Super-cell-owned Warp tile P2G: sort by home super-cell, accumulate a 4^3 shared tile with `tile_scatter_add`, then flush to global grid. |
-| `warp_bonus_graph` | Pure Warp prototype: bins particles by super-cell, runs tiled P2G + grid update + G2P in Warp, and replays captured CUDA graphs without JAX. Currently supports `material=jelly_jacobi`. |
-| `warp_bonus_v2_graph` | Pure Warp graph path that sorts particle ids only, then gathers state in tiled P2G/G2P to avoid copying sorted `x/v/C/F` buffers. Currently supports `material=jelly_jacobi`. |
-| `cuda_v*_inline` | Inline-weight CUDA P2G variants that avoid the `(N, 27, *)` P2G materialisation; paired with fused CUDA G2P in the fully JITted frame path. |
-| `cuda_fused` | Deprecated CLI path; retained in lower-level code/tests as the historical fully fused CUDA experiment. |
+| `jax` | Pure JAX/XLA. cuSOLVER SVD, vmap'd compute, `jnp.at[].add()` scatter, `lax.fori_loop` over substeps. |
+| `jax_v1_5` | Pure JAX/XLA, but P2G scans over the 27 stencil offsets (`lax.scan`) to avoid `(N, 27, *)` HBM intermediates. |
+| `cuda_v1_inline` | Inline-weight CUDA P2G (one thread/particle, global `atomicAdd`) + CUDA G2P; no `(N, 27, *)` tensors. |
+| `cuda_v2_inline` | Warp-shuffle coalesced inline CUDA P2G + CUDA G2P. Default `loop_kind=fori`. Override with `kernel.loop_kind=python`. |
+| `cuda_v3_inline` | Morton-sorted inline CUDA P2G + CUDA G2P. `kernel.cuda_graph=true` enables XLA command-buffer (CUDA Graph) replay. |
+| `cuda_v4_inline` | Super-cell-owned grid tile inline CUDA P2G + CUDA G2P. |
+| `warp_baseline_graph` | Pure-Warp CUDA graph baseline: simple per-particle atomic-scatter P2G, no super-cell sort (mirrors the JAX baseline). Supports `material=jelly_jacobi`. |
+| `warp_bonus_graph` | Pure Warp prototype: bins particles by super-cell, runs tiled P2G + grid update + G2P in Warp, and replays captured CUDA graphs without JAX. Supports `material=jelly_jacobi`. |
+| `warp_bonus_v2_graph` | Pure Warp graph path that sorts particle ids only (avoids copying sorted `x/v/C/F` buffers). Supports `material=jelly_jacobi`. |
 
-## Benchmark results
+Removed kernels (raise `ValueError` with a migration message):
 
-RTX 3080 (sm_86, 10 GB), 3D MLS-MPM, G=64³ grid,
-`benchmark=true`, wall-clock after warmup, jelly material (Corotated +
-Identity plasticity), 64³ background grid, dt = 3e-4 s, 10 substeps/frame.
-100–150 timed substeps per row.
+| Old name | Replacement |
+|---|---|
+| `cuda_v1`, `cuda_v2`, `cuda_v4` | `cuda_v1_inline`, `cuda_v2_inline`, `cuda_v4_inline` |
+| `cuda_fused` | Deprecated; use an inline kernel and `profile=jax` |
+| `cuda_v2_fori_inline` | `kernel=cuda_v2_inline` (fori is the default) |
+| `cuda_v3_fori_inline` | `kernel=cuda_v3_inline kernel.loop_kind=fori` |
+| `cuda_v6_inline` | `kernel=cuda_v3_inline kernel.cuda_graph=true` |
 
-**What the numbers showed:**
+## Architecture
 
-The removed scatter-only CUDA variants were not the right optimization target:
-replacing only XLA's scatter kept the large JAX-side `(N, 27, *)` intermediates
-and bought little or nothing. The current CUDA variants move the stencil work
-inside the custom kernel so the 27 contributions stay register-local.
+Three embarrassingly parallel phases per timestep:
 
-Only `cuda_fused` supports CorotatedElasticity with Identity or Snow
-plasticity (constitutive model is hard-coded inside the kernel).
+1. **P2G** — per-particle: stress (SVD) + B-spline weights + APIC momentum → scatter to grid
+2. **Grid update** — per-node: normalize momentum, apply gravity + damping + boundary conditions
+3. **G2P** — per-particle: gather grid velocities, update position/velocity/F
+
+The solver is class-based:
+
+- **`MPMSolver`** builds one JIT-compiled `_frame` function at construction time. Each call to `step()` runs `_frame(self.state)`, which contains `steps_per_frame` substeps as a single XLA program (via `lax.fori_loop` by default, or unrolled with `loop_kind="python"`). `self` is never traced.
+- **`WarpGraphSolver(MPMSolver)`** wraps the pure-Warp `WarpBonusSimulator` capture/replay engine. It does not build a JAX frame; `step()` calls `engine.launch_frame()` and syncs.
+
+Kernel selection is driven by `src/mpm_jax/registry.py`:
+- `KERNELS` maps each `kernel=<name>` to a `KernelSpec(solver_cls, build_frame, defaults)`.
+- `build_solver(cfg)` reads the registry, builds all closures (particles, params, BCs, constitutive fns), and returns the fully initialised solver.
+- No if/elif dispatch in `simulate.py`; the routing is entirely in the registry.
+
+The pure-JAX path compiles the entire frame (multiple substeps) as one XLA program. The inline CUDA variants (`cuda_v*_inline`) move per-particle stencil work into the CUDA kernel so the `(N, 27, *)` intermediate tensors never materialize in HBM. The `warp_bonus_*` kernels bypass JAX entirely and drive the GPU directly via captured CUDA graphs.
 
 ## Sweeps
 
@@ -172,33 +189,36 @@ pixi run -e gpu python simulate.py -cn sweep_scaling
 pixi run -e gpu python simulate.py -cn sweep_profile
 ```
 
-Each combination gets its own `multirun/<date>/<run>/` subdir. Sweeps
-should use Hydra multirun so log parsers see the structure they expect.
+Each combination gets its own `multirun/<date>/<run>/` subdir with a `results.json`. Sweeps
+should use Hydra multirun so log parsers see the expected directory structure.
+
+For an ad-hoc sweep: `pixi run -e gpu python simulate.py -m sim.n_particles=5000,50000,200000 kernel=jax,cuda_v2_inline benchmark=true`.
 
 ## Profiling
 
-The JAX profiler is wired in via the `profile=` config:
+**JAX profiler** (in-process, writes a TensorBoard trace):
 
 ```bash
-pixi run -e gpu python simulate.py profile=jax  benchmark=true \
+pixi run -e gpu python simulate.py profile=jax benchmark=true \
     kernel=cuda_v3_inline material=jelly_jacobi
 ```
 
-`profile=jax` writes a TensorBoard trace into the Hydra run directory:
+The trace is written to `outputs/<YYYY-MM-DD>/<HH-MM-SS>/jax_trace/` and includes
+`jax.named_scope` regions for elasticity, P2G, grid update, G2P, and plasticity.
 
+**Warp graph timing** (for pure-Warp kernels):
+
+```bash
+pixi run -e gpu python simulate.py profile=warp benchmark=true \
+    kernel=warp_bonus_graph material=jelly_jacobi
 ```
-outputs/<YYYY-MM-DD>/<HH-MM-SS>/
-  ├── .hydra/                         # config snapshot
-  ├── simulate.log                    # python output
-  ├── results.json
-  └── jax_trace/
+
+**Nsight Python profiler** (per-stage kernel analysis, requires `nsight-python`):
+
+```bash
+pixi run -e gpu python profile_nsight.py -cn nsight_profile \
+    kernel=jax material=jelly_jacobi nsight.phase=p2g sim.n_particles=4096
 ```
-
-Use the multirun output dir naming for sweeps: each Hydra run gets its own subdir under
-`multirun/<date>/<run>/`, with the same colocated structure.
-
-The trace includes host `TraceAnnotation` sections for build/warmup/benchmark
-and compiled `jax.named_scope` labels for the simulation stages.
 
 ## Config
 
@@ -206,15 +226,25 @@ Hydra config groups in `conf/`:
 
 | Group | Options | Description |
 |---|---|---|
-| `material` | `jelly` (default), `sand` | Constitutive model |
+| `material` | `jelly` (default), `jelly_jacobi`, `sand` | Constitutive model |
 | `sim` | `default` | n_particles, num_grids, dt, BCs, ... |
-| `kernel` | `jax` (default), `jax_v1_5`, inline CUDA variants | P2G implementation |
-| `profile` | `none` (default), `jax` | JAX TensorBoard trace |
+| `kernel` | `jax` (default), `jax_v1_5`, `cuda_v*_inline`, `warp_bonus_*` | P2G/G2P implementation |
+| `profile` | `none` (default), `jax`, `warp` | Profiling backend |
 
 Top-level fields: `benchmark`, `tag`, `output_dir`. All overridable from CLI:
 
 ```bash
 pixi run -e gpu python simulate.py sim.n_particles=100000 kernel=cuda_v3_inline benchmark=true
+```
+
+Kernel-specific knobs passed as top-level CLI overrides (merged into `cfg.kernel`):
+
+```bash
+# loop_kind: fori (default) | python (unrolled)
+pixi run -e gpu python simulate.py kernel=cuda_v2_inline kernel.loop_kind=python
+
+# cuda_graph: enable XLA command-buffer capture for cuda_v3_inline
+pixi run -e gpu python simulate.py kernel=cuda_v3_inline kernel.cuda_graph=true
 ```
 
 ## Tests
@@ -223,66 +253,48 @@ pixi run -e gpu python simulate.py sim.n_particles=100000 kernel=cuda_v3_inline 
 pixi run test
 ```
 
-Run the focused GPU checks with:
+Run focused GPU checks:
 
 ```bash
-pixi run -e gpu pytest tests/test_cuda_ffi_loader.py tests/test_jax_v1_5.py tests/test_cuda_v2_inline_matches_v1.py -q
+pixi run -e gpu pytest tests/test_cuda_ffi_loader.py tests/test_jax_v1_5.py \
+    tests/test_cuda_v2_inline_matches_v1.py -q
 ```
+
 
 ## Project Structure
 
 ```
 MPM-CudaJax/
-├── simulate.py              # Hydra entry + JAX trace capture
-├── pyproject.toml           # scikit-build-core build + pixi cpu / gpu envs
-├── pixi.lock                # locked deps for both envs (commit this)
+├── simulate.py              # Hydra entry + benchmark + GIF rendering
+├── profile_nsight.py        # Nsight Python per-stage profiler
+├── pyproject.toml           # scikit-build-core build + pixi cpu / gpu / hpc envs
+├── pixi.lock                # locked deps for all envs (commit this)
 ├── CMakeLists.txt           # CUDA kernel build (called by scikit-build-core)
 ├── conf/
 │   ├── config.yaml
-│   ├── material/            # jelly.yaml, sand.yaml
+│   ├── nsight_profile.yaml
+│   ├── material/            # jelly.yaml, jelly_jacobi.yaml, sand.yaml
 │   ├── sim/default.yaml
-│   ├── kernel/              # jax.yaml, jax_v1_5.yaml, warp/cuda inline kernels
-│   ├── profile/             # none / jax
+│   ├── kernel/              # jax.yaml, jax_v1_5.yaml, cuda_v*.yaml, warp_*.yaml
+│   ├── profile/             # none.yaml, jax.yaml, warp.yaml
 │   └── sweep_*.yaml
-├── mpm_jax/
-│   ├── solver.py            # vmap single-particle fns + build_jit_frame + build_jit_stages
-│   ├── warp_p2g.py          # Warp P2G kernel wrapped with warp.jax_experimental
-│   ├── constitutive.py      # 5 elasticity + 4 plasticity models
-│   ├── boundary.py
-│   └── cuda/
-│       ├── p2g_cuda.py      # FFI registration + make_fused_stages
-│       ├── _lib/            # built .so files (gitignored)
-│       └── kernels/
-│           ├── p2g_fused.cu          # v2: fused P2G in one kernel launch
-│           ├── p2g_inline.cu         # inline P2G scatter
-│           ├── p2g_v2_inline.cu      # inline P2G + warp coalescing
-│           ├── p2g_v3_inline.cu      # inline P2G + Morton sort
-│           ├── p2g_v4_inline.cu      # cell-major inline P2G
-│           └── g2p_fused.cu          # v2: fused G2P (paired with p2g_fused)
-└── tests/
+└── src/
+    └── mpm_jax/
+        ├── types.py         # MPMState, StepIntermediates, MPMParams, make_params
+        ├── solver.py        # MPMSolver, WarpGraphSolver + build_jit_stages
+        ├── registry.py      # KERNELS, REMOVED_KERNELS, build_solver(cfg)
+        ├── constitutive.py  # 5 elasticity + 4 plasticity models
+        ├── boundary.py      # 6 boundary condition types
+        ├── warp_graph.py    # WarpBonusSimulator: pure-Warp CUDA graph engine
+        ├── blocks/          # Pure math: weights, p2g, g2p, grid, svd, sort, init
+        ├── stepping/        # Frame builders: jax_frames, cuda_frames,
+        │                    #                 warp_graph_frame, substep
+        └── cuda/
+            ├── p2g_cuda.py  # FFI registration + kernel wrappers
+            ├── _lib/        # built .so files (gitignored)
+            └── kernels/     # p2g_inline.cu, p2g_v2_inline.cu, p2g_v3_inline.cu,
+                             # p2g_v4_inline.cu, g2p_fused.cu
 ```
-
-## Architecture
-
-Three embarrassingly parallel phases per timestep:
-
-1. **P2G** — per-particle: stress (SVD) + B-spline weights + APIC momentum → scatter to grid
-2. **Grid update** — per-node: normalize momentum, apply gravity + damping + boundary conditions
-3. **G2P** — per-particle: gather grid velocities, update position/velocity/F
-
-Each phase is implemented as a `jax.vmap` over a single-particle function.
-The pure-JAX path JIT-compiles the entire frame (multiple substeps) as
-one XLA program via `jax.lax.scan`.
-
-The deprecated `cuda_fused` path collapses P2G and G2P each into a single CUDA kernel launch.
-Each thread runs the whole per-particle pipeline in registers — no
-intermediate tensors of shape `(N, 27, 3)` ever exist in HBM. That's the
-key structural advantage: with the other CUDA variants (v1/v3/v4) only
-the scatter is replaced, and XLA still has to materialise the
-`(N, 27, 3)` momentum tensor across the FFI boundary to feed it. cuda_fused
-also computes its own 3×3 Jacobi SVD in-thread instead of calling
-cuSOLVER, because cuSOLVER is host-side and would force the same
-materialisation.
 
 ## References
 

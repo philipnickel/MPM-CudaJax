@@ -23,7 +23,8 @@ import numpy as np
 import pytest
 from omegaconf import OmegaConf
 
-from mpm_jax.solver import MPMState, make_params, build_jit_stages
+from mpm_jax.types import MPMState, make_params
+from mpm_jax.solver import build_jit_stages
 from mpm_jax.constitutive import get_constitutive
 from mpm_jax.boundary import build_boundary_fns
 

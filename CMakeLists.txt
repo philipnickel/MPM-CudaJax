@@ -37,13 +37,13 @@ endif()
 message(STATUS "JAX FFI include: ${JAX_FFI_INCLUDE}")
 message(STATUS "CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
 
-set(KERNEL_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/mpm_jax/cuda/kernels)
+set(KERNEL_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/mpm_jax/cuda/kernels)
 set(KERNELS p2g_fused p2g_inline p2g_v2_inline p2g_v3_inline p2g_v4_inline g2p_fused)
 
 # Drop libs into mpm_jax/cuda/_lib/ in BOTH the source tree (for editable
 # installs, where p2g_cuda.py looks them up via Path(__file__).parent) and
 # the wheel's mpm_jax/cuda/_lib/ (for proper installs).
-set(KERNEL_OUT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/mpm_jax/cuda/_lib)
+set(KERNEL_OUT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/mpm_jax/cuda/_lib)
 
 foreach(name ${KERNELS})
     add_library(${name} SHARED ${KERNEL_SRC_DIR}/${name}.cu)
@@ -60,5 +60,5 @@ foreach(name ${KERNELS})
         OUTPUT_NAME "${name}"
         LIBRARY_OUTPUT_DIRECTORY ${KERNEL_OUT_DIR}
     )
-    install(TARGETS ${name} LIBRARY DESTINATION mpm_jax/cuda/_lib)
+    install(TARGETS ${name} LIBRARY DESTINATION src/mpm_jax/cuda/_lib)
 endforeach()

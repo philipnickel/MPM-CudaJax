@@ -17,12 +17,12 @@ import hydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
-from simulate import get_particles
+from mpm_jax.blocks.init import get_particles
 
 _UNSUPPORTED_ANALYZE_CONFIG_KEYS = {"configs"}
 _SCRIPT_NSIGHT_KEYS = {"phase", "include_step_total", "write_json", "plot", "sweep", "configs", "analyze"}
 
-_WARP_BONUS_KERNELS = {"warp_bonus_graph", "warp_bonus_v2_graph"}
+_WARP_BONUS_KERNELS = {"warp_baseline_graph", "warp_bonus_graph", "warp_bonus_v2_graph"}
 _JAX_P2G_KERNELS = {
     "jax",
     "jax_v1_5",
@@ -33,9 +33,6 @@ _JAX_P2G_KERNELS = {
     "cuda_v3_fori_inline",
     "cuda_v4_inline",
     "cuda_v6_inline",
-    "warp_v1_inline",
-    "warp_v2_tile",
-    "warp_v3_supercell_tile",
 }
 _P2G_KERNELS = _WARP_BONUS_KERNELS | _JAX_P2G_KERNELS
 
@@ -62,18 +59,20 @@ def _require_nsight():
 def _warp_bonus_sim(cfg: DictConfig):
     import warp as wp
 
-    from mpm_jax.warp_bonus import WarpBonusSimulator
+    from mpm_jax.warp_graph import WarpBonusSimulator
 
     kernel_name = cfg.get("kernel", {}).get("name", "warp_bonus_graph")
     indexed_sort = kernel_name == "warp_bonus_v2_graph"
+    baseline = kernel_name == "warp_baseline_graph"
     n = int(cfg.sim.n_particles)
     precompute_stress = not (indexed_sort and n >= 150_000_000)
-    particles = get_particles(n, center=list(cfg.sim.center), size=[0.5, 0.5, 0.5])
+    particles = get_particles(n, center=list(cfg.sim.center), size=list(cfg.sim.size))
     sim = WarpBonusSimulator(
         particles,
         cfg,
         indexed_sort=indexed_sort,
         precompute_stress=precompute_stress,
+        baseline=baseline,
     )
 
     sim._substep()
@@ -89,7 +88,7 @@ def _p2g_annotation_name(cfg: DictConfig):
 def _warp_bonus_p2g_runner(cfg: DictConfig, nsight):
     import warp as wp
 
-    from mpm_jax import warp_bonus as wb
+    from mpm_jax import warp_graph as wb
 
     sim = _warp_bonus_sim(cfg)
     indexed_sort = sim.indexed_sort
@@ -178,8 +177,7 @@ def _warp_bonus_p2g_runner(cfg: DictConfig, nsight):
 def _jax_problem(cfg: DictConfig):
     from simulate import _maybe_enable_cuda_graphs
 
-    kernel_name = cfg.get("kernel", {}).get("name", "jax")
-    _maybe_enable_cuda_graphs(kernel_name)
+    _maybe_enable_cuda_graphs(cfg)
 
     import jax.numpy as jnp
 
@@ -190,7 +188,7 @@ def _jax_problem(cfg: DictConfig):
     sim = cfg.sim
     mat = cfg.material
     n = int(sim.n_particles)
-    cube_np = get_particles(n, center=list(sim.center), size=[0.5, 0.5, 0.5])
+    cube_np = get_particles(n, center=list(sim.center), size=list(sim.size))
     particles = jnp.array(cube_np, dtype=jnp.float32)
 
     params = make_params(
@@ -274,7 +272,7 @@ def _jax_inline_p2g_stage(kernel_name, params, pre_fn, elasticity_fn):
 
     if kernel_name in {"cuda_v3_inline", "cuda_v3_fori_inline", "cuda_v6_inline"}:
         from mpm_jax.cuda.p2g_cuda import cuda_p2g_v3_inline, is_available
-        from mpm_jax.morton import morton_argsort
+        from mpm_jax.blocks.sort import morton_argsort
 
         if not is_available("v3_inline"):
             raise RuntimeError(f"{kernel_name} P2G kernel is not registered.")
@@ -341,89 +339,6 @@ def _jax_inline_p2g_stage(kernel_name, params, pre_fn, elasticity_fn):
     raise RuntimeError(f"Unsupported CUDA inline P2G kernel={kernel_name!r}.")
 
 
-def _jax_warp_p2g_stage(kernel_name, params, pre_fn, elasticity_fn):
-    import jax
-    import jax.numpy as jnp
-
-    from mpm_jax.solver import StepIntermediates
-
-    if kernel_name == "warp_v1_inline":
-        from mpm_jax.warp_p2g import warp_p2g_inline
-
-        @jax.jit
-        def jit_p2g_stage(state):
-            x, v = pre_fn(state.x, state.v, 0.0)
-            stress = elasticity_fn(state.F)
-            grid_mv, grid_m = warp_p2g_inline(
-                x, v, state.C, stress,
-                params.num_grids, params.dt, params.vol, params.p_mass,
-                params.inv_dx, params.dx,
-            )
-            return grid_mv, grid_m, StepIntermediates(x_post_bc=x, F_pre_plast=state.F)
-
-        return jit_p2g_stage
-
-    if kernel_name == "warp_v2_tile":
-        from mpm_jax.warp_p2g import TILE_SIZE, warp_p2g_inline_tile
-
-        if params.n_particles % TILE_SIZE != 0:
-            raise RuntimeError(
-                f"warp_v2_tile requires n_particles divisible by {TILE_SIZE}; "
-                f"got {params.n_particles}."
-            )
-
-        @jax.jit
-        def jit_p2g_stage(state):
-            x, v = pre_fn(state.x, state.v, 0.0)
-            stress = elasticity_fn(state.F)
-            grid_mv, grid_m = warp_p2g_inline_tile(
-                x, v, state.C, stress,
-                params.num_grids, params.dt, params.vol, params.p_mass,
-                params.inv_dx, params.dx,
-            )
-            return grid_mv, grid_m, StepIntermediates(x_post_bc=x, F_pre_plast=state.F)
-
-        return jit_p2g_stage
-
-    if kernel_name == "warp_v3_supercell_tile":
-        from mpm_jax.warp_p2g import (
-            SUPER_CELL_WIDTH,
-            _home_super_cell_id,
-            warp_p2g_supercell_tile,
-        )
-
-        if params.num_grids % SUPER_CELL_WIDTH != 0:
-            raise RuntimeError(
-                f"warp_v3_supercell_tile requires num_grids ({params.num_grids}) "
-                f"divisible by {SUPER_CELL_WIDTH}."
-            )
-        g_super = params.num_grids // SUPER_CELL_WIDTH
-        super_boundaries = jnp.arange(g_super ** 3 + 1, dtype=jnp.int32)
-
-        @jax.jit
-        def jit_p2g_stage(state):
-            x, v = pre_fn(state.x, state.v, 0.0)
-            stress = elasticity_fn(state.F)
-            super_id = _home_super_cell_id(x, params.inv_dx, params.num_grids, SUPER_CELL_WIDTH)
-            order = jnp.argsort(super_id)
-            x_s = x[order]
-            v_s = v[order]
-            C_s = state.C[order]
-            stress_s = stress[order]
-            F_s = state.F[order]
-            super_id_sorted = super_id[order]
-            cell_start = jnp.searchsorted(super_id_sorted, super_boundaries).astype(jnp.int32)
-            grid_mv, grid_m = warp_p2g_supercell_tile(
-                x_s, v_s, C_s, stress_s, cell_start,
-                params.num_grids, params.dt, params.vol, params.p_mass,
-                params.inv_dx, params.dx,
-            )
-            return grid_mv, grid_m, StepIntermediates(x_post_bc=x_s, F_pre_plast=F_s)
-
-        return jit_p2g_stage
-
-    raise RuntimeError(f"Unsupported Warp/JAX P2G kernel={kernel_name!r}.")
-
 
 def _jax_p2g_stage_runner(cfg: DictConfig, nsight):
     import jax
@@ -444,8 +359,6 @@ def _jax_p2g_stage_runner(cfg: DictConfig, nsight):
             params, elasticity_fn, plasticity_fn, pre_fn, post_fn)
     elif kernel_name.startswith("cuda_"):
         jit_p2g_stage = _jax_inline_p2g_stage(kernel_name, params, pre_fn, elasticity_fn)
-    elif kernel_name.startswith("warp_"):
-        jit_p2g_stage = _jax_warp_p2g_stage(kernel_name, params, pre_fn, elasticity_fn)
     else:
         raise RuntimeError(f"Unsupported JAX P2G kernel={kernel_name!r}.")
 
@@ -473,7 +386,7 @@ def _p2g_runner(cfg: DictConfig, nsight):
 def _warp_bonus_step_runner(cfg: DictConfig, nsight):
     import warp as wp
 
-    from mpm_jax import warp_bonus as wb
+    from mpm_jax import warp_graph as wb
 
     sim = _warp_bonus_sim(cfg)
     total_sim = _warp_bonus_sim(cfg) if bool(cfg.nsight.get("include_step_total", True)) else None
@@ -701,10 +614,10 @@ def _configured_kernel_names(cfg: DictConfig):
 
 
 def _prepare_process_for_kernels(kernel_names: set[str]):
-    if "cuda_v6_inline" in kernel_names:
-        from simulate import _maybe_enable_cuda_graphs
-
-        _maybe_enable_cuda_graphs("cuda_v6_inline")
+    # cuda_v6_inline was removed; CUDA graph capture for cuda_v3_inline is now
+    # handled per-run in _jax_problem() by passing the full cfg to
+    # _maybe_enable_cuda_graphs(cfg).
+    pass
 
 
 def _value_for_metric(metric_values, metrics: list[str], metric: str):

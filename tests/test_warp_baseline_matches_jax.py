@@ -1,4 +1,4 @@
-"""Pure-Warp graph prototype should match the JAX timestep math."""
+"""Pure-Warp baseline prototype should match the JAX baseline timestep math."""
 
 import jax
 import jax.numpy as jnp
@@ -22,8 +22,7 @@ def _has_cuda() -> bool:
 
 
 @pytest.mark.skipif(not _has_cuda(), reason="requires a CUDA-backed JAX/Warp runtime")
-@pytest.mark.parametrize("indexed_sort", [False, True])
-def test_warp_bonus_single_substep_matches_jax(indexed_sort):
+def test_warp_baseline_single_substep_matches_jax():
     n = 1024
     num_grids = 16
     rng = np.random.RandomState(0)
@@ -82,7 +81,7 @@ def test_warp_bonus_single_substep_matches_jax(indexed_sort):
     jax_state = jit_frame(state0)
     jax.block_until_ready(jax_state.x)
 
-    warp_sim = WarpBonusSimulator(x_np, cfg, indexed_sort=indexed_sort)
+    warp_sim = WarpBonusSimulator(x_np, cfg, indexed_sort=False, baseline=True)
     warp_sim._substep()
     wp.synchronize_device(warp_sim.device)
 

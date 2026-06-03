@@ -1,9 +1,9 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
-from mpm_jax.solver import (
-    MPMState, make_params, simulate_frame, build_jit_frame, build_jit_stages,
-)
+from mpm_jax.types import MPMState, make_params
+from mpm_jax.solver import simulate_frame, build_jit_stages
+from mpm_jax.stepping.jax_frames import build_jax_frame as build_jit_frame
 from mpm_jax.constitutive import get_constitutive
 from mpm_jax.boundary import build_boundary_fns
 
