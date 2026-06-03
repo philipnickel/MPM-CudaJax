@@ -63,6 +63,8 @@ def _p2g_supercell_tile_kernel(
 
     p_start = cell_start[super_id]
     p_end = cell_start[super_id + 1]
+    if p_start == p_end:
+        return
 
     tile_mv0 = wp.tile_zeros(shape=SUPER_TILE_NODES, dtype=float, storage="shared")
     tile_mv1 = wp.tile_zeros(shape=SUPER_TILE_NODES, dtype=float, storage="shared")
