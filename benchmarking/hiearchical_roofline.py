@@ -415,14 +415,35 @@ def _build_stage_runner(cfg, nsight_mod, stage_name: str):
     return run_stage_once
 
 
-def _value_from_df(df, metric: str, kernel_name: str | None = None):
+def _value_from_df(
+    df,
+    metric: str,
+    kernel_name: str | None = None,
+    n_particles: int | None = None,
+    num_grids: int | None = None,
+):
     rows = df[df["Metric"] == metric]
     if kernel_name is not None:
-        if "kernel_name" not in rows:
+        if "kernel_name" not in rows.columns:
             raise RuntimeError("Nsight results did not include the kernel_name config column.")
         rows = rows[rows["kernel_name"] == kernel_name]
+    if n_particles is not None:
+        if "n_particles" not in rows.columns:
+            raise RuntimeError("Nsight results did not include the n_particles config column.")
+        rows = rows[rows["n_particles"].astype(int) == int(n_particles)]
+    if num_grids is not None:
+        if "num_grids" not in rows.columns:
+            raise RuntimeError("Nsight results did not include the num_grids config column.")
+        rows = rows[rows["num_grids"].astype(int) == int(num_grids)]
     if rows.empty:
-        suffix = "" if kernel_name is None else f" for kernel {kernel_name!r}"
+        suffix_parts = []
+        if kernel_name is not None:
+            suffix_parts.append(f"kernel {kernel_name!r}")
+        if n_particles is not None:
+            suffix_parts.append(f"n_particles={n_particles}")
+        if num_grids is not None:
+            suffix_parts.append(f"num_grids={num_grids}")
+        suffix = "" if not suffix_parts else " for " + ", ".join(suffix_parts)
         raise RuntimeError(f"Nsight results did not include metric {metric!r}{suffix}.")
     value_column = "Value" if "Value" in rows else "AvgValue"
     return float(rows[value_column].iloc[0])
@@ -434,19 +455,46 @@ def _df_kernel_names(df):
     return list(dict.fromkeys(str(value) for value in df["kernel_name"]))
 
 
+def _df_particle_counts(df):
+    if "n_particles" not in df:
+        return []
+    return list(dict.fromkeys(int(value) for value in df["n_particles"]))
+
+
+def _df_particle_counts_for_kernel(df, kernel_name: str):
+    rows = df
+    if "kernel_name" in rows.columns:
+        rows = rows[rows["kernel_name"] == kernel_name]
+    return list(dict.fromkeys(int(value) for value in rows["n_particles"]))
+
+
+def _count_label(n_particles: int):
+    if n_particles % 1_000_000 == 0:
+        return f"{n_particles // 1_000_000}M"
+    if n_particles % 1_000 == 0:
+        return f"{n_particles // 1_000}k"
+    return f"{n_particles:,}"
+
+
 def _roofline_points(df, kernels: list[str], levels: list[tuple[str, str, str, str]]):
     rows = []
     for kernel_name in kernels:
-        performance = _value_from_df(df, "fp32_gflops", kernel_name)
-        for label, ai_metric, _bw_metric, _color in levels:
-            rows.append(
-                {
-                    "kernel": _kernel_label(kernel_name),
-                    "memory_level": label,
-                    "arithmetic_intensity": _value_from_df(df, ai_metric, kernel_name),
-                    "performance_gflops": performance,
-                }
-            )
+        for n_particles in _df_particle_counts_for_kernel(df, kernel_name):
+            performance = _value_from_df(
+                df, "fp32_gflops", kernel_name, n_particles=n_particles)
+            for label, ai_metric, _bw_metric, _color in levels:
+                rows.append(
+                    {
+                        "kernel": _kernel_label(kernel_name),
+                        "kernel_name": kernel_name,
+                        "memory_level": label,
+                        "n_particles": n_particles,
+                        "particle_count": _count_label(n_particles),
+                        "arithmetic_intensity": _value_from_df(
+                            df, ai_metric, kernel_name, n_particles=n_particles),
+                        "performance_gflops": performance,
+                    }
+                )
     return pd.DataFrame(rows)
 
 
@@ -470,9 +518,11 @@ def _draw_roofline(fig, df, title: str, kernels: list[str], stage_name: str, roo
     reference_kernel = kernels[0] if kernels else None
     fp32_peak = _value_from_df(df, "fp32_peak_gflops", reference_kernel)
     levels = _roofline_levels(roofline)
+    particle_counts = _df_particle_counts(df)
     ais = [
-        _value_from_df(df, ai_metric, kernel_name)
+        _value_from_df(df, ai_metric, kernel_name, n_particles=n_particles)
         for kernel_name in kernels
+        for n_particles in _df_particle_counts_for_kernel(df, kernel_name)
         for _, ai_metric, _, _ in levels
     ]
     valid_ais = [value for value in ais if math.isfinite(value) and value > 0]
@@ -538,6 +588,17 @@ def _draw_roofline(fig, df, title: str, kernels: list[str], stage_name: str, roo
         )
 
     points = _roofline_points(df, kernels, levels)
+    if len(particle_counts) > 1:
+        for (_kernel, memory_level), group in points.groupby(["kernel", "memory_level"]):
+            group = group.sort_values("n_particles")
+            ax.plot(
+                group["arithmetic_intensity"],
+                group["performance_gflops"],
+                color=palette[memory_level],
+                linewidth=1.3,
+                alpha=0.45,
+                zorder=3,
+            )
     sns.scatterplot(
         data=points,
         x="arithmetic_intensity",
@@ -553,21 +614,30 @@ def _draw_roofline(fig, df, title: str, kernels: list[str], stage_name: str, roo
         zorder=4,
     )
 
-    n_particles = int(_value_from_df(df, "n_particles", reference_kernel))
     num_grids = int(_value_from_df(df, "num_grids", reference_kernel))
     stage_label = _stage_label(stage_name)
     roofline_label = _roofline_label(roofline)
     if title:
         ax.set_title(title)
     elif len(kernels) == 1:
+        particle_label = (
+            f"{particle_counts[0]:,} particles"
+            if len(particle_counts) == 1
+            else f"{_count_label(min(particle_counts))}-{_count_label(max(particle_counts))} particles"
+        )
         ax.set_title(
             f"{roofline_label} FP32 Roofline: {stage_label}, {kernels[0]} "
-            f"({n_particles:,} particles, {num_grids}^3 grid)"
+            f"({particle_label}, {num_grids}^3 grid)"
         )
     else:
+        particle_label = (
+            f"{particle_counts[0]:,} particles"
+            if len(particle_counts) == 1
+            else f"{_count_label(min(particle_counts))}-{_count_label(max(particle_counts))} particles"
+        )
         ax.set_title(
             f"{roofline_label} FP32 Roofline {stage_label} Sweep "
-            f"({n_particles:,} particles, {num_grids}^3 grid)"
+            f"({particle_label}, {num_grids}^3 grid)"
         )
     ax.set_xlabel("Arithmetic intensity [FLOP/byte]")
     ax.set_ylabel("Performance [GFLOP/s]")
@@ -643,7 +713,16 @@ def _plot_roofline(df, output: Path, title: str, kernels: list[str], stage_name:
 
 def _write_summary(df, output: Path):
     value_column = "Value" if "Value" in df else "AvgValue"
-    if "kernel_name" in df:
+    particle_counts = _df_particle_counts(df)
+    if "kernel_name" in df and len(particle_counts) > 1:
+        rows: dict[str, dict[str, dict[str, float]]] = {}
+        for _, row in df.iterrows():
+            kernel_name = str(row["kernel_name"])
+            particle_count = str(int(row["n_particles"]))
+            rows.setdefault(kernel_name, {}).setdefault(particle_count, {})[
+                str(row["Metric"])
+            ] = row[value_column]
+    elif "kernel_name" in df:
         rows: dict[str, dict[str, float]] = {}
         for _, row in df.iterrows():
             kernel_name = str(row["kernel_name"])
@@ -692,6 +771,26 @@ def _parse_kernels(args):
     return kernels
 
 
+def _parse_particle_counts(args):
+    raw_counts = args.particle_counts
+    if raw_counts is None:
+        return [int(args.n_particles)]
+    counts = []
+    for item in raw_counts:
+        for value in str(item).split(","):
+            value = value.strip()
+            if not value:
+                continue
+            count = int(value)
+            if count <= 0:
+                raise RuntimeError(f"Particle counts must be positive. Got {count}.")
+            counts.append(count)
+    counts = list(dict.fromkeys(counts))
+    if not counts:
+        raise RuntimeError("--particle-counts did not contain any valid counts.")
+    return counts
+
+
 def _parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--kernel", default=None, help="Profile one solver backend.")
@@ -712,6 +811,15 @@ def _parse_args():
         help="ordinary uses FP32 work and HBM traffic; hierarchical also collects L1/L2.",
     )
     parser.add_argument("--n-particles", type=int, default=1_000_000)
+    parser.add_argument(
+        "--particle-counts",
+        nargs="+",
+        default=None,
+        help=(
+            "Profile a particle-count trajectory. Accepts space-separated or "
+            "comma-separated counts. Defaults to --n-particles."
+        ),
+    )
     parser.add_argument("--num-grids", type=int, default=124)
     parser.add_argument(
         "--steps-per-frame",
@@ -728,7 +836,8 @@ def _parse_args():
         choices=SUPPORTED_STAGES,
         help=(
             "Annotated solver stage to profile. p2g includes backend.prepare plus "
-            "backend.p2g; p2g_kernel excludes backend.prepare."
+            "backend.p2g; p2g_kernel excludes backend.prepare while including "
+            "the backend P2G call's required grid zeroing."
         ),
     )
     parser.add_argument("--loop-kind", default="fori", choices=["fori", "python"])
@@ -769,11 +878,7 @@ def main():
     args = _parse_args()
     args.ignore_kernel = [*args.ignore_kernel, *_env_ignore_kernels()]
     kernels = _parse_kernels(args)
-    target_kernel = os.environ.get("NSPY_ROOFLINE_KERNEL")
-    if target_kernel is not None:
-        if target_kernel not in ROOFLINE_KERNELS:
-            raise RuntimeError(f"Unsupported NSPY_ROOFLINE_KERNEL={target_kernel!r}.")
-        kernels = [target_kernel]
+    particle_counts = _parse_particle_counts(args)
     run_dir = args.output.resolve().parent
     run_dir.mkdir(parents=True, exist_ok=True)
     compute_cap = _detect_compute_cap()
@@ -790,48 +895,43 @@ def main():
         cfg.sim.num_grids = int(num_grids)
         _build_stage_runner(cfg, nsight, str(stage_name))()
 
+    configs = [
+        (
+            args.stage,
+            kernel_name,
+            n_particles,
+            args.num_grids,
+        )
+        for kernel_name in kernels
+        for n_particles in particle_counts
+    ]
+
     with _disable_editable_pth_for_nsight():
-        for kernel_name in kernels:
-            profiled_kernel = nsight.analyze.kernel(
-                configs=[
-                    (
-                        args.stage,
-                        kernel_name,
-                        args.n_particles,
-                        args.num_grids,
-                    )
-                ],
-                runs=args.runs,
-                metrics=metrics,
-                derive_metric=_roofline_metric(metrics, l1_peak_metric),
-                replay_mode=args.replay_mode,
-                combine_kernel_metrics=(
-                    _combine_roofline_metrics(metrics)
-                    if args.replay_mode == "kernel"
-                    else None
-                ),
-                ignore_kernel_list=args.ignore_kernel,
-                output="progress",
-                output_csv=args.output_csv,
-                output_prefix=str(
-                    run_dir
-                    / f"{args.roofline}_roofline_{kernel_name}_{args.stage}_{args.replay_mode}_"
-                ),
-            )(profiled_variant)
-            previous_target = os.environ.get("NSPY_ROOFLINE_KERNEL")
-            os.environ["NSPY_ROOFLINE_KERNEL"] = kernel_name
-            try:
-                results = _run_nsight_profile(profiled_kernel)
-            finally:
-                if previous_target is None:
-                    os.environ.pop("NSPY_ROOFLINE_KERNEL", None)
-                else:
-                    os.environ["NSPY_ROOFLINE_KERNEL"] = previous_target
-            if results is None:
-                if os.environ.get("NSPY_NCU_PROFILE"):
-                    return
-                raise RuntimeError("Nsight Python did not return profiling results.")
-            dataframes.append(results.to_dataframe())
+        profiled_kernel = nsight.analyze.kernel(
+            configs=configs,
+            runs=args.runs,
+            metrics=metrics,
+            derive_metric=_roofline_metric(metrics, l1_peak_metric),
+            replay_mode=args.replay_mode,
+            combine_kernel_metrics=(
+                _combine_roofline_metrics(metrics)
+                if args.replay_mode == "kernel"
+                else None
+            ),
+            ignore_kernel_list=args.ignore_kernel,
+            output="progress",
+            output_csv=args.output_csv,
+            output_prefix=str(
+                run_dir
+                / f"{args.roofline}_roofline_{args.stage}_{args.replay_mode}_"
+            ),
+        )(profiled_variant)
+        results = _run_nsight_profile(profiled_kernel)
+        if results is None:
+            if os.environ.get("NSPY_NCU_PROFILE"):
+                return
+            raise RuntimeError("Nsight Python did not return profiling results.")
+        dataframes.append(results.to_dataframe())
 
     df = pd.concat(dataframes, ignore_index=True)
     _plot_roofline(
