@@ -7,10 +7,10 @@
 //   3. Accumulate momentum, APIC C-matrix, and velocity gradient
 //   4. Update x, v, C, F and write back
 //
-// Pairs with p2g_fused.cu so the cuda_fused path doesn't materialise the
-// (N, 27, *) intermediate tensors that the JAX G2P stage produces via
-// compute_weights_and_indices. At N=10M each (N, 27, 3) tensor is
-// 3.24 GB; this kernel keeps everything in registers.
+// Used by the CUDA and Warp-in-JAX backends so the gather stage doesn't
+// materialise the (N, 27, *) intermediate tensors produced by the pure-JAX
+// G2P path. At N=10M each (N, 27, 3) tensor is 3.24 GB; this kernel keeps
+// everything in registers.
 //
 // Inputs (all float32):
 //   x:       (N, 3)    post-BC particle positions

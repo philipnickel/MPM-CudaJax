@@ -17,9 +17,10 @@ from omegaconf import OmegaConf
 from mpm_jax.solver import MPMState, make_params
 from mpm_jax.constitutive import get_constitutive
 from mpm_jax.boundary import build_boundary_fns
-from mpm_jax.cuda.p2g_cuda import (
-    build_jit_frame_inline,
-    build_jit_frame_v4_inline,
+from mpm_jax.backends import (
+    build_backend_frame,
+    cuda_v1_backend,
+    cuda_v4_backend,
 )
 
 
@@ -79,13 +80,14 @@ def run(kernel_name, frames=3, steps_per_frame=10):
     plasticity_fn = get_constitutive(plast_cfg)
 
     if kernel_name == 'v1_inline':
-        jit_frame = build_jit_frame_inline(
-            params, elasticity_fn, plasticity_fn, pre_fn, post_fn, steps_per_frame)
+        backend = cuda_v1_backend()
     elif kernel_name == 'v4_inline':
-        jit_frame = build_jit_frame_v4_inline(
-            params, elasticity_fn, plasticity_fn, pre_fn, post_fn, steps_per_frame)
+        backend = cuda_v4_backend(num_grids=params.num_grids)
     else:
         raise ValueError(kernel_name)
+    jit_frame = build_backend_frame(
+        params, elasticity_fn, plasticity_fn, pre_fn, post_fn,
+        backend, steps_per_frame)
 
     for _ in range(frames):
         state = jit_frame(state)

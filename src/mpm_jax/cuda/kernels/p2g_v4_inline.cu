@@ -105,8 +105,8 @@ __global__ void p2g_v4_inline_kernel(
     int p_end   = cell_start[super_id + 1];
     int n_particles = p_end - p_start;
 
-    // Fast empty-super-cell exit. The jelly cube only occupies a fraction
-    // of the domain so most super-cells are empty. The exit must come
+    // Fast empty-super-cell exit. The particle block only occupies a fraction
+    // of the domain, so most super-cells are empty. The exit must come
     // *before* any shared-memory allocation or __syncthreads() — all
     // threads in a block see the same super_id, so this return is
     // uniform and no thread is left hanging on a barrier.

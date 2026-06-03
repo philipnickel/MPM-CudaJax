@@ -41,7 +41,7 @@ REMOVED_KERNELS = {
     "cuda_v1": "Use cuda_v1_inline (scatter-only variant removed).",
     "cuda_v2": "Use cuda_v2_inline.",
     "cuda_v4": "Use cuda_v4_inline.",
-    "cuda_fused": "Deprecated; use an inline kernel and profile=jax.",
+    "cuda_fused": "Removed; use an inline backend and profile=jax.",
     "cuda_v2_fori_inline": "Use kernel=cuda_v2_inline with loop_kind=fori.",
     "cuda_v3_fori_inline": "Use kernel=cuda_v3_inline with loop_kind=fori.",
     "cuda_v6_inline": "Use kernel=cuda_v3_inline with cuda_graph=true.",

@@ -168,7 +168,7 @@ Material baseline:
 Removed/renamed kernels (error message from `build_solver`):
 - `jax` → use `jax_v1_5` as the JAX baseline.
 - `cuda_v1`, `cuda_v2`, `cuda_v4` → use the `_inline` variants.
-- `cuda_fused` → deprecated; use an inline kernel and `profile=jax`.
+- `cuda_fused` → removed; use an inline backend and `profile=jax`.
 - `cuda_v2_fori_inline` → use `kernel=cuda_v2_inline loop_kind=fori` (now the default).
 - `cuda_v3_fori_inline` → use `kernel=cuda_v3_inline loop_kind=fori`.
 - `cuda_v6_inline` → use `kernel=cuda_v3_inline cuda_graph=true`.
@@ -186,10 +186,10 @@ pixi run -e gpu python simulate.py benchmark=true
 
 # Switch kernel
 pixi run -e gpu python simulate.py kernel=jax_v1_5                                     # JAX/XLA baseline
-pixi run -e gpu python simulate.py kernel=cuda_v1_inline material=jelly_jacobi         # inline CUDA P2G + G2P
-pixi run -e gpu python simulate.py kernel=cuda_v2_inline material=jelly_jacobi         # warp-shuffle CUDA (fori loop)
-pixi run -e gpu python simulate.py kernel=cuda_v3_inline material=jelly_jacobi         # Morton-sorted CUDA
-pixi run -e gpu python simulate.py kernel=cuda_v3_inline cuda_graph=true material=jelly_jacobi  # with XLA CUDA graphs
+pixi run -e gpu python simulate.py kernel=cuda_v1_inline material=sand_jacobi         # inline CUDA P2G + G2P
+pixi run -e gpu python simulate.py kernel=cuda_v2_inline material=sand_jacobi         # warp-shuffle CUDA (fori loop)
+pixi run -e gpu python simulate.py kernel=cuda_v3_inline material=sand_jacobi         # Morton-sorted CUDA
+pixi run -e gpu python simulate.py kernel=cuda_v3_inline cuda_graph=true material=sand_jacobi  # with XLA CUDA graphs
 pixi run -e gpu python simulate.py kernel=warp_v3_supercell_tile material=sand_jacobi benchmark=true
 
 # loop_kind override (python = unrolled, fori = lax.fori_loop; fori is the default)
@@ -202,7 +202,7 @@ pixi run -e gpu python simulate.py sim.n_particles=50000 sim.num_grids=64
 pixi run -e gpu python simulate.py profile=jax  benchmark=true     # TensorBoard trace
 
 # Nsight Python profiler (per-stage kernel analysis)
-pixi run -e gpu python profile_nsight.py -cn nsight_profile kernel=jax_v1_5 material=jelly_jacobi nsight.phase=p2g sim.n_particles=4096
+pixi run -e gpu python profile_nsight.py -cn nsight_profile kernel=jax_v1_5 material=sand_jacobi nsight.phase=p2g sim.n_particles=4096
 
 # Sweeps (Hydra multirun)
 pixi run -e gpu python simulate.py -cn sweep_baseline    # JAX-only scaling

@@ -27,21 +27,21 @@ cd MPM-CudaJax
 pixi install
 pixi run python simulate.py sim.num_frames=20
 ```
-A jelly cube falls onto a sticky floor and renders to
-`output/jelly_jacobi_jax_v1_5.gif`. With `sim.num_frames=20` it takes a few seconds.
+A sand block falls onto a sticky floor and renders to
+`output/sand_jacobi_jax_v1_5.gif`. With `sim.num_frames=20` it takes a few seconds.
 
 **Have an NVIDIA GPU (Linux)?** Install the `gpu` env (this also builds
 the custom CUDA kernels via CMake — `nvcc` and `gxx` ship from
 conda-forge inside the env, no system module load needed):
 ```bash
 pixi install -e gpu
-pixi run -e gpu python simulate.py kernel=cuda_v3_inline material=jelly_jacobi
+pixi run -e gpu python simulate.py kernel=cuda_v3_inline material=sand_jacobi
 ```
 
 To benchmark instead of rendering:
 ```bash
 pixi run -e gpu python simulate.py \
-    kernel=cuda_v3_inline material=jelly_jacobi \
+    kernel=cuda_v3_inline material=sand_jacobi \
     sim.n_particles=500000 sim.num_grids=64 sim.num_frames=15 \
     benchmark=true
 ```
@@ -119,11 +119,11 @@ pixi run -e gpu python simulate.py benchmark=true
 
 # Pick a kernel
 pixi run -e gpu python simulate.py kernel=jax_v1_5                                     # JAX/XLA baseline
-pixi run -e gpu python simulate.py kernel=cuda_v1_inline material=jelly_jacobi
-pixi run -e gpu python simulate.py kernel=cuda_v2_inline material=jelly_jacobi         # warp-shuffle (default: fori loop)
-pixi run -e gpu python simulate.py kernel=cuda_v2_inline kernel.loop_kind=python material=jelly_jacobi
-pixi run -e gpu python simulate.py kernel=cuda_v3_inline material=jelly_jacobi         # Morton sort
-pixi run -e gpu python simulate.py kernel=cuda_v3_inline kernel.cuda_graph=true material=jelly_jacobi
+pixi run -e gpu python simulate.py kernel=cuda_v1_inline material=sand_jacobi
+pixi run -e gpu python simulate.py kernel=cuda_v2_inline material=sand_jacobi         # warp-shuffle (default: fori loop)
+pixi run -e gpu python simulate.py kernel=cuda_v2_inline kernel.loop_kind=python material=sand_jacobi
+pixi run -e gpu python simulate.py kernel=cuda_v3_inline material=sand_jacobi         # Morton sort
+pixi run -e gpu python simulate.py kernel=cuda_v3_inline kernel.cuda_graph=true material=sand_jacobi
 pixi run -e gpu python simulate.py kernel=warp_v3_supercell_tile material=sand_jacobi benchmark=true
 
 # Override sim params
@@ -147,7 +147,7 @@ Removed kernels (raise `ValueError` with a migration message):
 |---|---|
 | `jax` | `jax_v1_5` |
 | `cuda_v1`, `cuda_v2`, `cuda_v4` | `cuda_v1_inline`, `cuda_v2_inline`, `cuda_v4_inline` |
-| `cuda_fused` | Deprecated; use an inline kernel and `profile=jax` |
+| `cuda_fused` | Removed; use an inline backend and `profile=jax` |
 | `cuda_v2_fori_inline` | `kernel=cuda_v2_inline` (fori is the default) |
 | `cuda_v3_fori_inline` | `kernel=cuda_v3_inline kernel.loop_kind=fori` |
 | `cuda_v6_inline` | `kernel=cuda_v3_inline kernel.cuda_graph=true` |
@@ -195,7 +195,7 @@ For an ad-hoc sweep: `pixi run -e gpu python simulate.py -m sim.n_particles=5000
 
 ```bash
 pixi run -e gpu python simulate.py profile=jax benchmark=true \
-    kernel=cuda_v3_inline material=jelly_jacobi
+    kernel=cuda_v3_inline material=sand_jacobi
 ```
 
 The trace is written to `outputs/<YYYY-MM-DD>/<HH-MM-SS>/jax_trace/` and includes
@@ -205,7 +205,7 @@ The trace is written to `outputs/<YYYY-MM-DD>/<HH-MM-SS>/jax_trace/` and include
 
 ```bash
 pixi run -e gpu python profile_nsight.py -cn nsight_profile \
-    kernel=jax_v1_5 material=jelly_jacobi nsight.phase=p2g sim.n_particles=4096
+    kernel=jax_v1_5 material=sand_jacobi nsight.phase=p2g sim.n_particles=4096
 ```
 
 ## Config
@@ -277,8 +277,8 @@ MPM-CudaJax/
         ├── constitutive.py  # 5 elasticity + 4 plasticity models
         ├── boundary.py      # 6 boundary condition types
         ├── blocks/          # Pure math: weights, p2g, g2p, grid, svd, sort, init
-        ├── stepping/        # Frame builders: jax_frames, cuda_frames,
-        │                    #                 warp_hybrid_frame, substep
+        ├── backends.py      # Backend interface + shared JAX-owned frame loop
+        ├── stepping/        # Warp tiled P2G bridge helpers
         └── cuda/
             ├── p2g_cuda.py  # FFI registration + kernel wrappers
             ├── _lib/        # built .so files (gitignored)

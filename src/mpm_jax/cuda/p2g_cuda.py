@@ -102,10 +102,6 @@ def _register(name: str, so_name: str, symbol: str) -> bool:
             return False
 
 
-def _register_fused():
-    return _register("p2g_fused_cuda", "libp2g_fused.so", "P2GFused")
-
-
 def _register_g2p_fused():
     return _register("g2p_fused_cuda", "libg2p_fused.so", "G2PFused")
 
@@ -126,52 +122,9 @@ def _register_v4_inline():
     return _register("p2g_v4_inline_cuda", "libp2g_v4_inline.so", "P2GV4Inline")
 
 
-def cuda_p2g_fused(x, v, C, F, num_grids, dt, vol, p_mass, inv_dx, dx,
-                   mu_0, lambda_0, theta_c=0.025, theta_s=0.0075, hardening=0.0):
-    """Fused CUDA P2G via JAX FFI.
-
-    Replaces the entire P2G pipeline (stress + weights + compute + scatter)
-    with a single CUDA kernel. Also returns plasticity-corrected F.
-    """
-    N = x.shape[0]
-    G = num_grids
-    G3 = G ** 3
-
-    C_flat = C.reshape(N, 9)
-    F_flat = F.reshape(N, 9)
-
-    grid_mv, grid_m, F_out_flat = jax.ffi.ffi_call(
-        "p2g_fused_cuda",
-        (
-            jax.ShapeDtypeStruct((G3, 3), jnp.float32),
-            jax.ShapeDtypeStruct((G3,), jnp.float32),
-            jax.ShapeDtypeStruct((N, 9), jnp.float32),
-        ),
-        vmap_method="broadcast_all",
-    )(
-        x, v, C_flat, F_flat,
-        N=np.int32(N),
-        G=np.int32(G),
-        dt=np.float32(dt),
-        vol=np.float32(vol),
-        p_mass=np.float32(p_mass),
-        inv_dx=np.float32(inv_dx),
-        dx=np.float32(dx),
-        mu_0=np.float32(mu_0),
-        lambda_0=np.float32(lambda_0),
-        theta_c=np.float32(theta_c),
-        theta_s=np.float32(theta_s),
-        hardening_coeff=np.float32(hardening),
-    )
-
-    return grid_mv, grid_m, F_out_flat.reshape(N, 3, 3)
-
-
 def is_available(kernel='inline'):
     """Check if a prebuilt CUDA kernel can be loaded and registered."""
-    if kernel == 'fused':
-        return _register_fused()
-    elif kernel == 'g2p_fused':
+    if kernel == 'g2p_fused':
         return _register_g2p_fused()
     elif kernel == 'inline':
         return _register_inline()
@@ -313,8 +266,8 @@ def cuda_p2g_v4_inline(x_sorted, v_sorted, C_sorted, stress_sorted, cell_start,
     The kernel uses one CUDA block per super-cell and aggregates each
     super-cell's contributions into a 4x4x4 shared-memory tile before
     flushing to HBM. The super-cell coarsening (SC=2) cuts the block count
-    by 8x vs the old SC=1 cell-major variant — most of those blocks were
-    empty since the jelly cube only occupies ~31K of 262K cells at G=64.
+    by 8x vs the old SC=1 cell-major variant — most of those blocks are empty
+    when the particle block occupies only a fraction of the grid.
     """
     N = x_sorted.shape[0]
     G = num_grids
@@ -407,96 +360,10 @@ def cuda_g2p_fused(x, F, grid_v, num_grids, dt, inv_dx, dx, clip_bound):
     return new_x, new_v, new_C_flat.reshape(N, 3, 3), new_F_flat.reshape(N, 3, 3)
 
 
-def make_fused_stages(params, elasticity_cfg, plasticity_cfg, pre_particle_fn, post_grid_fn):
-    """Build per-stage JIT'd functions for the cuda_fused kernel.
-
-    The fused kernel does SVD + plasticity + corotated stress + APIC + scatter
-    in one launch. Differences vs the standard per-stage path:
-      * No separate stress / weights / p2g_compute / p2g_scatter calls.
-      * Plasticity is applied at the START of the step (kernel returns the
-        corrected F). The G2P stage uses that corrected F and skips the
-        separate plasticity_fn call.
-      * Constitutive model is hard-coded to Corotated elasticity with optional
-        singular-value clamping. Identity plasticity is realised by setting
-        theta_c = theta_s = 1e9 (no clamp).
-
-    Returns (jit_p2g_fused_stage, jit_grid_stage, jit_g2p_no_plast_stage)
-    or raises if the kernel isn't available or the material config is
-    unsupported.
-    """
-    if not is_available('fused'):
-        raise RuntimeError(
-            "cuda_fused P2G kernel is not registered (missing .so?). "
-            "Run `pixi install -e gpu` to build.")
-    if not is_available('g2p_fused'):
-        raise RuntimeError(
-            "cuda_fused G2P kernel is not registered (missing .so?). "
-            "Run `pixi install -e gpu` to build.")
-
-    if elasticity_cfg.name != "CorotatedElasticity":
-        raise NotImplementedError(
-            f"cuda_fused kernel only supports CorotatedElasticity, "
-            f"got {elasticity_cfg.name}.")
-
-    # Map plasticity config to (theta_c, theta_s, hardening_coeff). With
-    # theta_c=theta_s=1e9 there's no clamp, i.e. effectively identity plasticity.
-    plast_name = plasticity_cfg.name
-    if plast_name == "IdentityPlasticity":
-        theta_c, theta_s, hardening = 1e9, 1e9, 0.0
-    else:
-        raise NotImplementedError(
-            f"cuda_fused kernel only supports IdentityPlasticity, got {plast_name}.")
-
-    E = float(elasticity_cfg.E)
-    nu = float(elasticity_cfg.nu)
-    mu_0 = E / (2.0 * (1.0 + nu))
-    lambda_0 = E * nu / ((1.0 + nu) * (1.0 - 2.0 * nu))
-
-    # Late imports to avoid circular dep at module load.
-    from mpm_jax.solver import (
-        MPMState, StepIntermediates,
-        grid_update as grid_update_fn,
-    )
-
-    @jax.jit
-    def jit_p2g_fused_stage(state):
-        x, v = pre_particle_fn(state.x, state.v, 0.0)
-        grid_mv, grid_m, F_corrected = cuda_p2g_fused(
-            x, v, state.C, state.F,
-            params.num_grids, params.dt, params.vol, params.p_mass,
-            params.inv_dx, params.dx,
-            mu_0, lambda_0, theta_c, theta_s, hardening,
-        )
-        # Slim intermediates - G2P recomputes weights from x_post_bc.
-        inter = StepIntermediates(x_post_bc=x, F_pre_plast=F_corrected)
-        return grid_mv, grid_m, inter
-
-    @jax.jit
-    def jit_grid_stage(grid_mv, grid_m):
-        grid_mv_normalized = grid_update_fn(
-            grid_mv, grid_m, params.gravity, params.dt, params.damping)
-        grid_v = post_grid_fn(grid_mv_normalized, grid_m, 0.0)
-        return grid_v
-
-    @jax.jit
-    def jit_g2p_no_plast_stage(state, grid_v, inter):
-        # Fully fused: each thread does its own B-spline math + gather
-        # in registers. No (N, 27, *) tensors anywhere on this stage.
-        new_x, new_v, new_C, new_F = cuda_g2p_fused(
-            inter.x_post_bc, inter.F_pre_plast, grid_v,
-            params.num_grids, params.dt, params.inv_dx, params.dx,
-            params.clip_bound,
-        )
-        return MPMState(x=new_x, v=new_v, C=new_C, F=new_F)
-
-    return jit_p2g_fused_stage, jit_grid_stage, jit_g2p_no_plast_stage
-
-
 __all__ = [
     # FFI registration
     "is_available",
     # FFI op wrappers
-    "cuda_p2g_fused",
     "cuda_p2g_inline",
     "cuda_p2g_v2_inline",
     "cuda_p2g_v3_inline",
@@ -506,6 +373,4 @@ __all__ = [
     "V4_SUPER_CELL_WIDTH",
     "_home_cell_id",
     "_home_super_cell_id",
-    # Stage builder
-    "make_fused_stages",
 ]

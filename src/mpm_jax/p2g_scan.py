@@ -12,15 +12,8 @@ vmap over particles for all 27 stencil nodes at once, we ``lax.scan`` over the
 scatters the resulting ``(N, 3)`` / ``(N,)`` contributions into the grid via
 ``at[].add``. Peak intermediate buffer is ``(N, *)``, never ``(N, 27, *)``.
 
-Trade-off vs ``cuda_fused`` (the actual winner at 18 ms/step on A10 / N=1M):
-
-  cuda_fused: one CUDA kernel, register-resident loop, zero HBM intermediate
-              and zero per-stencil launch overhead.
-  jax_v1_5:   27 small XLA kernels chained via scan inside one JIT, no
-              ``(N, 27, *)`` intermediate but still 27 launches per substep.
-
-Expected: faster than ``jax_v1`` (51.77 ms on A10 / N=1M, dominated by HBM),
-slower than ``cuda_fused`` (kernel-launch tax × 27).
+The CUDA inline backends take the same HBM-saving idea further by running the
+27-stencil scatter inside one register-resident CUDA kernel.
 """
 
 import jax

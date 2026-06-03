@@ -104,7 +104,7 @@ class ScalingPlotCallback(Callback):
         ax.set_yscale("log")
         ax.set_xlabel("Particles (N)")
         ax.set_ylabel("ms / step")
-        ax.set_title("MPM P2G scaling — A10, jelly cube, G=64")
+        ax.set_title("MPM P2G scaling")
         ax.legend(title="kernel", loc="best", fontsize=10)
         fig.tight_layout()
         ms_path = sweep_root / "scaling_ms_per_step.png"

@@ -43,8 +43,8 @@ The main entry points are:
 - CUDA kernels are built through scikit-build-core and CMake. CPU-only installs
   intentionally skip CUDA when `nvcc` is unavailable.
 - Kernel selection is registry-driven. Add or change kernel variants through
-  `src/mpm_jax/registry.py` and the relevant frame builder/config files rather
-  than adding dispatch logic to `simulate.py`.
+  `src/mpm_jax/backends.py`, `src/mpm_jax/registry.py`, and the relevant
+  config files rather than adding dispatch logic to `simulate.py`.
 - Preserve the benchmark methodology described in `.claude/CLAUDE.md`,
   especially the standard 8-particles-per-cell setup and the JAX trace -> Nsight
   Compute -> `nsight-python` profiling order.
@@ -59,7 +59,7 @@ pixi run lint
 pixi run python simulate.py sim.num_frames=5
 pixi run -e gpu python simulate.py benchmark=true
 pixi run -e gpu python simulate.py kernel=jax_v1_5
-pixi run -e gpu python simulate.py kernel=cuda_v3_inline material=jelly_jacobi
+pixi run -e gpu python simulate.py kernel=cuda_v3_inline material=sand_jacobi
 pixi run -e gpu python simulate.py -cn sweep_quick
 ```
 

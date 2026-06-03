@@ -1,4 +1,4 @@
-"""Public package exports, loaded lazily to keep Warp-only paths JAX-free."""
+"""Public package exports, loaded lazily to avoid eager heavy imports."""
 
 _SOLVER_EXPORTS = {
     "MPMState",
