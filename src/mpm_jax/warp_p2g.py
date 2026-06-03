@@ -64,13 +64,13 @@ def _p2g_supercell_tile_kernel(
     p_start = cell_start[super_id]
     p_end = cell_start[super_id + 1]
 
+    tile_mv0 = wp.tile_zeros(shape=SUPER_TILE_NODES, dtype=float, storage="shared")
+    tile_mv1 = wp.tile_zeros(shape=SUPER_TILE_NODES, dtype=float, storage="shared")
+    tile_mv2 = wp.tile_zeros(shape=SUPER_TILE_NODES, dtype=float, storage="shared")
+    tile_m = wp.tile_zeros(shape=SUPER_TILE_NODES, dtype=float, storage="shared")
+
     chunk_start = p_start
     while chunk_start < p_end:
-        tile_mv0 = wp.tile_zeros(shape=SUPER_TILE_NODES, dtype=float, storage="shared")
-        tile_mv1 = wp.tile_zeros(shape=SUPER_TILE_NODES, dtype=float, storage="shared")
-        tile_mv2 = wp.tile_zeros(shape=SUPER_TILE_NODES, dtype=float, storage="shared")
-        tile_m = wp.tile_zeros(shape=SUPER_TILE_NODES, dtype=float, storage="shared")
-
         p = chunk_start + lane
         active = p < p_end
 
@@ -198,28 +198,28 @@ def _p2g_supercell_tile_kernel(
                         wp.atomic_add(grid_mv, idx * 3 + 2, mv2)
                         wp.atomic_add(grid_m, idx, mass)
 
-        if lane < SUPER_TILE_NODES:
-            smv0 = wp.tile_extract(tile_mv0, lane)
-            smv1 = wp.tile_extract(tile_mv1, lane)
-            smv2 = wp.tile_extract(tile_mv2, lane)
-            sm = wp.tile_extract(tile_m, lane)
-
-            ti = lane // (SUPER_TILE_DIM * SUPER_TILE_DIM)
-            tj = (lane // SUPER_TILE_DIM) % SUPER_TILE_DIM
-            tk = lane % SUPER_TILE_DIM
-
-            gi = tile_i + ti
-            gj = tile_j + tj
-            gk = tile_k + tk
-
-            if gi >= 0 and gi < G and gj >= 0 and gj < G and gk >= 0 and gk < G:
-                idx = gi * G * G + gj * G + gk
-                wp.atomic_add(grid_mv, idx * 3 + 0, smv0)
-                wp.atomic_add(grid_mv, idx * 3 + 1, smv1)
-                wp.atomic_add(grid_mv, idx * 3 + 2, smv2)
-                wp.atomic_add(grid_m, idx, sm)
-
         chunk_start += TILE_SIZE
+
+    if lane < SUPER_TILE_NODES:
+        smv0 = wp.tile_extract(tile_mv0, lane)
+        smv1 = wp.tile_extract(tile_mv1, lane)
+        smv2 = wp.tile_extract(tile_mv2, lane)
+        sm = wp.tile_extract(tile_m, lane)
+
+        ti = lane // (SUPER_TILE_DIM * SUPER_TILE_DIM)
+        tj = (lane // SUPER_TILE_DIM) % SUPER_TILE_DIM
+        tk = lane % SUPER_TILE_DIM
+
+        gi = tile_i + ti
+        gj = tile_j + tj
+        gk = tile_k + tk
+
+        if gi >= 0 and gi < G and gj >= 0 and gj < G and gk >= 0 and gk < G:
+            idx = gi * G * G + gj * G + gk
+            wp.atomic_add(grid_mv, idx * 3 + 0, smv0)
+            wp.atomic_add(grid_mv, idx * 3 + 1, smv1)
+            wp.atomic_add(grid_mv, idx * 3 + 2, smv2)
+            wp.atomic_add(grid_m, idx, sm)
 
 
 def _p2g_supercell_tile_callable(
@@ -299,4 +299,3 @@ def warp_p2g_supercell_tile(jax_p2g, x_sorted, v_sorted, C_sorted, stress_sorted
         grid_m0,
     )
     return grid_mv_flat.reshape((g3, 3)), grid_m
-
