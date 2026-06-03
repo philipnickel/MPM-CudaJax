@@ -1,4 +1,4 @@
-# Hydra-driven Nsight Python profiler for P2G stages or full Warp timesteps.
+# Hydra-driven Nsight Python profiler for JAX-loop P2G stages.
 #
 # Example:
 #   pixi run -e gpu python profile_nsight.py -cn nsight_profile \
@@ -11,8 +11,7 @@ benchmark: true
 tag: nsight_profile
 
 nsight:
-  # p2g profiles one annotated P2G stage wrapper per kernel. step is retained
-  # for the pure-Warp bonus kernels and emits one annotation per timestep phase.
+  # p2g profiles one annotated P2G stage wrapper per kernel.
   phase: p2g
   include_step_total: true
   write_json: true

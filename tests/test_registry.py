@@ -5,7 +5,7 @@ def test_every_kernel_has_a_spec():
     expected = {
         "jax_v1_5",
         "cuda_v1_inline", "cuda_v2_inline", "cuda_v3_inline", "cuda_v4_inline",
-        "warp_baseline_graph", "warp_bonus_graph", "warp_bonus_v2_graph",
+        "warp_v3_supercell_tile",
     }
     assert set(KERNELS) == expected
     for spec in KERNELS.values():
@@ -16,7 +16,8 @@ def test_every_kernel_has_a_spec():
 
 def test_removed_kernels_listed():
     for name in ("jax", "cuda_v1", "cuda_v2", "cuda_v4", "cuda_fused",
-                 "cuda_v2_fori_inline", "cuda_v3_fori_inline", "cuda_v6_inline"):
+                 "cuda_v2_fori_inline", "cuda_v3_fori_inline", "cuda_v6_inline",
+                 "warp_baseline_graph", "warp_bonus_graph", "warp_bonus_v2_graph"):
         assert name in REMOVED_KERNELS
 
 

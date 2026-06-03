@@ -1,5 +1,3 @@
-import numpy as np
-import pytest
 import jax.numpy as jnp
 from omegaconf import OmegaConf
 from mpm_jax.types import MPMState, make_params
@@ -47,30 +45,3 @@ def test_reset_restores_state():
     s.reset_to_initial()
     assert s.state is init
 
-
-def _warp_available():
-    try:
-        import warp as wp
-        wp.init()
-        return wp.is_cuda_available()
-    except Exception:
-        return False
-
-
-@pytest.mark.skipif(not _warp_available(), reason="needs Warp + CUDA")
-def test_warp_graph_solver_interface():
-    from mpm_jax.solver import WarpGraphSolver
-    from mpm_jax.stepping.warp_graph_frame import build_warp_graph
-    cfg = OmegaConf.create({
-        "sim": {"n_particles": 4096, "num_grids": 32, "dt": 3e-4,
-                "steps_per_frame": 2, "clip_bound": 0.5, "damping": 1.0,
-                "gravity": [0, 0, -9.8], "rho": 1000.0, "size": [0.5, 0.5, 0.5],
-                "initial_velocity": [0, 0, 0], "center": [0.5, 0.5, 0.5]},
-        "material": {"elasticity": {"name": "CorotatedElasticityJacobi", "E": 2e6, "nu": 0.4},
-                     "plasticity": {"name": "IdentityPlasticity"}},
-    })
-    particles = np.random.RandomState(0).uniform(0.3, 0.7, size=(4096, 3)).astype(np.float32)
-    solver = build_warp_graph(cfg, particles=particles)
-    assert isinstance(solver, WarpGraphSolver)
-    solver.step()
-    solver.solve(2)

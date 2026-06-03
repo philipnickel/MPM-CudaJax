@@ -306,80 +306,14 @@ def _run_jax_solver(solver, cfg: DictConfig):
     return frames, elapsed, total_steps, summary, frame_metrics
 
 
-def _run_warp_graph_solver(solver, cfg: DictConfig):
-    """Drive a WarpGraphSolver (pure-Warp graph backend) via its engine."""
-    import warp as wp
-
-    sim = cfg.sim
-    engine = solver._engine
-    profile_name = cfg.get('profile', {}).get('name', 'none')
-    profile_warp = profile_name == 'warp'
-
-    frames = []
-    frame_metrics = []
-    total_steps = int(sim.num_frames) * int(solver.steps_per_frame)
-
-    if profile_warp:
-        result = engine.run_frames_with_graph_timing(int(sim.num_frames))
-        elapsed = result.elapsed_s
-        summary = {
-            stage: {
-                'mean_ms': result.phase_ms_per_frame[stage],
-                'std_ms': 0.0,
-                'total_ms': result.phase_total_ms[stage],
-                'count': sim.num_frames,
-            }
-            for stage in result.phase_total_ms
-        }
-        print("\nWarp graph event timing (inside captured graph):")
-        for stage, ms_per_step in sorted(result.phase_ms_per_step.items(), key=lambda x: -x[1]):
-            print(f"  {stage:15s}: {ms_per_step:8.3f} ms/step")
-        return frames, elapsed, total_steps, summary, frame_metrics
-
-    if cfg.get('benchmark', False):
-        result = engine.run_frames(int(sim.num_frames))
-        elapsed = result.elapsed_s
-    else:
-        t0 = time.perf_counter()
-        for frame in tqdm(range(sim.num_frames), desc='Warp'):
-            t_frame = time.perf_counter()
-            engine.launch_frame()
-            wp.synchronize_device(engine.device)
-            frame_ms = (time.perf_counter() - t_frame) * 1000
-            x_np = engine.x.numpy()
-            v_np = engine.v.numpy()
-            frames.append(x_np)
-            frame_metrics.append({
-                'x_mean_z': float(x_np[:, 2].mean()),
-                'v_max': float(np.abs(v_np).max()),
-                'frame_ms': frame_ms,
-                'timestep_ms': frame_ms,
-            })
-        elapsed = time.perf_counter() - t0
-
-    avg_frame_ms = elapsed / sim.num_frames * 1000
-    summary = {
-        'timestep': {
-            'mean_ms': avg_frame_ms,
-            'std_ms': 0.0,
-            'total_ms': elapsed * 1000,
-            'count': sim.num_frames,
-        }
-    }
-    return frames, elapsed, total_steps, summary, frame_metrics
-
-
 def run(cfg: DictConfig):
     """Construct the solver via the registry and drive it to results.
 
     Returns (frames, elapsed, total_steps, summary, frame_metrics).
     """
     from mpm_jax.registry import build_solver
-    from mpm_jax.solver import WarpGraphSolver
 
     solver = build_solver(cfg)
-    if isinstance(solver, WarpGraphSolver):
-        return _run_warp_graph_solver(solver, cfg)
     return _run_jax_solver(solver, cfg)
 
 
@@ -391,25 +325,18 @@ def run(cfg: DictConfig):
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig):
     profile_name = cfg.get('profile', {}).get('name', 'none')
+    kernel_name = cfg.get('kernel', {}).get('name', 'jax_v1_5')
 
-    if profile_name not in ('none', 'jax', 'warp'):
+    if profile_name not in ('none', 'jax'):
         raise RuntimeError(
             f"Unsupported profile={profile_name!r}. Only profile=none, "
-            "profile=jax, and profile=warp are supported."
+            "and profile=jax are supported."
         )
-
-    kernel_name = cfg.get('kernel', {}).get('name', 'jax_v1_5')
-    is_warp_bonus = kernel_name in {'warp_bonus_graph', 'warp_bonus_v2_graph'}
 
     # CUDA Graphs toggle must happen before any `import jax` in this process
     # — including the profile=jax branch a few lines down and the registry
     # import inside run(cfg) (which pulls in jax.numpy).
     _maybe_enable_cuda_graphs(cfg)
-
-    if is_warp_bonus and profile_name == 'jax':
-        raise RuntimeError(f"kernel={kernel_name} is pure Warp and does not emit a JAX trace.")
-    if profile_name == 'warp' and not is_warp_bonus:
-        raise RuntimeError(f"profile=warp is only supported for pure Warp kernels, got kernel={kernel_name}.")
 
     # JAX profiler (in-process, writes TensorBoard trace)
     jax_trace_dir = None
@@ -434,7 +361,7 @@ def main(cfg: DictConfig):
     # Print timing summary
     steps_per_sec = total_steps / elapsed
     ms_per_step = elapsed / total_steps * 1000
-    backend_label = "warp" if is_warp_bonus else "jax"
+    backend_label = "jax-loop"
     print(f"\n{backend_label} ({kernel_name}): {total_steps} steps in {elapsed:.2f}s ({steps_per_sec:.1f} steps/s, {ms_per_step:.2f} ms/step)")
 
     total_ms = sum(s['total_ms'] for s in summary.values())

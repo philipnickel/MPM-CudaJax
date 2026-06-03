@@ -11,11 +11,7 @@ This is a benchmarking/investigation project; the code is shaped by the followin
 1. **Start in JAX.** Implement the full MLS-MPM timestep in pure JAX/XLA (`kernel=jax_v1_5`) — the baseline. The baseline scans over the 27 stencil offsets to avoid materialising `(N, 27, *)` intermediates.
 2. **Profile to find the bottlenecks.** Use the JAX profiler trace (`profile=jax`) to locate the *canonical MPM bottlenecks* — chiefly the P2G scatter and the `(N, 27, *)` stencil materialisation.
 3. **Optimise the bottlenecks with custom CUDA.** JAX FFI lets us drop hand-written CUDA kernels in for exactly those bottlenecks (`cuda_v1..v4_inline`) while the rest of the timestep stays in JAX. This answers "where is XLA enough vs. where do we need custom kernels?"
-4. **Try a different programming model — tiled (Warp).** Finally, investigate whether the **tiled programming model** (NVIDIA Warp) can reach similar or better performance. Warp's graph/tile model does not fit inside the JAX-driven frame, so this needs a **separate solver** (`WarpGraphSolver` — pure Warp, CUDA-graph capture/replay, no JAX in the loop). The intended structure deliberately mirrors the JAX→CUDA arc:
-   - first a **fully-Warp *baseline* solver** that mimics the JAX baseline (simple per-particle kernels, no tiling) to establish comparable baseline performance, then
-   - swap the bottleneck kernels for **tile-based** ones.
-
-   The Warp investigation lives **entirely in the pure-Warp `WarpGraphSolver`** (no JAX in the loop). There is intentionally **no hybrid "Warp P2G inside the JAX frame" variant** — mixing backends per-stage doesn't isolate the programming-model comparison, so those were removed. *Current state:* the pure-Warp side has a **baseline** (`warp_baseline_graph` — simple per-particle atomic-scatter P2G, no super-cell sort, mirrors the JAX baseline; robust across grid sizes) and **tiled** variants (`warp_bonus_graph` / `warp_bonus_v2_graph`, super-cell tile P2G). Note the tiled variants only win in a narrow band (≈G=32) and degrade catastrophically at high grid resolution (G=64); the baseline is the robust pure-Warp default.
+4. **Try a different programming model — tiled (Warp).** Finally, investigate whether the **tiled programming model** (NVIDIA Warp) can reach similar or better performance while keeping the same JAX-owned frame loop used by the JAX and CUDA variants. The Warp path is `warp_v3_supercell_tile`: JAX computes stress, sorts particles by super-cell, updates the grid, and runs G2P; Warp owns the tiled P2G kernel via the official `warp.jax_callable` bridge.
 
 **The analysis method (applied to every variant, in this order):**
 
@@ -30,7 +26,7 @@ All performance comparisons use one fixed, well-resolved configuration (adapted 
 - **8 particles per cell** — the MLS-MPM resolution sweet spot (2³ per cell). Do not benchmark below this.
 - **∆x = 8×10⁻³** → `sim.num_grids = 125` (the solver uses `dx = 1/num_grids`). The particle-filled region then spans **100³ active cells**.
 - **Particles uniformly sampled in [0.1, 0.9]³** → `sim.center = [0.5, 0.5, 0.5]`, region side 0.8. 100³ active cells × 8 ppc = **8 M particles** → `sim.n_particles = 8_000_000`.
-- **APIC transfer** (codebase default) + **linear/corotated elasticity** for simplicity (`material=jelly_jacobi`).
+- **APIC transfer** (codebase default) + **StVK/Drucker-Prager sand** (`material=sand_jacobi`).
 - Per-particle volume follows the region: `vol = 0.8³ / N` (`make_params` computes `vol = prod(sim.size)/n`, so set `sim.size=[0.8,0.8,0.8]`).
 
 **Phase definitions** (kept broad so timing reflects real work, and to attribute the grid step):
@@ -39,12 +35,10 @@ All performance comparisons use one fixed, well-resolved configuration (adapted 
 
 **Reproduce:**
 ```bash
-pixi run -e gpu python simulate.py kernel=<k> material=jelly_jacobi \
+pixi run -e gpu python simulate.py kernel=<k> material=sand_jacobi \
     sim.num_grids=125 sim.n_particles=8000000 \
     sim.center=[0.5,0.5,0.5] sim.size=[0.8,0.8,0.8] benchmark=true
 ```
-
-> ⚠️ **Wiring gap (TODO):** `build_solver` (in `src/mpm_jax/registry.py`) currently hard-codes the particle-sampling region to `size=[0.5,0.5,0.5]`, independent of `sim.size` (which only feeds `vol`). Until the particle region is wired to config (use `sim.size`, or add a `sim.particle_size`) and a `conf/sim/benchmark.yaml` preset is added, the `sim.size` override above changes `vol` but NOT the sampled region, so the [0.1,0.9]³ / 8-ppc setup is not yet reproducible end-to-end.
 
 ## Package manager: pixi
 
@@ -97,17 +91,16 @@ conf/                  Hydra config groups
   material/            sand_jacobi.yaml, jelly_jacobi.yaml  (constitutive model)
   sim/default.yaml     n_particles, num_grids, dt, BCs, ...
   kernel/              jax_v1_5.yaml, cuda_v*.yaml, warp_*.yaml (P2G impl)
-  profile/             none.yaml, jax.yaml, warp.yaml
+  profile/             none.yaml, jax.yaml
   sweep_*.yaml         pre-baked Hydra multirun sweeps
 src/mpm_jax/
   types.py             MPMState, StepIntermediates, MPMParams, make_params, OFFSET_27
-  solver.py            MPMSolver, WarpGraphSolver + build_jit_step / build_jit_stages
+  solver.py            MPMSolver + build_jit_step / build_jit_stages
   registry.py          KERNELS dict, REMOVED_KERNELS dict, build_solver(cfg)
   constitutive.py      5 elasticity + 4 plasticity models
   boundary.py          6 boundary condition types
   callbacks.py         on_frame callback helpers
   p2g_scan.py          jax_v1_5 P2G: lax.scan over 27 offsets, build_jit_stages_scan
-  warp_graph.py        WarpBonusSimulator: pure-Warp CUDA graph capture/replay engine
   blocks/              Pure-math building blocks (no JIT, no closures)
     weights.py         compute_weights_and_indices: B-spline weights, grid indices
     p2g.py             p2g_compute, p2g_scatter, p2g: Particle-to-Grid (JAX path)
@@ -120,7 +113,7 @@ src/mpm_jax/
     substep.py         step(): one full P2G2P substep (pure fn, safe to JIT)
     jax_frames.py      build_jax_v1_5_frame
     cuda_frames.py     build_cuda_v1_frame .. build_cuda_v4_frame
-    warp_graph_frame.py build_warp_graph: constructs a WarpGraphSolver from cfg + particles
+    warp_hybrid_frame.py build_warp_v3_supercell_frame
   cuda/
     p2g_cuda.py        loads prebuilt .so + jax.ffi.register_ffi_target
     _lib/              prebuilt .so files (gitignored, populated by CMake)
@@ -151,8 +144,6 @@ Three embarrassingly parallel phases per substep:
 - `solve(num_frames, on_frame=None)` loops `step()` with an optional IO callback.
 - Default loop inside `build_jax_frame` is `lax.fori_loop`; pass `loop_kind="python"` to unroll instead.
 
-`WarpGraphSolver(MPMSolver)` wraps the pure-Warp `WarpBonusSimulator` capture/replay engine. It overrides `step()` and `solve()` to call `engine.launch_frame()` and does NOT build a JAX `_frame`. `reset()` and `reset_to_initial()` raise `NotImplementedError` (state is owned by the Warp engine).
-
 ### Kernel registry
 
 Kernel selection is a registry, not an if/elif chain. `src/mpm_jax/registry.py` defines:
@@ -169,14 +160,12 @@ Current kernel names:
 | `cuda_v2_inline` | MPMSolver | Warp-shuffle coalesced inline CUDA P2G + CUDA G2P; default `loop_kind=fori` |
 | `cuda_v3_inline` | MPMSolver | Morton-sorted inline CUDA P2G + CUDA G2P; `cuda_graph=true` enables XLA command-buffer replay |
 | `cuda_v4_inline` | MPMSolver | Super-cell-owned grid tile inline CUDA P2G + CUDA G2P |
-| `warp_baseline_graph` | WarpGraphSolver | Pure-Warp CUDA graph **baseline**: per-particle atomic-scatter P2G, no super-cell sort (mirrors the JAX baseline; robust across grid sizes) |
-| `warp_bonus_graph` | WarpGraphSolver | Pure-Warp CUDA graph: bins by super-cell, runs tiled P2G + grid + G2P without JAX |
-| `warp_bonus_v2_graph` | WarpGraphSolver | Pure-Warp graph that sorts particle ids only (avoids copying sorted x/v/C/F buffers) |
+| `warp_v3_supercell_tile` | MPMSolver | Hybrid JAX/Warp path: JAX frame + Warp `jax_callable` super-cell tiled P2G |
 
 Material baseline:
 - `material=sand_jacobi` is the default JAX/CUDA material path: StVK elasticity + Drucker-Prager plasticity, both using the in-repo Jacobi SVD.
 - `material=jelly_jacobi` remains a simple corotated-elasticity sanity-check material.
-- Pure-Warp graph kernels are still intentionally narrow but support both `material=sand_jacobi` and `material=jelly_jacobi`.
+- The Warp backend is part of the same JAX loop as the CUDA/JAX variants, so `profile=jax` and ordinary benchmark timing apply.
 
 Removed/renamed kernels (error message from `build_solver`):
 - `jax` → use `jax_v1_5` as the JAX baseline.
@@ -203,7 +192,7 @@ pixi run -e gpu python simulate.py kernel=cuda_v1_inline material=jelly_jacobi  
 pixi run -e gpu python simulate.py kernel=cuda_v2_inline material=jelly_jacobi         # warp-shuffle CUDA (fori loop)
 pixi run -e gpu python simulate.py kernel=cuda_v3_inline material=jelly_jacobi         # Morton-sorted CUDA
 pixi run -e gpu python simulate.py kernel=cuda_v3_inline cuda_graph=true material=jelly_jacobi  # with XLA CUDA graphs
-pixi run -e gpu python simulate.py kernel=warp_bonus_graph material=jelly_jacobi benchmark=true
+pixi run -e gpu python simulate.py kernel=warp_v3_supercell_tile material=sand_jacobi benchmark=true
 
 # loop_kind override (python = unrolled, fori = lax.fori_loop; fori is the default)
 pixi run -e gpu python simulate.py kernel=cuda_v2_inline kernel.loop_kind=python
@@ -213,7 +202,6 @@ pixi run -e gpu python simulate.py sim.n_particles=50000 sim.num_grids=64
 
 # Profilers
 pixi run -e gpu python simulate.py profile=jax  benchmark=true     # TensorBoard trace
-pixi run -e gpu python simulate.py profile=warp benchmark=true kernel=warp_bonus_graph  # Warp graph timing
 
 # Nsight Python profiler (per-stage kernel analysis)
 pixi run -e gpu python profile_nsight.py -cn nsight_profile kernel=jax_v1_5 material=jelly_jacobi nsight.phase=p2g sim.n_particles=4096
@@ -268,7 +256,7 @@ CMake auto-detects the local GPU arch when `MPM_CUDA_ARCH` is unset.
   5. Register it in `src/mpm_jax/registry.py` `KERNELS` dict as `KernelSpec(MPMSolver, build_cuda_vX_frame)`.
   6. Add `conf/kernel/cuda_vX_inline.yaml`.
   7. Rebuild: `pixi run -e gpu rebuild-cuda` (or `pixi reinstall mpm-cudajax`).
-- **Adding a new pure-Warp kernel:** follow the `build_warp_graph` pattern in `src/mpm_jax/stepping/warp_graph_frame.py` and register with `KernelSpec(WarpGraphSolver, build_warp_graph, defaults)`.
+- **Adding a new Warp-in-JAX kernel:** follow `src/mpm_jax/stepping/warp_hybrid_frame.py` and register it as an `MPMSolver` frame builder.
 - Boundary conditions and constitutive models are registry-based (`REGISTRY` dict in `constitutive.py`, `build_boundary_fns` in `boundary.py`); add a function and a config entry.
 - **No `block_until_ready` inside the timed region in benchmark mode.** Both timing modes dispatch all frames back-to-back and sync exactly once after the loop; elapsed/num_frames is the average. Per-stage breakdown comes from `profile=jax` (TensorBoard trace) or `profile_nsight.py`, not from `simulate.py`'s output.
 - `simulate.py` enables XLA CUDA graph capture for `kernel=cuda_v3_inline cuda_graph=true` by setting `XLA_FLAGS` before JAX is imported. This must happen before any `import jax` in the process.

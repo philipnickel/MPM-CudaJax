@@ -22,7 +22,7 @@ The main entry points are:
 - `profile_nsight.py` - Nsight Python profiling for per-stage and per-kernel
   analysis.
 - `src/mpm_jax/registry.py` - kernel registry and `build_solver(cfg)`.
-- `src/mpm_jax/solver.py` - `MPMSolver` and `WarpGraphSolver`.
+- `src/mpm_jax/solver.py` - `MPMSolver`.
 - `src/mpm_jax/blocks/` - pure math blocks for weights, P2G, G2P, grid update,
   SVD, sorting, and initialization.
 - `src/mpm_jax/stepping/` - per-kernel frame builders.

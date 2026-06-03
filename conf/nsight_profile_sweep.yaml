@@ -49,8 +49,7 @@ nsight:
       - cuda_v2_inline
       - cuda_v3_inline
       - cuda_v4_inline
-      - warp_bonus_graph
-      - warp_bonus_v2_graph
+      - warp_v3_supercell_tile
     n_particles:
       - 65536
       - 262144
