@@ -4,17 +4,6 @@ _SOLVER_EXPORTS = {
     "MPMState",
     "MPMParams",
     "make_params",
-    "step",
-    "simulate_frame",
-    "compute_weights_and_indices",
-    "p2g",
-    "p2g_compute",
-    "p2g_scatter",
-    "grid_update",
-    "g2p",
-    "build_jit_step",
-    "build_jit_stages",
-    "StepIntermediates",
 }
 _CONSTITUTIVE_EXPORTS = {"get_constitutive", "ELASTICITY", "PLASTICITY"}
 _BOUNDARY_EXPORTS = {"build_boundary_fns"}

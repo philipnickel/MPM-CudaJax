@@ -94,17 +94,16 @@ conf/                  Hydra config groups
   profile/             none.yaml, jax.yaml
   sweep_*.yaml         pre-baked Hydra multirun sweeps
 src/mpm_jax/
-  types.py             MPMState, StepIntermediates, MPMParams, make_params, OFFSET_27
-  solver.py            MPMSolver + build_jit_step / build_jit_stages
+  types.py             MPMState, MPMParams, make_params, OFFSET_27
+  solver.py            MPMSolver
   registry.py          KERNELS dict, REMOVED_KERNELS dict, build_solver(cfg)
   constitutive.py      sand Jacobi elasticity + plasticity
   boundary.py          sticky surface collider
   callbacks.py         on_frame callback helpers
   backends.py          Backend interface + shared JAX-owned frame loop
-  p2g_scan.py          jax_v1_5 P2G: lax.scan over 27 offsets, build_jit_stages_scan
+  p2g_scan.py          jax_v1_5 P2G: lax.scan over 27 offsets
   blocks/              Pure-math building blocks (no JIT, no closures)
     weights.py         compute_weights_and_indices: B-spline weights, grid indices
-    p2g.py             p2g_compute, p2g_scatter, p2g: Particle-to-Grid (JAX path)
     g2p.py             g2p: Grid-to-Particle gather + APIC update
     grid.py            grid_update: momentum normalise + gravity + damping; build_grid_x
     svd.py             3x3 Jacobi SVD (used by Warp paths)
@@ -170,8 +169,6 @@ Removed/renamed kernels (error message from `build_solver`):
 - `cuda_v2_fori_inline` → use `kernel=cuda_v2_inline loop_kind=fori` (now the default).
 - `cuda_v3_fori_inline` → use `kernel=cuda_v3_inline loop_kind=fori`.
 - `cuda_v6_inline` → use `kernel=cuda_v3_inline cuda_graph=true`.
-
-`StepIntermediates` (the namedtuple passed from P2G stage to G2P stage in the per-stage JIT path) is intentionally minimal — only `x_post_bc` and `F_pre_plast`. Carrying weight/dweight/dpos/index would cost ~1148 bytes per particle of inter-stage HBM and OOM the GPU at N=5M. G2P recomputes B-spline weights from `x_post_bc` instead.
 
 ## Common commands
 
@@ -262,6 +259,6 @@ CMake auto-detects the local GPU arch when `MPM_CUDA_ARCH` is unset.
 
 - Don't run `pip install` — use `pixi add` / `pixi install`.
 - Don't commit `build/`, `output/`, `outputs/`, `multirun/`, `wandb/`, `*.nsys-rep`, `*.sqlite`, or `.pixi/` (`.gitignore` covers these). DO commit `pixi.lock`.
-- Don't bypass the solver class for benchmarking — `simulate_frame` exists only for unjitted per-stage profiling.
+- Don't bypass the solver class for benchmarking; the outer frame is the compiled stepping unit.
 - Don't hard-code particle counts, grid sizes, or material params in code — they live in `conf/`.
 - Don't reference the old flat `mpm_jax/` layout (no `src/` prefix). All source files live under `src/mpm_jax/`.

@@ -16,13 +16,11 @@ The CUDA inline backends take the same HBM-saving idea further by running the
 27-stencil scatter inside one register-resident CUDA kernel.
 """
 
-import jax
 import jax.numpy as jnp
 
-from mpm_jax.types import OFFSET_27, MPMState, StepIntermediates
-from mpm_jax.blocks.weights import compute_weights_and_indices
-from mpm_jax.blocks.g2p import g2p
-from mpm_jax.blocks.grid import grid_update
+import jax
+
+from mpm_jax.types import OFFSET_27
 
 
 # 27 integer stencil offsets in (i, j, k) order matching solver.OFFSET_27.
@@ -134,49 +132,3 @@ def _p2g_scan(x, v, C, stress, dt, vol, p_mass, dx, inv_dx, num_grids):
 
     (grid_m, grid_mv), _ = jax.lax.scan(scan_body, (grid_m0, grid_mv0), OFFSET_27_INT)
     return grid_mv, grid_m
-
-
-def build_jit_stages_scan(params, elasticity_fn, plasticity_fn,
-                          pre_particle_fn, post_grid_fn):
-    """Per-stage JIT triple using the scan-over-27-stencils P2G.
-
-    Mirrors ``solver.build_jit_stages``: returns
-    ``(jit_p2g_stage, jit_grid_stage, jit_g2p_stage)``.
-
-    Only the P2G stage is structurally different — the grid update and G2P
-    stages reuse the existing implementations because they were never the
-    HBM bottleneck (G2P gathers from a small grid, not a large per-particle
-    intermediate).
-    """
-
-    @jax.jit
-    def jit_p2g_stage(state):
-        x, v = pre_particle_fn(state.x, state.v, 0.0)
-        stress = elasticity_fn(state.F)
-        grid_mv, grid_m = _p2g_scan(
-            x, v, state.C, stress,
-            params.dt, params.vol, params.p_mass,
-            params.dx, params.inv_dx, params.num_grids,
-        )
-        inter = StepIntermediates(x_post_bc=x, F_pre_plast=state.F)
-        return grid_mv, grid_m, inter
-
-    @jax.jit
-    def jit_grid_stage(grid_mv, grid_m):
-        grid_mv_normalized = grid_update(
-            grid_mv, grid_m, params.gravity, params.dt, params.damping)
-        grid_v = post_grid_fn(grid_mv_normalized, grid_m, 0.0)
-        return grid_v
-
-    @jax.jit
-    def jit_g2p_stage(state, grid_v, inter):
-        weight, dweight, dpos, index = compute_weights_and_indices(
-            inter.x_post_bc, params.inv_dx, params.dx, params.num_grids)
-        new_x, new_v, new_C, new_F = g2p(
-            grid_v, weight, dweight, dpos, index,
-            inter.F_pre_plast, inter.x_post_bc,
-            params.dt, params.inv_dx, params.clip_bound)
-        new_F = plasticity_fn(new_F)
-        return MPMState(x=new_x, v=new_v, C=new_C, F=new_F)
-
-    return jit_p2g_stage, jit_grid_stage, jit_g2p_stage

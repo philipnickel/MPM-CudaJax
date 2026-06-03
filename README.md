@@ -257,7 +257,7 @@ pixi run -e gpu pytest tests/test_cuda_ffi_loader.py tests/test_jax_v1_5.py \
 ```
 MPM-CudaJax/
 ├── simulate.py              # Hydra entry + benchmark + GIF rendering
-├── profile_nsight.py        # Nsight Python per-stage profiler
+├── profile_nsight.py        # Nsight Python P2G profiler
 ├── pyproject.toml           # scikit-build-core build + pixi cpu / gpu / hpc envs
 ├── pixi.lock                # locked deps for all envs (commit this)
 ├── CMakeLists.txt           # CUDA kernel build (called by scikit-build-core)
@@ -271,12 +271,12 @@ MPM-CudaJax/
 │   └── sweep_*.yaml
 └── src/
     └── mpm_jax/
-        ├── types.py         # MPMState, StepIntermediates, MPMParams, make_params
-        ├── solver.py        # MPMSolver + build_jit_stages
+        ├── types.py         # MPMState, MPMParams, make_params
+        ├── solver.py        # MPMSolver
         ├── registry.py      # KERNELS, REMOVED_KERNELS, build_solver(cfg)
         ├── constitutive.py  # sand Jacobi elasticity + plasticity
         ├── boundary.py      # sticky surface collider
-        ├── blocks/          # Pure math: weights, p2g, g2p, grid, svd, sort, init
+        ├── blocks/          # Pure math: weights, g2p, grid, svd, sort, init
         ├── backends.py      # Backend interface + shared JAX-owned frame loop
         ├── stepping/        # Warp tiled P2G bridge helpers
         └── cuda/

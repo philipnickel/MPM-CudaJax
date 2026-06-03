@@ -11,19 +11,6 @@ class MPMState(NamedTuple):
     F: jax.Array      # (N, 3, 3) deformation gradient
 
 
-class StepIntermediates(NamedTuple):
-    """Minimal state carried from the P2G stage into the G2P stage.
-
-    Only the post-BC positions and the F that should feed G2P are kept.
-    B-spline weight / dweight / dpos / index tensors are NOT cached here -
-    they would be (N, 27, *) and at large N (a few million particles)
-    materialising them across the JIT boundary blows the GPU memory
-    budget. G2P recomputes them from x_post_bc - the math is cheap
-    (~50 flops/particle, no SVD) and the savings are ~1100 bytes/particle.
-    """
-    x_post_bc: jax.Array     # (N, 3) positions after pre-particle BCs
-    F_pre_plast: jax.Array   # (N, 3, 3) F that G2P should use as its F_p input
-
 class MPMParams(NamedTuple):
     num_grids: int
     dt: float

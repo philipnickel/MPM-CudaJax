@@ -144,8 +144,8 @@ def cuda_p2g_inline(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
     Jacobi SVD). One CUDA kernel launch, one thread per particle, with a
     register-resident 27-stencil loop. No (N, 27, *) tensor materialised.
 
-    Drop-in replacement for solver.p2g_compute + solver.p2g_scatter when
-    stress has already been computed by an upstream elasticity model.
+    Stress is computed by the JAX elasticity model; weights and scatter happen
+    inside this CUDA kernel.
     """
     N = x.shape[0]
     G = num_grids

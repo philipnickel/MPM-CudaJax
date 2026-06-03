@@ -9,7 +9,6 @@ import jax.numpy as jnp
 
 from mpm_jax.blocks.g2p import g2p
 from mpm_jax.blocks.grid import grid_update
-from mpm_jax.blocks.p2g import p2g as jax_p2g
 from mpm_jax.blocks.weights import compute_weights_and_indices
 from mpm_jax.types import MPMState
 
@@ -110,28 +109,10 @@ def _make_jax_scan_p2g():
     return p2g
 
 
-def _jax_reference_p2g(params, prepared):
-    return jax_p2g(
-        prepared.v, prepared.C, prepared.stress,
-        prepared.weight, prepared.dweight, prepared.dpos, prepared.index,
-        params.dt, params.vol, params.p_mass, params.num_grids,
-    )
-
-
 def _jax_g2p(params, prepared, grid_v):
     return g2p(
         grid_v, prepared.weight, prepared.dweight, prepared.dpos, prepared.index,
         prepared.F, prepared.x, params.dt, params.inv_dx, params.clip_bound,
-    )
-
-
-def jax_reference_backend(**_opts):
-    return Backend(
-        name="jax_reference",
-        prepare=_jax_scan_prepare,
-        p2g=_jax_reference_p2g,
-        g2p=_jax_g2p,
-        loop_kind="fori",
     )
 
 
