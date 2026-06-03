@@ -91,11 +91,11 @@ def visualize_frames_warp_opengl(frames, export_path, color='white', radius=0.00
         screen_height=height,
         near_plane=0.01,
         far_plane=10.0,
-        camera_fov=35.0,
-        camera_pos=(1.65, 1.65, 1.25),
-        camera_front=(-0.62, -0.62, -0.48),
+        camera_fov=32.0,
+        camera_pos=(2.05, 2.05, 1.55),
+        camera_front=(-0.62, -0.62, -0.46),
         camera_up=(0.0, 0.0, 1.0),
-        background_color=(0.78, 0.82, 0.86),
+        background_color=(0.94, 0.95, 0.96),
         draw_grid=False,
         draw_sky=False,
         draw_axis=False,
@@ -111,7 +111,14 @@ def visualize_frames_warp_opengl(frames, export_path, color='white', radius=0.00
     try:
         for i, points in enumerate(frames):
             renderer.begin_frame(i / fps)
-            renderer.render_ground(size=1.0)
+            renderer.render_plane(
+                "floor",
+                pos=(0.5, 0.5, 0.02),
+                rot=(0.70710678, 0.0, 0.0, 0.70710678),
+                width=0.65,
+                length=0.65,
+                color=(0.82, 0.84, 0.86),
+            )
             renderer.render_points(
                 name="particles",
                 points=np.asarray(points, dtype=np.float32),
