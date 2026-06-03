@@ -11,7 +11,7 @@ def test_every_kernel_has_a_spec():
     for spec in KERNELS.values():
         assert isinstance(spec, KernelSpec)
         assert spec.solver_cls is not None
-        assert callable(spec.build_frame)
+        assert callable(spec.backend_factory)
 
 
 def test_removed_kernels_listed():

@@ -13,7 +13,7 @@ MPM-CudaJax is a 3D MLS-MPM benchmark and investigation project comparing:
 
 - pure JAX/XLA solver paths,
 - hand-written CUDA kernels registered through JAX FFI, and
-- pure NVIDIA Warp CUDA-graph solver paths.
+- NVIDIA Warp kernels called from the shared JAX-owned frame loop.
 
 The main entry points are:
 
@@ -22,10 +22,12 @@ The main entry points are:
 - `profile_nsight.py` - Nsight Python profiling for per-stage and per-kernel
   analysis.
 - `src/mpm_jax/registry.py` - kernel registry and `build_solver(cfg)`.
-- `src/mpm_jax/solver.py` - `MPMSolver`.
+- `src/mpm_jax/solver.py` - Equinox-based `MPMSolver`.
+- `src/mpm_jax/backends.py` - shared backend interface and JAX-owned frame
+  loop.
 - `src/mpm_jax/blocks/` - pure math blocks for weights, P2G, G2P, grid update,
   SVD, sorting, and initialization.
-- `src/mpm_jax/stepping/` - per-kernel frame builders.
+- `src/mpm_jax/stepping/` - Warp tiled kernel bridge helpers.
 - `src/mpm_jax/cuda/` - JAX FFI CUDA loading plus CUDA kernel sources.
 - `conf/` - Hydra config groups for simulation, materials, kernels, profiling,
   and sweeps.

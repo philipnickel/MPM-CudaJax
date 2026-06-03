@@ -1,18 +1,12 @@
-"""Hybrid JAX/Warp frame builders.
+"""Warp tiled P2G operation used by the shared backend frame loop.
 
-This restores the old May-era ``warp_v3_supercell_tile`` experiment: JAX owns
-the frame, constitutive model, sorting, grid update, and state; a Warp tiled
-kernel owns only the P2G scatter; CUDA fused G2P is reused for gather.
+JAX owns the frame, constitutive model, sorting, grid update, and state. This
+module owns only the Warp tiled P2G scatter plus the JAX-callable bridge.
 """
 
-import jax
 import jax.numpy as jnp
 import warp as wp
 from warp import JaxCallableGraphMode, jax_callable
-
-from mpm_jax.blocks.grid import grid_update
-from mpm_jax.types import MPMState
-
 
 TILE_SIZE = 64
 SUPER_CELL_WIDTH = 2
@@ -316,100 +310,3 @@ def _home_super_cell_id(x, inv_dx, G, sc=SUPER_CELL_WIDTH):
     sj = home[:, 1] // sc
     sk = home[:, 2] // sc
     return (si * (Gs * Gs) + sj * Gs + sk).astype(jnp.int32)
-
-
-def build_warp_v3_supercell_frame(params, elasticity_fn, plasticity_fn,
-                                  pre_fn, post_fn, steps_per_frame,
-                                  *, use_cuda_g2p=True, graph_mode="jax", **_ignored):
-    """Build the hybrid ``warp_v3_supercell_tile`` frame.
-
-    The substep order mirrors ``cuda_v4_inline``: pre-BC, JAX stress,
-    super-cell sort, Warp tiled P2G, JAX grid update/post-BC, CUDA fused G2P,
-    JAX plasticity.
-    """
-    if params.num_grids % SUPER_CELL_WIDTH != 0:
-        raise RuntimeError(
-            f"warp_v3_supercell_tile requires num_grids ({params.num_grids}) "
-            f"divisible by super-cell width ({SUPER_CELL_WIDTH})."
-        )
-
-    if use_cuda_g2p:
-        from mpm_jax.cuda.p2g_cuda import (  # pylint: disable=import-outside-toplevel
-            is_available,
-            cuda_g2p_fused,
-        )
-
-        if not is_available("g2p_fused"):
-            raise RuntimeError(
-                "cuda g2p kernel not registered (missing .so?). "
-                "Run `pixi install -e gpu` to build.")
-    else:
-        from mpm_jax.blocks.g2p import g2p  # pylint: disable=import-outside-toplevel
-        from mpm_jax.blocks.weights import (  # pylint: disable=import-outside-toplevel
-            compute_weights_and_indices,
-        )
-        cuda_g2p_fused = None
-
-    G = params.num_grids
-    Gs = G // SUPER_CELL_WIDTH
-    super_boundaries = jnp.arange(Gs ** 3 + 1, dtype=jnp.int32)
-    jax_p2g = _make_jax_p2g_supercell_tile(graph_mode)
-
-    @jax.jit
-    def jit_frame(state):
-        def step_body(state):
-            with jax.named_scope("pre_particle"):
-                x, v = pre_fn(state.x, state.v, 0.0)
-            with jax.named_scope("elasticity"):
-                stress = elasticity_fn(state.F)
-
-            with jax.named_scope("warp_supercell_sort"):
-                super_id = _home_super_cell_id(x, params.inv_dx, G, SUPER_CELL_WIDTH)
-                order = jnp.argsort(super_id)
-
-                x_s = x[order]
-                v_s = v[order]
-                C_s = state.C[order]
-                stress_s = stress[order]
-                F_s = state.F[order]
-
-                super_id_sorted = super_id[order]
-                cell_start = jnp.searchsorted(
-                    super_id_sorted, super_boundaries
-                ).astype(jnp.int32)
-
-            with jax.named_scope("warp_p2g_supercell_tile"):
-                grid_mv, grid_m = warp_p2g_supercell_tile(
-                    jax_p2g, x_s, v_s, C_s, stress_s, cell_start,
-                    params.num_grids, params.dt, params.vol, params.p_mass,
-                    params.inv_dx, params.dx,
-                )
-
-            with jax.named_scope("grid_update"):
-                grid_mv = grid_update(
-                    grid_mv, grid_m, params.gravity, params.dt, params.damping)
-                grid_v = post_fn(grid_mv, grid_m, 0.0)
-
-            with jax.named_scope("g2p"):
-                if use_cuda_g2p:
-                    new_x, new_v, new_C, new_F = cuda_g2p_fused(
-                        x_s, F_s, grid_v,
-                        params.num_grids, params.dt,
-                        params.inv_dx, params.dx, params.clip_bound,
-                    )
-                else:
-                    weight, dweight, dpos, index = compute_weights_and_indices(
-                        x_s, params.inv_dx, params.dx, params.num_grids)
-                    new_x, new_v, new_C, new_F = g2p(
-                        grid_v, weight, dweight, dpos, index,
-                        F_s, x_s, params.dt, params.inv_dx, params.clip_bound)
-
-            with jax.named_scope("plasticity"):
-                new_F = plasticity_fn(new_F)
-            return MPMState(x=new_x, v=new_v, C=new_C, F=new_F)
-
-        for _ in range(steps_per_frame):
-            state = step_body(state)
-        return state
-
-    return jit_frame

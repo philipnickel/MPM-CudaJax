@@ -163,10 +163,10 @@ Three embarrassingly parallel phases per timestep:
 
 The solver is class-based:
 
-- **`MPMSolver`** builds one JIT-compiled `_frame` function at construction time. Each call to `step()` runs `_frame(self.state)`, which contains `steps_per_frame` substeps as a single XLA program (via `lax.fori_loop` by default, or unrolled with `loop_kind="python"`). `self` is never traced.
+- **`MPMSolver`** is an Equinox module. Particle/grid state is stored as dynamic JAX leaves, while backend choices, constitutive functions, boundary functions, and the compiled `_frame` are static fields. `stepped()` returns a new solver with updated state; `step()` keeps the driver-friendly mutating API and advances one frame by running `_frame(self.state)`. The frame contains `steps_per_frame` substeps as a single XLA program (via `lax.fori_loop` by default, or unrolled with `loop_kind="python"`).
 
 Kernel selection is driven by `src/mpm_jax/registry.py`:
-- `KERNELS` maps each `kernel=<name>` to a `KernelSpec(solver_cls, build_frame, defaults)`.
+- `KERNELS` maps each `kernel=<name>` to a `KernelSpec(solver_cls, backend_factory, defaults)`.
 - `build_solver(cfg)` reads the registry, builds all closures (particles, params, BCs, constitutive fns), and returns the fully initialised solver.
 - No if/elif dispatch in `simulate.py`; the routing is entirely in the registry.
 

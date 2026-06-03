@@ -13,6 +13,7 @@ dependencies = [
     "matplotlib",
     "tqdm",
     "numpy",
+    "equinox",
     "warp-lang",
     "pyvista",
 ]
@@ -49,6 +50,7 @@ seaborn = ">=0.13.2,<0.14"
 pandas = ">=3.0.3,<4"
 pyvista = "*"
 imageio = "*"
+equinox = ">=0.13.7,<0.14"
 # NOTE: `warp-lang` is intentionally NOT here. The conda-forge build pulls
 # `jax` as a hard runtime dep, which would conflict with the hpc env's
 # pypi-side `jax[cuda12-local]` (pixi can't apply pypi extras to a

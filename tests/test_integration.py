@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import numpy as np
 from mpm_jax.types import MPMState, make_params
 from mpm_jax.solver import simulate_frame, build_jit_stages
-from mpm_jax.stepping.jax_frames import build_jax_frame as build_jit_frame
+from mpm_jax.backends import build_backend_frame, jax_reference_backend
 from mpm_jax.constitutive import get_constitutive
 from mpm_jax.boundary import build_boundary_fns
 
@@ -77,8 +77,9 @@ def test_per_stage_matches_per_frame():
         )
 
     # Path A: monolithic JIT'd frame
-    jit_frame = build_jit_frame(
-        params, elasticity_fn, plasticity_fn, pre_fn, post_fn, steps_per_frame)
+    jit_frame = build_backend_frame(
+        params, elasticity_fn, plasticity_fn, pre_fn, post_fn,
+        jax_reference_backend(), steps_per_frame)
     s_a = jit_frame(make_state())
     s_a = jit_frame(s_a)  # 2 frames
 

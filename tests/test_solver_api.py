@@ -1,8 +1,9 @@
 import jax.numpy as jnp
+import equinox as eqx
 from omegaconf import OmegaConf
 from mpm_jax.types import MPMState, make_params
 from mpm_jax.solver import MPMSolver
-from mpm_jax.stepping.jax_frames import build_jax_frame
+from mpm_jax.backends import jax_v1_5_backend
 from mpm_jax.constitutive import get_constitutive
 from mpm_jax.boundary import build_boundary_fns
 from mpm_jax.blocks.grid import build_grid_x
@@ -18,7 +19,7 @@ def _make_solver(steps_per_frame=2, n=64, G=16):
     init = MPMState(x=x, v=jnp.zeros((n, 3)), C=jnp.zeros((n, 3, 3)),
                     F=jnp.broadcast_to(jnp.eye(3), (n, 3, 3)).copy())
     return MPMSolver(params, elasticity_fn=elasticity, plasticity_fn=plasticity,
-                     pre_fn=pre_fn, post_fn=post_fn, build_frame=build_jax_frame,
+                     pre_fn=pre_fn, post_fn=post_fn, backend=jax_v1_5_backend(),
                      steps_per_frame=steps_per_frame, init_state=init)
 
 
@@ -45,3 +46,20 @@ def test_reset_restores_state():
     s.reset_to_initial()
     assert s.state is init
 
+
+def test_stepped_returns_new_equinox_solver():
+    s = _make_solver()
+    out = s.stepped()
+    assert isinstance(out, MPMSolver)
+    assert out is not s
+    assert out.state.x.shape == s.state.x.shape
+    assert not jnp.array_equal(out.state.x, s.state.x)
+
+
+def test_solver_filters_backend_callables_as_static():
+    s = _make_solver()
+    dynamic, static = eqx.partition(s, eqx.is_array)
+    assert dynamic.state.x is not None
+    assert dynamic.state.v is not None
+    assert static.backend.name == "jax_v1_5"
+    assert callable(static.elasticity_fn)

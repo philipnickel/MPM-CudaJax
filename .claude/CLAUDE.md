@@ -100,6 +100,7 @@ src/mpm_jax/
   constitutive.py      5 elasticity + 4 plasticity models
   boundary.py          6 boundary condition types
   callbacks.py         on_frame callback helpers
+  backends.py          Backend interface + shared JAX-owned frame loop
   p2g_scan.py          jax_v1_5 P2G: lax.scan over 27 offsets, build_jit_stages_scan
   blocks/              Pure-math building blocks (no JIT, no closures)
     weights.py         compute_weights_and_indices: B-spline weights, grid indices
@@ -109,11 +110,8 @@ src/mpm_jax/
     svd.py             3x3 Jacobi SVD (used by Warp paths)
     sort.py            morton_argsort, _home_super_cell_id
     init.py            get_particles: uniform particle initialisation
-  stepping/            Per-variant frame builders (one jit'd frame = N substeps)
-    substep.py         step(): one full P2G2P substep (pure fn, safe to JIT)
-    jax_frames.py      build_jax_v1_5_frame
-    cuda_frames.py     build_cuda_v1_frame .. build_cuda_v4_frame
-    warp_hybrid_frame.py build_warp_v3_supercell_frame
+  stepping/
+    warp_hybrid_frame.py Warp tiled P2G kernel + jax_callable bridge
   cuda/
     p2g_cuda.py        loads prebuilt .so + jax.ffi.register_ffi_target
     _lib/              prebuilt .so files (gitignored, populated by CMake)
@@ -137,18 +135,18 @@ Three embarrassingly parallel phases per substep:
 
 ### Class-based API
 
-`MPMSolver` (in `src/mpm_jax/solver.py`) is the stateful shell over the functional JAX core:
+`MPMSolver` (in `src/mpm_jax/solver.py`) is an Equinox module over the functional JAX core:
 
-- Built once from `params`, an `elasticity_fn`, `plasticity_fn`, boundary functions `pre_fn`/`post_fn`, a frame builder `build_frame`, and `steps_per_frame`. A single JIT-compiled `_frame` function is built at construction time; `self` is never traced.
-- `step()` advances one frame (= `steps_per_frame` substeps) by calling `_frame(self.state)`.
+- Built once from `params`, an `elasticity_fn`, `plasticity_fn`, boundary functions `pre_fn`/`post_fn`, a `Backend`, and `steps_per_frame`. State arrays are dynamic JAX leaves; backend callables and the compiled `_frame` are static Equinox fields.
+- `stepped()` returns a new solver with advanced state. `step()` keeps the existing mutating driver API and advances one frame (= `steps_per_frame` substeps) by calling `_frame(self.state)`.
 - `solve(num_frames, on_frame=None)` loops `step()` with an optional IO callback.
-- Default loop inside `build_jax_frame` is `lax.fori_loop`; pass `loop_kind="python"` to unroll instead.
+- Default loop inside `build_backend_frame` is `lax.fori_loop`; pass `loop_kind="python"` to unroll instead.
 
 ### Kernel registry
 
 Kernel selection is a registry, not an if/elif chain. `src/mpm_jax/registry.py` defines:
 
-- `KERNELS: dict[str, KernelSpec]` — maps `kernel.name` to a `KernelSpec(solver_cls, build_frame, defaults)`. `build_solver(cfg)` reads this dict, builds particles/params/BCs/constitutive functions, and calls `spec.solver_cls(...)` with the registered frame builder.
+- `KERNELS: dict[str, KernelSpec]` — maps `kernel.name` to a `KernelSpec(solver_cls, backend_factory, defaults)`. `build_solver(cfg)` reads this dict, builds particles/params/BCs/constitutive functions, creates the backend object, and passes it to `MPMSolver`.
 - `REMOVED_KERNELS: dict[str, str]` — migration messages for removed/renamed kernels.
 
 Current kernel names:
@@ -252,11 +250,11 @@ CMake auto-detects the local GPU arch when `MPM_CUDA_ARCH` is unset.
   1. Add `src/mpm_jax/cuda/kernels/p2g_vX_inline.cu` (and `g2p_fused.cu` if needed).
   2. Add the kernel name to the `KERNELS` list in `CMakeLists.txt`.
   3. Add `_register_vX_inline()` + `cuda_p2g_vX_inline()` wrapper in `src/mpm_jax/cuda/p2g_cuda.py`.
-  4. Add `build_cuda_vX_frame()` in `src/mpm_jax/stepping/cuda_frames.py`.
-  5. Register it in `src/mpm_jax/registry.py` `KERNELS` dict as `KernelSpec(MPMSolver, build_cuda_vX_frame)`.
+  4. Add a `cuda_vX_backend()` factory in `src/mpm_jax/backends.py`.
+  5. Register it in `src/mpm_jax/registry.py` `KERNELS` dict as `KernelSpec(MPMSolver, cuda_vX_backend)`.
   6. Add `conf/kernel/cuda_vX_inline.yaml`.
   7. Rebuild: `pixi run -e gpu rebuild-cuda` (or `pixi reinstall mpm-cudajax`).
-- **Adding a new Warp-in-JAX kernel:** follow `src/mpm_jax/stepping/warp_hybrid_frame.py` and register it as an `MPMSolver` frame builder.
+- **Adding a new Warp-in-JAX kernel:** put the Warp operation/bridge in `src/mpm_jax/stepping/` or a dedicated module, expose it through a `Backend` factory in `src/mpm_jax/backends.py`, and register that factory.
 - Boundary conditions and constitutive models are registry-based (`REGISTRY` dict in `constitutive.py`, `build_boundary_fns` in `boundary.py`); add a function and a config entry.
 - **No `block_until_ready` inside the timed region in benchmark mode.** Both timing modes dispatch all frames back-to-back and sync exactly once after the loop; elapsed/num_frames is the average. Per-stage breakdown comes from `profile=jax` (TensorBoard trace) or `profile_nsight.py`, not from `simulate.py`'s output.
 - `simulate.py` enables XLA CUDA graph capture for `kernel=cuda_v3_inline cuda_graph=true` by setting `XLA_FLAGS` before JAX is imported. This must happen before any `import jax` in the process.

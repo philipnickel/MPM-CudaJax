@@ -345,7 +345,7 @@ def cuda_p2g_v4_inline(x_sorted, v_sorted, C_sorted, stress_sorted, cell_start,
 def _home_cell_id(x, inv_dx, G):
     """Home cell = center stencil node for the quadratic B-spline.
 
-    Used by build_cuda_v4_frame for the cell-major sort.
+    Used by the cuda_v4_inline backend for the cell-major sort.
     """
     px = x * inv_dx
     base = jnp.floor(px - 0.5).astype(jnp.int32)
@@ -359,7 +359,7 @@ def _home_super_cell_id(x, inv_dx, G, sc=V4_SUPER_CELL_WIDTH):
     """Home super-cell id for the v4_inline cell-major sort.
 
     A super-cell covers ``sc^3`` grid cells. The sort key is the super-cell
-    that contains the particle's home cell. Used by build_cuda_v4_frame
+    that contains the particle's home cell. Used by the cuda_v4_inline backend
     to feed the kernel a CSR layout indexed by super-cell.
     """
     px = x * inv_dx

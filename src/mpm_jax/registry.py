@@ -5,9 +5,13 @@ from typing import Callable
 import jax.numpy as jnp
 
 from mpm_jax.solver import MPMSolver
-from mpm_jax.stepping.jax_frames import build_jax_v1_5_frame
-from mpm_jax.stepping.cuda_frames import (
-    build_cuda_v1_frame, build_cuda_v2_frame, build_cuda_v3_frame, build_cuda_v4_frame,
+from mpm_jax.backends import (
+    jax_v1_5_backend,
+    cuda_v1_backend,
+    cuda_v2_backend,
+    cuda_v3_backend,
+    cuda_v4_backend,
+    warp_v3_supercell_backend,
 )
 from mpm_jax.types import MPMState, make_params
 from mpm_jax.blocks.grid import build_grid_x
@@ -19,24 +23,17 @@ from mpm_jax.boundary import build_boundary_fns
 @dataclass(frozen=True)
 class KernelSpec:
     solver_cls: type
-    build_frame: Callable
+    backend_factory: Callable
     defaults: MappingProxyType = field(default_factory=lambda: MappingProxyType({}))
 
 
-def build_warp_v3_supercell_frame(*args, **kwargs):
-    from mpm_jax.stepping.warp_hybrid_frame import (  # pylint: disable=import-outside-toplevel
-        build_warp_v3_supercell_frame as _build,
-    )
-
-    return _build(*args, **kwargs)
-
 KERNELS = {
-    "jax_v1_5":               KernelSpec(MPMSolver, build_jax_v1_5_frame),
-    "cuda_v1_inline":         KernelSpec(MPMSolver, build_cuda_v1_frame),
-    "cuda_v2_inline":         KernelSpec(MPMSolver, build_cuda_v2_frame, MappingProxyType({"loop_kind": "fori"})),
-    "cuda_v3_inline":         KernelSpec(MPMSolver, build_cuda_v3_frame, MappingProxyType({"loop_kind": "fori", "cuda_graph": False})),
-    "cuda_v4_inline":         KernelSpec(MPMSolver, build_cuda_v4_frame),
-    "warp_v3_supercell_tile": KernelSpec(MPMSolver, build_warp_v3_supercell_frame),
+    "jax_v1_5":               KernelSpec(MPMSolver, jax_v1_5_backend),
+    "cuda_v1_inline":         KernelSpec(MPMSolver, cuda_v1_backend),
+    "cuda_v2_inline":         KernelSpec(MPMSolver, cuda_v2_backend, MappingProxyType({"loop_kind": "fori"})),
+    "cuda_v3_inline":         KernelSpec(MPMSolver, cuda_v3_backend, MappingProxyType({"loop_kind": "fori", "cuda_graph": False})),
+    "cuda_v4_inline":         KernelSpec(MPMSolver, cuda_v4_backend),
+    "warp_v3_supercell_tile": KernelSpec(MPMSolver, warp_v3_supercell_backend),
 }
 
 REMOVED_KERNELS = {
@@ -91,8 +88,12 @@ def build_solver(cfg):
     for k in ("loop_kind", "cuda_graph", "graph_mode"):
         if k in cfg.kernel:
             frame_opts[k] = cfg.kernel[k]
+    backend = spec.backend_factory(
+        num_grids=int(sim.num_grids),
+        **frame_opts,
+    )
     return spec.solver_cls(
         params, elasticity_fn=elasticity_fn, plasticity_fn=plasticity_fn,
-        pre_fn=pre_fn, post_fn=post_fn, build_frame=spec.build_frame,
+        pre_fn=pre_fn, post_fn=post_fn, backend=backend,
         steps_per_frame=int(sim.steps_per_frame), init_state=init, **frame_opts,
     )
