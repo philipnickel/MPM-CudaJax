@@ -14,8 +14,14 @@ def _make_solver(steps_per_frame=2, n=64, G=16):
     grid_x = build_grid_x(G)
     x = jnp.array([[0.5, 0.5, 0.5]] * n, dtype=jnp.float32)
     pre_fn, post_fn = build_boundary_fns([], grid_x, params.dx, x, params.dt, params.p_mass)
-    elasticity = get_constitutive(OmegaConf.create({"name": "CorotatedElasticity"}))
-    plasticity = get_constitutive(OmegaConf.create({"name": "IdentityPlasticity"}))
+    elasticity = get_constitutive(OmegaConf.create({"name": "StVKElasticityJacobi"}))
+    plasticity = get_constitutive(OmegaConf.create({
+        "name": "DruckerPragerPlasticityJacobi",
+        "E": 2e6,
+        "nu": 0.4,
+        "friction_angle": 25.0,
+        "cohesion": 0.0,
+    }))
     init = MPMState(x=x, v=jnp.zeros((n, 3)), C=jnp.zeros((n, 3, 3)),
                     F=jnp.broadcast_to(jnp.eye(3), (n, 3, 3)).copy())
     return MPMSolver(params, elasticity_fn=elasticity, plasticity_fn=plasticity,

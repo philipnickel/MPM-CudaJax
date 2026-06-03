@@ -163,9 +163,6 @@ imageio-ffmpeg = "*"
 [tool.pixi.feature.rendering.system-requirements]
 libc = { family = "glibc", version = "2.35" }
 
-[tool.pixi.feature.rendering.tasks]
-render-snow-preview = "python scripts/render_ovrtx_smoke.py output/snow_warp_5000_jax_v1_5.usd output/ovrtx_snow_preview.png"
-
 [tool.pixi.feature.hpc.tasks]
 sim = "python simulate.py"
 sweep = "python simulate.py -cn sweep_baseline"

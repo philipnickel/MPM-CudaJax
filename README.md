@@ -214,7 +214,7 @@ Hydra config groups in `conf/`:
 
 | Group | Options | Description |
 |---|---|---|
-| `material` | `sand_jacobi` (default), `jelly_jacobi` | Constitutive model |
+| `material` | `sand_jacobi` (default) | Constitutive model |
 | `sim` | `default` | n_particles, num_grids, dt, BCs, ... |
 | `kernel` | `jax_v1_5` (default), `cuda_v*_inline`, `warp_v3_supercell_tile` | P2G/G2P implementation |
 | `profile` | `none` (default), `jax` | Profiling backend |
@@ -264,7 +264,7 @@ MPM-CudaJax/
 ├── conf/
 │   ├── config.yaml
 │   ├── nsight_profile.yaml
-│   ├── material/            # sand_jacobi.yaml, jelly_jacobi.yaml
+│   ├── material/            # sand_jacobi.yaml
 │   ├── sim/default.yaml
 │   ├── kernel/              # jax_v1_5.yaml, cuda_v*.yaml, warp_*.yaml
 │   ├── profile/             # none.yaml, jax.yaml
@@ -274,8 +274,8 @@ MPM-CudaJax/
         ├── types.py         # MPMState, StepIntermediates, MPMParams, make_params
         ├── solver.py        # MPMSolver + build_jit_stages
         ├── registry.py      # KERNELS, REMOVED_KERNELS, build_solver(cfg)
-        ├── constitutive.py  # 5 elasticity + 4 plasticity models
-        ├── boundary.py      # 6 boundary condition types
+        ├── constitutive.py  # sand Jacobi elasticity + plasticity
+        ├── boundary.py      # sticky surface collider
         ├── blocks/          # Pure math: weights, p2g, g2p, grid, svd, sort, init
         ├── backends.py      # Backend interface + shared JAX-owned frame loop
         ├── stepping/        # Warp tiled P2G bridge helpers

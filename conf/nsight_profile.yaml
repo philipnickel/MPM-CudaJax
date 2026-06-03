@@ -13,7 +13,6 @@ tag: nsight_profile
 nsight:
   # p2g profiles one annotated P2G stage wrapper per kernel.
   phase: p2g
-  include_step_total: true
   write_json: true
   plot:
     enabled: false

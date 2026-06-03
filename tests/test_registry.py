@@ -31,8 +31,16 @@ def test_build_solver_dispatches_jax_baseline_kernel():
                 "clip_bound": 0.5, "damping": 1.0, "gravity": [0, 0, -9.8], "rho": 1000.0,
                 "size": [0.5, 0.5, 0.5], "initial_velocity": [0, 0, 0],
                 "center": [0.5, 0.5, 0.5], "boundary_conditions": []},
-        "material": {"elasticity": {"name": "CorotatedElasticityJacobi", "E": 2e6, "nu": 0.4},
-                     "plasticity": {"name": "IdentityPlasticity"}},
+        "material": {
+            "elasticity": {"name": "StVKElasticityJacobi", "E": 2e6, "nu": 0.4},
+            "plasticity": {
+                "name": "DruckerPragerPlasticityJacobi",
+                "E": 2e6,
+                "nu": 0.4,
+                "friction_angle": 25.0,
+                "cohesion": 0.0,
+            },
+        },
     })
     solver = build_solver(cfg)
     assert isinstance(solver, MPMSolver)

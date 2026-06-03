@@ -24,7 +24,6 @@ material:
 
 nsight:
   phase: p2g
-  include_step_total: false
   analyze:
     runs: 1
     replay_mode: kernel

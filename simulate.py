@@ -233,7 +233,6 @@ def _maybe_enable_cuda_graphs(cfg: DictConfig):
 
 def _run_jax_solver(solver, cfg: DictConfig):
     """Drive an MPMSolver (JAX backend): warmup, then benchmark or GIF loop."""
-    import warp as wp
     import jax
     import jax.numpy as jnp
 
@@ -265,22 +264,12 @@ def _run_jax_solver(solver, cfg: DictConfig):
             jax.block_until_ready(solver.state.x)
             elapsed = time.perf_counter() - t0
     else:
-        # Initialize Warp HashGrid for bookkeeping proof-of-concept.
-        # HashGrid builds an acceleration structure around JAX positions.
-        wp.init()
-        grid = wp.HashGrid(dim_x=sim.num_grids, dim_y=sim.num_grids, dim_z=sim.num_grids)
-
         t0 = time.perf_counter()
         with jax.profiler.TraceAnnotation("render_loop", kernel=kernel_name):
             for frame in tqdm(range(sim.num_frames), desc='JAX'):
                 with jax.profiler.StepTraceAnnotation("frame", step_num=frame):
                     # capture current state BEFORE advancing (frame 0 == initial config)
-                    try:
-                        wp_x = wp.from_dlpack(solver.state.x)
-                        grid.build(wp_x, radius=float(solver.params.dx))
-                        frames.append(wp_x.numpy())
-                    except Exception:
-                        frames.append(np.array(solver.state.x))
+                    frames.append(np.array(solver.state.x))
                     t_frame = time.perf_counter()
                     solver.step()
                     jax.block_until_ready(solver.state.x)

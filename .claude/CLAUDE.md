@@ -88,7 +88,7 @@ ruff.toml              lint config
 conf/                  Hydra config groups
   config.yaml          top-level defaults (material/sim/kernel/profile)
   nsight_profile.yaml  top-level defaults for profile_nsight.py
-  material/            sand_jacobi.yaml, jelly_jacobi.yaml  (constitutive model)
+  material/            sand_jacobi.yaml  (constitutive model)
   sim/default.yaml     n_particles, num_grids, dt, BCs, ...
   kernel/              jax_v1_5.yaml, cuda_v*.yaml, warp_*.yaml (P2G impl)
   profile/             none.yaml, jax.yaml
@@ -97,8 +97,8 @@ src/mpm_jax/
   types.py             MPMState, StepIntermediates, MPMParams, make_params, OFFSET_27
   solver.py            MPMSolver + build_jit_step / build_jit_stages
   registry.py          KERNELS dict, REMOVED_KERNELS dict, build_solver(cfg)
-  constitutive.py      5 elasticity + 4 plasticity models
-  boundary.py          6 boundary condition types
+  constitutive.py      sand Jacobi elasticity + plasticity
+  boundary.py          sticky surface collider
   callbacks.py         on_frame callback helpers
   backends.py          Backend interface + shared JAX-owned frame loop
   p2g_scan.py          jax_v1_5 P2G: lax.scan over 27 offsets, build_jit_stages_scan
@@ -122,7 +122,6 @@ src/mpm_jax/
       p2g_v4_inline.cu       cuda_v4: super-cell-owned grid tile, inline weights
       g2p_fused.cu           fused G2P gather + APIC update (shared by v1–v4)
 tests/                 pytest suite
-docs/superpowers/      design specs and implementation plans
 ```
 
 ## Architecture (one timestep)
@@ -162,7 +161,6 @@ Current kernel names:
 
 Material baseline:
 - `material=sand_jacobi` is the default JAX/CUDA material path: StVK elasticity + Drucker-Prager plasticity, both using the in-repo Jacobi SVD.
-- `material=jelly_jacobi` remains a simple corotated-elasticity sanity-check material.
 - The Warp backend is part of the same JAX loop as the CUDA/JAX variants, so `profile=jax` and ordinary benchmark timing apply.
 
 Removed/renamed kernels (error message from `build_solver`):

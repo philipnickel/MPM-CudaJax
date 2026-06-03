@@ -1,8 +1,8 @@
 """jax_v1_5 (lax.scan over 27 stencils) must match the jax baseline.
 
 Both paths are pure JAX with no host-side intermediate state, both use
-``CorotatedElasticityJacobi`` for stress (the cuSOLVER-free Jacobi SVD),
-and both ultimately lower their scatter to ``at[].add``. The only
+the sand Jacobi constitutive path for stress/plasticity, and both ultimately
+lower their scatter to ``at[].add``. The only
 algorithmic difference is *when* the 27 contributions get summed:
 
   jax       — vmap produces (N, 27, 3) momentum, then a single scatter
@@ -48,9 +48,14 @@ def _build_setup(n: int = 2000, num_grids: int = 16):
     ]
     pre_fn, post_fn = build_boundary_fns(bcs, grid_x, params.dx, x0, params.dt)
 
-    # jelly_jacobi material — the pure-JAX Jacobi SVD path.
-    e_cfg = OmegaConf.create({"name": "CorotatedElasticityJacobi", "E": 2e6, "nu": 0.4})
-    p_cfg = OmegaConf.create({"name": "IdentityPlasticity"})
+    e_cfg = OmegaConf.create({"name": "StVKElasticityJacobi", "E": 2e6, "nu": 0.4})
+    p_cfg = OmegaConf.create({
+        "name": "DruckerPragerPlasticityJacobi",
+        "E": 2e6,
+        "nu": 0.4,
+        "friction_angle": 25.0,
+        "cohesion": 0.0,
+    })
     elasticity_fn = get_constitutive(e_cfg)
     plasticity_fn = get_constitutive(p_cfg)
 

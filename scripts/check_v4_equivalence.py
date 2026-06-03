@@ -70,11 +70,17 @@ def run(kernel_name, frames=3, steps_per_frame=10):
     )
 
     elast_cfg = OmegaConf.create({
-        'name': 'CorotatedElasticityJacobi',
+        'name': 'StVKElasticityJacobi',
         'E': 1e3,
         'nu': 0.2,
     })
-    plast_cfg = OmegaConf.create({'name': 'IdentityPlasticity'})
+    plast_cfg = OmegaConf.create({
+        'name': 'DruckerPragerPlasticityJacobi',
+        'E': 1e3,
+        'nu': 0.2,
+        'friction_angle': 25.0,
+        'cohesion': 0.0,
+    })
     elasticity_fn = get_constitutive(elast_cfg)
     plasticity_fn = get_constitutive(plast_cfg)
 

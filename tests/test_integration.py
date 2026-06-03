@@ -12,7 +12,7 @@ def _make_grid_x(num_grids):
     gx, gy, gz = jnp.meshgrid(g, g, g, indexing='ij')
     return jnp.stack([gx, gy, gz], axis=-1).reshape(-1, 3)
 
-def test_jelly_simulation_10_frames():
+def test_sand_simulation_10_frames():
     from omegaconf import OmegaConf
     N = 100
     num_grids = 15
@@ -25,8 +25,15 @@ def test_jelly_simulation_10_frames():
          "start_time": 0.0, "end_time": 1e3},
     ]
     pre_fn, post_fn = build_boundary_fns(bc_configs, grid_x, params.dx, x0, params.dt)
-    elasticity_fn = get_constitutive(OmegaConf.create({"name": "CorotatedElasticity", "E": 2e6, "nu": 0.4}))
-    plasticity_fn = get_constitutive(OmegaConf.create({"name": "IdentityPlasticity"}))
+    elasticity_fn = get_constitutive(OmegaConf.create(
+        {"name": "StVKElasticityJacobi", "E": 2e6, "nu": 0.4}))
+    plasticity_fn = get_constitutive(OmegaConf.create({
+        "name": "DruckerPragerPlasticityJacobi",
+        "E": 2e6,
+        "nu": 0.4,
+        "friction_angle": 25.0,
+        "cohesion": 0.0,
+    }))
     state = MPMState(
         x=x0,
         v=jnp.broadcast_to(jnp.array([0.0, 0.0, -0.5]), (N, 3)).copy(),
@@ -65,8 +72,14 @@ def test_per_stage_matches_per_frame():
     ]
     pre_fn, post_fn = build_boundary_fns(bc_configs, grid_x, params.dx, x0, params.dt)
     elasticity_fn = get_constitutive(OmegaConf.create(
-        {"name": "CorotatedElasticity", "E": 2e6, "nu": 0.4}))
-    plasticity_fn = get_constitutive(OmegaConf.create({"name": "IdentityPlasticity"}))
+        {"name": "StVKElasticityJacobi", "E": 2e6, "nu": 0.4}))
+    plasticity_fn = get_constitutive(OmegaConf.create({
+        "name": "DruckerPragerPlasticityJacobi",
+        "E": 2e6,
+        "nu": 0.4,
+        "friction_angle": 25.0,
+        "cohesion": 0.0,
+    }))
 
     def make_state():
         return MPMState(

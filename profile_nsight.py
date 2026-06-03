@@ -1,15 +1,15 @@
-"""Hydra-driven Nsight Python profiler for MPM kernel phases and sweeps."""
+"""Hydra-driven Nsight Python profiler for current JAX-loop MPM backends."""
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
-import itertools
 import shlex
 import sys
 import sysconfig
-from contextlib import contextmanager
 from collections.abc import Mapping
+from contextlib import contextmanager
 from copy import deepcopy
 from pathlib import Path
 
@@ -17,24 +17,16 @@ import hydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
-from mpm_jax.blocks.init import get_particles
-
 _UNSUPPORTED_ANALYZE_CONFIG_KEYS = {"configs"}
-_SCRIPT_NSIGHT_KEYS = {"phase", "include_step_total", "write_json", "plot", "sweep", "configs", "analyze"}
-
-_WARP_BONUS_KERNELS = {"warp_baseline_graph", "warp_bonus_graph", "warp_bonus_v2_graph"}
-_JAX_P2G_KERNELS = {
+_SCRIPT_NSIGHT_KEYS = {"phase", "write_json", "plot", "sweep", "configs", "analyze"}
+_P2G_KERNELS = {
     "jax_v1_5",
     "cuda_v1_inline",
     "cuda_v2_inline",
-    "cuda_v2_fori_inline",
     "cuda_v3_inline",
-    "cuda_v3_fori_inline",
     "cuda_v4_inline",
-    "cuda_v6_inline",
+    "warp_v3_supercell_tile",
 }
-_P2G_KERNELS = _WARP_BONUS_KERNELS | _JAX_P2G_KERNELS
-
 _SPEED_OF_LIGHT_METRICS = [
     "gpu__time_duration.sum",
     "sm__throughput.avg.pct_of_peak_sustained_elapsed",
@@ -48,148 +40,39 @@ def _require_nsight():
         import nsight
     except ModuleNotFoundError as exc:
         raise RuntimeError(
-            "nsight-python is not installed. Run `pixi install -e gpu` after "
-            "the latest pyproject update, or `pixi run -e gpu python -m pip "
-            "install nsight-python` for a one-off local install."
+            "nsight-python is not installed. Run `pixi install -e gpu`, or "
+            "`pixi run -e gpu python -m pip install nsight-python` for a "
+            "one-off local install."
         ) from exc
     return nsight
 
 
-def _warp_bonus_sim(cfg: DictConfig):
-    import warp as wp
+def _maybe_enable_cuda_graphs(cfg: DictConfig):
+    from simulate import _maybe_enable_cuda_graphs as enable_cuda_graphs
 
-    from mpm_jax.warp_graph import WarpBonusSimulator
-
-    kernel_name = cfg.get("kernel", {}).get("name", "warp_bonus_graph")
-    indexed_sort = kernel_name == "warp_bonus_v2_graph"
-    baseline = kernel_name == "warp_baseline_graph"
-    n = int(cfg.sim.n_particles)
-    precompute_stress = not (indexed_sort and n >= 150_000_000)
-    particles = get_particles(n, center=list(cfg.sim.center), size=list(cfg.sim.size))
-    sim = WarpBonusSimulator(
-        particles,
-        cfg,
-        indexed_sort=indexed_sort,
-        precompute_stress=precompute_stress,
-        baseline=baseline,
-    )
-
-    sim._substep()
-    wp.synchronize_device(sim.device)
-    return sim
+    enable_cuda_graphs(cfg)
 
 
-def _p2g_annotation_name(cfg: DictConfig):
-    kernel_name = cfg.get("kernel", {}).get("name", "kernel")
-    return f"{kernel_name}_p2g"
-
-
-def _warp_bonus_p2g_runner(cfg: DictConfig, nsight):
-    import warp as wp
-
-    from mpm_jax import warp_graph as wb
-
-    sim = _warp_bonus_sim(cfg)
-    indexed_sort = sim.indexed_sort
-    annotation_name = _p2g_annotation_name(cfg)
-
-    def run_p2g_once():
-        with nsight.annotate(annotation_name):
-            wp.launch(wb._zero_int_kernel, dim=sim.Gs3, inputs=[sim.counts], device=sim.device)
-            wp.launch(
-                wb._count_supercells_kernel,
-                dim=sim.n,
-                inputs=[sim.x, sim.counts, sim.G, sim.inv_dx, sim.super_cell_width],
-                device=sim.device,
-            )
-            wp.utils.array_scan(sim.counts, sim.prefix, inclusive=True)
-            wp.launch(
-                wb._prefix_to_cell_start_kernel,
-                dim=sim.Gs3,
-                inputs=[sim.prefix, sim.cell_start],
-                device=sim.device,
-            )
-            wp.launch(wb._zero_int_kernel, dim=sim.Gs3, inputs=[sim.cursor], device=sim.device)
-            if indexed_sort:
-                wp.launch(
-                    wb._scatter_supercell_ids_kernel,
-                    dim=sim.n,
-                    inputs=[
-                        sim.x, sim.cell_start, sim.cursor, sim.ids,
-                        sim.G, sim.inv_dx, sim.super_cell_width,
-                    ],
-                    device=sim.device,
-                )
-            else:
-                wp.launch(
-                    wb._scatter_supercell_order_kernel,
-                    dim=sim.n,
-                    inputs=[
-                        sim.x, sim.v, sim.C, sim.F,
-                        sim.cell_start, sim.cursor,
-                        sim.xs, sim.vs, sim.Cs, sim.Fs,
-                        sim.G, sim.inv_dx, sim.super_cell_width,
-                    ],
-                    device=sim.device,
-                )
-
-            wp.launch(wb._zero_float_kernel, dim=sim.G3, inputs=[sim.grid_m], device=sim.device)
-            wp.launch(wb._zero_vec3_kernel, dim=sim.G3, inputs=[sim.grid_mv], device=sim.device)
-            if indexed_sort:
-                if sim.precompute_stress:
-                    wp.launch(
-                        wb._compute_stress_kernel,
-                        dim=sim.n,
-                        inputs=[sim.F, sim.stress, sim.mu, sim.la],
-                        device=sim.device,
-                    )
-                    p2g_inputs = [
-                        sim.ids, sim.x, sim.v, sim.C, sim.stress, sim.cell_start,
-                        sim.G, sim.dt, sim.vol, sim.p_mass, sim.inv_dx, sim.dx,
-                        sim.grid_mv, sim.grid_m,
-                    ]
-                else:
-                    p2g_inputs = [
-                        sim.ids, sim.x, sim.v, sim.C, sim.F, sim.cell_start,
-                        sim.G, sim.dt, sim.vol, sim.p_mass, sim.inv_dx, sim.dx,
-                        sim.mu, sim.la, sim.grid_mv, sim.grid_m,
-                    ]
-            else:
-                p2g_inputs = [
-                    sim.xs, sim.vs, sim.Cs, sim.Fs, sim.cell_start,
-                    sim.G, sim.dt, sim.vol, sim.p_mass, sim.inv_dx, sim.dx,
-                    sim.mu, sim.la, sim.grid_mv, sim.grid_m,
-                ]
-
-            wp.launch_tiled(
-                sim.p2g_kernel,
-                dim=[sim.Gs3],
-                inputs=p2g_inputs,
-                block_dim=sim.tile_size,
-                device=sim.device,
-            )
-        wp.synchronize_device(sim.device)
-
-    return run_p2g_once
-
-
-def _jax_problem(cfg: DictConfig):
-    from simulate import _maybe_enable_cuda_graphs
-
+def _build_p2g_stage(cfg: DictConfig):
     _maybe_enable_cuda_graphs(cfg)
 
+    import jax
     import jax.numpy as jnp
 
+    from mpm_jax.blocks.grid import build_grid_x
+    from mpm_jax.blocks.init import get_particles
     from mpm_jax.boundary import build_boundary_fns
     from mpm_jax.constitutive import get_constitutive
-    from mpm_jax.solver import MPMState, make_params
+    from mpm_jax.registry import KERNELS
+    from mpm_jax.types import MPMState, make_params
+
+    kernel_name = str(cfg.kernel.name)
+    if kernel_name not in KERNELS:
+        raise RuntimeError(f"Unsupported P2G kernel={kernel_name!r}.")
 
     sim = cfg.sim
     mat = cfg.material
     n = int(sim.n_particles)
-    cube_np = get_particles(n, center=list(sim.center), size=list(sim.size))
-    particles = jnp.array(cube_np, dtype=jnp.float32)
-
     params = make_params(
         n_particles=n,
         num_grids=int(sim.num_grids),
@@ -201,163 +84,46 @@ def _jax_problem(cfg: DictConfig):
         center=list(sim.center),
         size=list(sim.size),
     )
-
-    g = jnp.arange(params.num_grids, dtype=jnp.float32)
-    gx, gy, gz = jnp.meshgrid(g, g, g, indexing="ij")
-    grid_x = jnp.stack([gx, gy, gz], axis=-1).reshape(-1, 3)
-    pre_fn, post_fn = build_boundary_fns(
-        list(sim.boundary_conditions),
-        grid_x,
-        params.dx,
-        particles,
-        params.dt,
-        params.p_mass,
+    particles = jnp.array(
+        get_particles(n, center=list(sim.center), size=list(sim.size)),
+        dtype=jnp.float32,
     )
+    grid_x = build_grid_x(params.num_grids)
+    pre_fn, _ = build_boundary_fns(
+        list(sim.boundary_conditions), grid_x, params.dx, particles, params.dt, params.p_mass)
     elasticity_fn = get_constitutive(mat.elasticity)
-    plasticity_fn = get_constitutive(mat.plasticity)
-
     state = MPMState(
         x=particles,
-        v=jnp.broadcast_to(jnp.array(list(sim.initial_velocity)), (n, 3)).copy(),
+        v=jnp.broadcast_to(jnp.array(list(sim.initial_velocity), dtype=jnp.float32), (n, 3)).copy(),
         C=jnp.zeros((n, 3, 3)),
         F=jnp.tile(jnp.eye(3), (n, 1, 1)),
     )
-    return params, pre_fn, post_fn, elasticity_fn, plasticity_fn, state
 
+    spec = KERNELS[kernel_name]
+    frame_opts = dict(spec.defaults)
+    for key in ("loop_kind", "cuda_graph", "graph_mode"):
+        if key in cfg.kernel:
+            frame_opts[key] = cfg.kernel[key]
+    backend = spec.backend_factory(num_grids=params.num_grids, **frame_opts)
 
-def _jax_inline_p2g_stage(kernel_name, params, pre_fn, elasticity_fn):
-    import jax
-    import jax.numpy as jnp
-
-    from mpm_jax.solver import StepIntermediates
-
-    if kernel_name == "cuda_v1_inline":
-        from mpm_jax.cuda.p2g_cuda import cuda_p2g_inline, is_available
-
-        if not is_available("inline"):
-            raise RuntimeError("cuda_v1_inline P2G kernel is not registered.")
-
-        @jax.jit
-        def jit_p2g_stage(state):
-            x, v = pre_fn(state.x, state.v, 0.0)
-            stress = elasticity_fn(state.F)
-            grid_mv, grid_m = cuda_p2g_inline(
-                x, v, state.C, stress,
-                params.num_grids, params.dt, params.vol, params.p_mass,
-                params.inv_dx, params.dx,
-            )
-            return grid_mv, grid_m, StepIntermediates(x_post_bc=x, F_pre_plast=state.F)
-
-        return jit_p2g_stage
-
-    if kernel_name in {"cuda_v2_inline", "cuda_v2_fori_inline"}:
-        from mpm_jax.cuda.p2g_cuda import cuda_p2g_v2_inline, is_available
-
-        if not is_available("v2_inline"):
-            raise RuntimeError(f"{kernel_name} P2G kernel is not registered.")
-
-        @jax.jit
-        def jit_p2g_stage(state):
-            x, v = pre_fn(state.x, state.v, 0.0)
-            stress = elasticity_fn(state.F)
-            grid_mv, grid_m = cuda_p2g_v2_inline(
-                x, v, state.C, stress,
-                params.num_grids, params.dt, params.vol, params.p_mass,
-                params.inv_dx, params.dx,
-            )
-            return grid_mv, grid_m, StepIntermediates(x_post_bc=x, F_pre_plast=state.F)
-
-        return jit_p2g_stage
-
-    if kernel_name in {"cuda_v3_inline", "cuda_v3_fori_inline", "cuda_v6_inline"}:
-        from mpm_jax.cuda.p2g_cuda import cuda_p2g_v3_inline, is_available
-        from mpm_jax.blocks.sort import morton_argsort
-
-        if not is_available("v3_inline"):
-            raise RuntimeError(f"{kernel_name} P2G kernel is not registered.")
-
-        @jax.jit
-        def jit_p2g_stage(state):
-            order = morton_argsort(state.x, params.inv_dx, params.num_grids)
-            x_sorted = state.x[order]
-            v_sorted = state.v[order]
-            C_sorted = state.C[order]
-            F_sorted = state.F[order]
-            x, v = pre_fn(x_sorted, v_sorted, 0.0)
-            stress = elasticity_fn(F_sorted)
-            grid_mv, grid_m = cuda_p2g_v3_inline(
-                x, v, C_sorted, stress,
-                params.num_grids, params.dt, params.vol, params.p_mass,
-                params.inv_dx, params.dx,
-            )
-            return grid_mv, grid_m, StepIntermediates(x_post_bc=x, F_pre_plast=F_sorted)
-
-        return jit_p2g_stage
-
-    if kernel_name == "cuda_v4_inline":
-        from mpm_jax.cuda.p2g_cuda import (
-            V4_SUPER_CELL_WIDTH,
-            _home_super_cell_id,
-            cuda_p2g_v4_inline,
-            is_available,
-        )
-
-        if not is_available("v4_inline"):
-            raise RuntimeError("cuda_v4_inline P2G kernel is not registered.")
-        if params.num_grids % V4_SUPER_CELL_WIDTH != 0:
-            raise RuntimeError(
-                f"cuda_v4_inline requires num_grids ({params.num_grids}) divisible by "
-                f"{V4_SUPER_CELL_WIDTH}."
-            )
-        g_super = params.num_grids // V4_SUPER_CELL_WIDTH
-        super_boundaries = jnp.arange(g_super ** 3 + 1, dtype=jnp.int32)
-
-        @jax.jit
-        def jit_p2g_stage(state):
-            x, v = pre_fn(state.x, state.v, 0.0)
-            stress = elasticity_fn(state.F)
-            super_id = _home_super_cell_id(
-                x, params.inv_dx, params.num_grids, V4_SUPER_CELL_WIDTH)
-            order = jnp.argsort(super_id)
-            x_s = x[order]
-            v_s = v[order]
-            C_s = state.C[order]
-            stress_s = stress[order]
-            F_s = state.F[order]
-            super_id_sorted = super_id[order]
-            cell_start = jnp.searchsorted(super_id_sorted, super_boundaries).astype(jnp.int32)
-            grid_mv, grid_m = cuda_p2g_v4_inline(
-                x_s, v_s, C_s, stress_s, cell_start,
-                params.num_grids, params.dt, params.vol, params.p_mass,
-                params.inv_dx, params.dx,
-            )
-            return grid_mv, grid_m, StepIntermediates(x_post_bc=x_s, F_pre_plast=F_s)
-
-        return jit_p2g_stage
-
-    raise RuntimeError(f"Unsupported CUDA inline P2G kernel={kernel_name!r}.")
-
-
-
-def _jax_p2g_stage_runner(cfg: DictConfig, nsight):
-    import jax
-
-    kernel_name = cfg.get("kernel", {}).get("name", "jax_v1_5")
-    params, pre_fn, post_fn, elasticity_fn, plasticity_fn, state = _jax_problem(cfg)
-    annotation_name = _p2g_annotation_name(cfg)
-
-    if kernel_name == "jax_v1_5":
-        from mpm_jax.p2g_scan import build_jit_stages_scan
-
-        jit_p2g_stage, _, _ = build_jit_stages_scan(
-            params, elasticity_fn, plasticity_fn, pre_fn, post_fn)
-    elif kernel_name.startswith("cuda_"):
-        jit_p2g_stage = _jax_inline_p2g_stage(kernel_name, params, pre_fn, elasticity_fn)
-    else:
-        raise RuntimeError(f"Unsupported JAX P2G kernel={kernel_name!r}.")
+    @jax.jit
+    def jit_p2g_stage(state):
+        x, v = pre_fn(state.x, state.v, 0.0)
+        state = state._replace(x=x, v=v)
+        stress = elasticity_fn(state.F)
+        prepared = backend.prepare(params, state, stress)
+        return backend.p2g(params, prepared)
 
     warmup = jit_p2g_stage(state)
     jax.block_until_ready(warmup)
+    return jit_p2g_stage, state
+
+
+def _p2g_runner(cfg: DictConfig, nsight):
+    import jax
+
+    jit_p2g_stage, state = _build_p2g_stage(cfg)
+    annotation_name = f"{cfg.kernel.name}_p2g"
 
     def run_p2g_once():
         with nsight.annotate(annotation_name):
@@ -365,153 +131,6 @@ def _jax_p2g_stage_runner(cfg: DictConfig, nsight):
             jax.block_until_ready(out)
 
     return run_p2g_once
-
-
-def _p2g_runner(cfg: DictConfig, nsight):
-    kernel_name = cfg.get("kernel", {}).get("name", "warp_bonus_graph")
-    if kernel_name in _WARP_BONUS_KERNELS:
-        return _warp_bonus_p2g_runner(cfg, nsight)
-    if kernel_name in _JAX_P2G_KERNELS:
-        return _jax_p2g_stage_runner(cfg, nsight)
-    supported = ", ".join(sorted(_P2G_KERNELS))
-    raise RuntimeError(f"Unsupported P2G kernel={kernel_name!r}. Supported kernels: {supported}")
-
-
-def _warp_bonus_step_runner(cfg: DictConfig, nsight):
-    import warp as wp
-
-    from mpm_jax import warp_graph as wb
-
-    sim = _warp_bonus_sim(cfg)
-    total_sim = _warp_bonus_sim(cfg) if bool(cfg.nsight.get("include_step_total", True)) else None
-
-    def _annotated_substep():
-        if total_sim is not None:
-            with nsight.annotate("step"):
-                total_sim._substep()
-            wp.synchronize_device(total_sim.device)
-
-        with nsight.annotate("bin"):
-            wp.launch(wb._zero_int_kernel, dim=sim.Gs3, inputs=[sim.counts], device=sim.device)
-            wp.launch(
-                wb._count_supercells_kernel,
-                dim=sim.n,
-                inputs=[sim.x, sim.counts, sim.G, sim.inv_dx, sim.super_cell_width],
-                device=sim.device,
-            )
-            wp.utils.array_scan(sim.counts, sim.prefix, inclusive=True)
-            wp.launch(
-                wb._prefix_to_cell_start_kernel,
-                dim=sim.Gs3,
-                inputs=[sim.prefix, sim.cell_start],
-                device=sim.device,
-            )
-            wp.launch(wb._zero_int_kernel, dim=sim.Gs3, inputs=[sim.cursor], device=sim.device)
-            if sim.indexed_sort:
-                wp.launch(
-                    wb._scatter_supercell_ids_kernel,
-                    dim=sim.n,
-                    inputs=[
-                        sim.x, sim.cell_start, sim.cursor, sim.ids,
-                        sim.G, sim.inv_dx, sim.super_cell_width,
-                    ],
-                    device=sim.device,
-                )
-            else:
-                wp.launch(
-                    wb._scatter_supercell_order_kernel,
-                    dim=sim.n,
-                    inputs=[
-                        sim.x, sim.v, sim.C, sim.F,
-                        sim.cell_start, sim.cursor,
-                        sim.xs, sim.vs, sim.Cs, sim.Fs,
-                        sim.G, sim.inv_dx, sim.super_cell_width,
-                    ],
-                    device=sim.device,
-                )
-
-        with nsight.annotate("zero_grid"):
-            wp.launch(wb._zero_float_kernel, dim=sim.G3, inputs=[sim.grid_m], device=sim.device)
-            wp.launch(wb._zero_vec3_kernel, dim=sim.G3, inputs=[sim.grid_mv], device=sim.device)
-
-        if sim.indexed_sort:
-            if sim.precompute_stress:
-                with nsight.annotate("stress"):
-                    wp.launch(
-                        wb._compute_stress_kernel,
-                        dim=sim.n,
-                        inputs=[sim.F, sim.stress, sim.mu, sim.la],
-                        device=sim.device,
-                    )
-                p2g_inputs = [
-                    sim.ids, sim.x, sim.v, sim.C, sim.stress, sim.cell_start,
-                    sim.G, sim.dt, sim.vol, sim.p_mass, sim.inv_dx, sim.dx,
-                    sim.grid_mv, sim.grid_m,
-                ]
-            else:
-                p2g_inputs = [
-                    sim.ids, sim.x, sim.v, sim.C, sim.F, sim.cell_start,
-                    sim.G, sim.dt, sim.vol, sim.p_mass, sim.inv_dx, sim.dx,
-                    sim.mu, sim.la, sim.grid_mv, sim.grid_m,
-                ]
-        else:
-            p2g_inputs = [
-                sim.xs, sim.vs, sim.Cs, sim.Fs, sim.cell_start,
-                sim.G, sim.dt, sim.vol, sim.p_mass, sim.inv_dx, sim.dx,
-                sim.mu, sim.la, sim.grid_mv, sim.grid_m,
-            ]
-
-        with nsight.annotate("p2g"):
-            wp.launch_tiled(
-                sim.p2g_kernel,
-                dim=[sim.Gs3],
-                inputs=p2g_inputs,
-                block_dim=sim.tile_size,
-                device=sim.device,
-            )
-
-        with nsight.annotate("grid_update"):
-            wp.launch(
-                wb._grid_update_kernel,
-                dim=sim.G3,
-                inputs=[
-                    sim.grid_mv, sim.grid_m, sim.G, sim.dt, sim.damping,
-                    sim.gravity, sim.floor_bound,
-                ],
-                device=sim.device,
-            )
-
-        with nsight.annotate("g2p"):
-            if sim.indexed_sort:
-                wp.launch(
-                    wb._g2p_indexed_kernel,
-                    dim=sim.n,
-                    inputs=[
-                        sim.ids, sim.x, sim.F, sim.grid_mv,
-                        sim.x2, sim.v2, sim.C2, sim.F2,
-                        sim.G, sim.dt, sim.inv_dx, sim.dx, sim.clip_bound,
-                    ],
-                    device=sim.device,
-                )
-            else:
-                wp.launch(
-                    wb._g2p_kernel,
-                    dim=sim.n,
-                    inputs=[
-                        sim.xs, sim.Fs, sim.grid_mv,
-                        sim.x2, sim.v2, sim.C2, sim.F2,
-                        sim.G, sim.dt, sim.inv_dx, sim.dx, sim.clip_bound,
-                    ],
-                    device=sim.device,
-                )
-        sim.x, sim.x2 = sim.x2, sim.x
-        sim.v, sim.v2 = sim.v2, sim.v
-        sim.C, sim.C2 = sim.C2, sim.C
-        sim.F, sim.F2 = sim.F2, sim.F
-
-        wp.synchronize_device(sim.device)
-
-    return _annotated_substep
 
 
 def _variant_value(variant: Mapping, path: str, default):
@@ -539,16 +158,15 @@ def _merge_variant_cfg(
     steps_per_frame: int,
 ):
     variant_cfg = OmegaConf.create(deepcopy(OmegaConf.to_container(base_cfg, resolve=True)))
-    merged = variant_cfg
-    merged.kernel.name = str(kernel_name)
-    merged.sim.n_particles = int(n_particles)
-    merged.sim.num_grids = int(num_grids)
-    merged.sim.steps_per_frame = int(steps_per_frame)
-    return merged
+    variant_cfg.kernel.name = str(kernel_name)
+    variant_cfg.sim.n_particles = int(n_particles)
+    variant_cfg.sim.num_grids = int(num_grids)
+    variant_cfg.sim.steps_per_frame = int(steps_per_frame)
+    return variant_cfg
 
 
 def _sweep_kernel_names(cfg: DictConfig):
-    base_kernel = cfg.get("kernel", {}).get("name", "warp_bonus_graph")
+    base_kernel = cfg.get("kernel", {}).get("name", "jax_v1_5")
     sweep = cfg.nsight.get("sweep", None)
     if sweep is not None:
         sweep_dict = OmegaConf.to_container(sweep, resolve=True)
@@ -603,17 +221,6 @@ def _nsight_configs(cfg: DictConfig):
     return nsight_configs
 
 
-def _configured_kernel_names(cfg: DictConfig):
-    return set(_sweep_kernel_names(cfg))
-
-
-def _prepare_process_for_kernels(kernel_names: set[str]):
-    # cuda_v6_inline was removed; CUDA graph capture for cuda_v3_inline is now
-    # handled per-run in _jax_problem() by passing the full cfg to
-    # _maybe_enable_cuda_graphs(cfg).
-    pass
-
-
 def _value_for_metric(metric_values, metrics: list[str], metric: str):
     if metric not in metrics:
         raise RuntimeError(
@@ -634,8 +241,6 @@ def _n_particles_from_config(config_values):
 
 
 def _p2g_throughput_metric(metrics: list[str]):
-    """Return a derive_metric callback that adds time and particle throughput."""
-
     def derive_p2g_throughput(*args):
         metric_values = args[: len(metrics)]
         config_values = args[len(metrics):]
@@ -651,8 +256,6 @@ def _p2g_throughput_metric(metrics: list[str]):
 
 
 def _speed_of_light_metric(metrics: list[str]):
-    """Return a derive_metric callback matching nsight-python's metric order."""
-
     def derive_speed_of_light(*args):
         metric_values = args[: len(metrics)]
         config_values = args[len(metrics):]
@@ -732,7 +335,7 @@ def _combine_kernel_metrics(name):
     )
 
 
-def _nsight_analyze_kwargs(cfg: DictConfig, run_dir: Path, kernel_name: str, phase: str):
+def _nsight_analyze_kwargs(cfg: DictConfig, run_dir: Path, kernel_name: str):
     analyze_cfg = cfg.nsight.get("analyze", {})
     kwargs = OmegaConf.to_container(analyze_cfg, resolve=True)
     if kwargs is None:
@@ -758,20 +361,9 @@ def _nsight_analyze_kwargs(cfg: DictConfig, run_dir: Path, kernel_name: str, pha
     )
     kwargs.setdefault("output", "progress")
     kwargs.setdefault("output_csv", True)
-    kwargs.setdefault("output_prefix", str(run_dir / f"nsight_{kernel_name}_{phase}_"))
+    kwargs.setdefault("output_prefix", str(run_dir / f"nsight_{kernel_name}_p2g_"))
     kwargs.setdefault("configs", _nsight_configs(cfg))
     return kwargs
-
-
-def _write_results(results, run_dir: Path, write_json: bool):
-    df = results.to_dataframe()
-    print("Nsight Python wrote raw and processed CSV files via output_csv=True.")
-    print(df)
-
-    if write_json:
-        out_json = run_dir / "nsight_results.json"
-        out_json.write_text(json.dumps(json.loads(df.to_json(orient="records")), indent=2))
-        print(f"Wrote {out_json}")
 
 
 def _nsight_plot_kwargs(cfg: DictConfig, run_dir: Path):
@@ -794,6 +386,17 @@ def _nsight_plot_kwargs(cfg: DictConfig, run_dir: Path):
         kwargs.pop("show_geomean", None)
 
     return kwargs
+
+
+def _write_results(results, run_dir: Path, write_json: bool):
+    df = results.to_dataframe()
+    print("Nsight Python wrote raw and processed CSV files via output_csv=True.")
+    print(df)
+
+    if write_json:
+        out_json = run_dir / "nsight_results.json"
+        out_json.write_text(json.dumps(json.loads(df.to_json(orient="records")), indent=2))
+        print(f"Wrote {out_json}")
 
 
 def _run_nsight_profile(profiled_func):
@@ -867,29 +470,23 @@ def _disable_editable_pth_for_nsight():
 @hydra.main(version_base=None, config_path="conf", config_name="nsight_profile")
 def main(cfg: DictConfig):
     nsight = _require_nsight()
-    kernel_name = cfg.get("kernel", {}).get("name", "warp_bonus_graph")
-    phase = cfg.nsight.get("phase", "p2g")
-    if phase not in {"p2g", "step"}:
-        raise RuntimeError(f"Unsupported nsight.phase={phase!r}; expected 'p2g' or 'step'.")
-    configured_kernels = _configured_kernel_names(cfg)
-    if phase == "p2g":
-        unsupported = configured_kernels - _P2G_KERNELS
-        if unsupported:
-            supported = ", ".join(sorted(_P2G_KERNELS))
-            raise RuntimeError(
-                f"Unsupported P2G kernels: {', '.join(sorted(unsupported))}. "
-                f"Supported kernels: {supported}"
-            )
-    elif configured_kernels - _WARP_BONUS_KERNELS:
+    kernel_name = str(cfg.get("kernel", {}).get("name", "jax_v1_5"))
+    phase = str(cfg.nsight.get("phase", "p2g"))
+    if phase != "p2g":
+        raise RuntimeError("profile_nsight.py now supports only nsight.phase=p2g.")
+
+    configured_kernels = set(_sweep_kernel_names(cfg))
+    unsupported = configured_kernels - _P2G_KERNELS
+    if unsupported:
+        supported = ", ".join(sorted(_P2G_KERNELS))
         raise RuntimeError(
-            "nsight.phase=step currently profiles only pure Warp bonus kernels; "
-            f"got kernels={sorted(configured_kernels)}."
+            f"Unsupported P2G kernels: {', '.join(sorted(unsupported))}. "
+            f"Supported kernels: {supported}"
         )
-    _prepare_process_for_kernels(configured_kernels)
 
     run_dir = Path(HydraConfig.get().runtime.output_dir).resolve()
     _prepare_nsight_child_python(run_dir)
-    analyze_kwargs = _nsight_analyze_kwargs(cfg, run_dir, kernel_name, phase)
+    analyze_kwargs = _nsight_analyze_kwargs(cfg, run_dir, kernel_name)
     plot_enabled = bool(cfg.nsight.get("plot", {}).get("enabled", False))
     plot_kwargs = _nsight_plot_kwargs(cfg, run_dir) if plot_enabled else None
 
@@ -902,17 +499,8 @@ def main(cfg: DictConfig):
                 num_grids=num_grids,
                 steps_per_frame=steps_per_frame,
             )
-            if phase == "p2g":
-                launcher = _p2g_runner(profile_cfg, nsight)
-                launcher()
-            else:
-                if variant_kernel not in _WARP_BONUS_KERNELS:
-                    raise RuntimeError(
-                        "nsight.phase=step currently supports only pure Warp bonus "
-                        f"kernels, got {variant_kernel!r}."
-                    )
-                launcher = _warp_bonus_step_runner(profile_cfg, nsight)
-                launcher()
+            launcher = _p2g_runner(profile_cfg, nsight)
+            launcher()
 
     profiled_variant = nsight.analyze.kernel(**analyze_kwargs)(profiled_variant)
     if plot_kwargs is not None:
@@ -932,6 +520,5 @@ def main(cfg: DictConfig):
 
 
 if __name__ == "__main__":
-    # Keep Nsight output paths relative to Hydra's output directory, not cwd.
     os.environ.setdefault("NSYS_NVTX_PROFILER_REGISTER_ONLY", "0")
     main()
