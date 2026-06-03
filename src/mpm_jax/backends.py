@@ -109,10 +109,30 @@ def _make_jax_scan_p2g():
     return p2g
 
 
+def _jax_vmap_p2g(params, prepared):
+    from mpm_jax.p2g_vmap import _p2g_vmap  # pylint: disable=import-outside-toplevel
+
+    return _p2g_vmap(
+        prepared.weight, prepared.dweight, prepared.dpos, prepared.index,
+        prepared.v, prepared.C, prepared.stress,
+        params.dt, params.vol, params.p_mass, params.num_grids,
+    )
+
+
 def _jax_g2p(params, prepared, grid_v):
     return g2p(
         grid_v, prepared.weight, prepared.dweight, prepared.dpos, prepared.index,
         prepared.F, prepared.x, params.dt, params.inv_dx, params.clip_bound,
+    )
+
+
+def jax_v1_backend(**_opts):
+    return Backend(
+        name="jax_v1",
+        prepare=_jax_scan_prepare,
+        p2g=_jax_vmap_p2g,
+        g2p=_jax_g2p,
+        loop_kind="fori",
     )
 
 

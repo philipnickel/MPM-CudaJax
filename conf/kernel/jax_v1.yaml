@@ -1,0 +1,5 @@
+# Pure-JAX/XLA materialized baseline.
+# Computes all (N, 27, *) P2G stencil contributions before flattening and
+# scatter-adding them into the grid. This is simple and profiler-friendly, but
+# uses much more HBM than jax_v1_5.
+name: jax_v1

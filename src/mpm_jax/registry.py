@@ -6,6 +6,7 @@ import jax.numpy as jnp
 
 from mpm_jax.solver import MPMSolver
 from mpm_jax.backends import (
+    jax_v1_backend,
     jax_v1_5_backend,
     cuda_v1_backend,
     cuda_v2_backend,
@@ -28,6 +29,7 @@ class KernelSpec:
 
 
 KERNELS = {
+    "jax_v1":                 KernelSpec(MPMSolver, jax_v1_backend),
     "jax_v1_5":               KernelSpec(MPMSolver, jax_v1_5_backend),
     "cuda_v1_inline":         KernelSpec(MPMSolver, cuda_v1_backend),
     "cuda_v2_inline":         KernelSpec(MPMSolver, cuda_v2_backend, MappingProxyType({"loop_kind": "fori"})),
