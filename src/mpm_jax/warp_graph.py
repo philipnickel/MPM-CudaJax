@@ -1,13 +1,14 @@
 """Pure-Warp graph-captured MPM prototype.
 
-This is intentionally narrow: CorotatedElasticityJacobi-style jelly with
-identity plasticity and a sticky floor boundary. It exists to explore the
-Warp-native tiled/graph path without JAX driving the timestep.
+This is intentionally narrow: Jacobi-SVD jelly/sand materials with a sticky
+floor boundary. It exists to explore the Warp-native tiled/graph path without
+JAX driving the timestep.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 import numpy as np
 import warp as wp
@@ -18,6 +19,8 @@ INDEXED_TILE_SIZE = 128
 SUPER_CELL_WIDTH = 2
 SUPER_TILE_DIM = SUPER_CELL_WIDTH + 2
 SUPER_TILE_NODES = SUPER_TILE_DIM * SUPER_TILE_DIM * SUPER_TILE_DIM
+MATERIAL_JELLY = 0
+MATERIAL_SAND = 1
 
 
 @dataclass
@@ -86,6 +89,87 @@ def _corotated_stress(F: wp.mat33, mu: float, la: float):
     J = sigma[0] * sigma[1] * sigma[2]
     I = wp.identity(n=3, dtype=float)
     return (F - R) * (2.0 * mu) * wp.transpose(F) + I * (la * J * (J - 1.0))
+
+
+@wp.func
+def _stvk_stress(F: wp.mat33, mu: float, la: float):
+    U = wp.mat33()
+    sigma = wp.vec3()
+    V = wp.mat33()
+    U, sigma, V = wp.svd3(F)
+    Ft = wp.transpose(F)
+    I = wp.identity(n=3, dtype=float)
+    E_strain = (Ft * F - I) * 0.5
+    J = sigma[0] * sigma[1] * sigma[2]
+    return (F * E_strain) * (2.0 * mu) + I * (la * J * (J - 1.0))
+
+
+@wp.func
+def _material_stress(F: wp.mat33, mu: float, la: float, material_mode: int):
+    if material_mode == MATERIAL_SAND:
+        return _stvk_stress(F, mu, la)
+    return _corotated_stress(F, mu, la)
+
+
+@wp.func
+def _drucker_prager_project(
+    F: wp.mat33,
+    mu: float,
+    la: float,
+    friction_alpha: float,
+    cohesion: float,
+):
+    U = wp.mat33()
+    sigma = wp.vec3()
+    V = wp.mat33()
+    U, sigma, V = wp.svd3(F)
+    sigma = wp.vec3(
+        wp.max(sigma[0], 0.05),
+        wp.max(sigma[1], 0.05),
+        wp.max(sigma[2], 0.05),
+    )
+    epsilon = wp.vec3(wp.log(sigma[0]), wp.log(sigma[1]), wp.log(sigma[2]))
+    trace = epsilon[0] + epsilon[1] + epsilon[2]
+    mean_trace = trace / 3.0
+    epsilon_hat = wp.vec3(
+        epsilon[0] - mean_trace,
+        epsilon[1] - mean_trace,
+        epsilon[2] - mean_trace,
+    )
+    epsilon_hat_norm = wp.max(wp.length(epsilon_hat), 1.0e-10)
+    shifted_trace = trace - cohesion * 3.0
+
+    delta_gamma = (
+        epsilon_hat_norm
+        + (3.0 * la + 2.0 * mu) / (2.0 * mu) * shifted_trace * friction_alpha
+    )
+    scale = wp.max(delta_gamma, 0.0) / epsilon_hat_norm
+    compress_epsilon = epsilon - epsilon_hat * scale
+    expand_epsilon = wp.vec3(cohesion, cohesion, cohesion)
+    projected_epsilon = expand_epsilon
+    if shifted_trace < 0.0:
+        projected_epsilon = compress_epsilon
+
+    diag_exp = wp.diag(wp.vec3(
+        wp.exp(projected_epsilon[0]),
+        wp.exp(projected_epsilon[1]),
+        wp.exp(projected_epsilon[2]),
+    ))
+    return U * diag_exp * wp.transpose(V)
+
+
+@wp.func
+def _apply_material_plasticity(
+    F: wp.mat33,
+    mu: float,
+    la: float,
+    friction_alpha: float,
+    cohesion: float,
+    material_mode: int,
+):
+    if material_mode == MATERIAL_SAND:
+        return _drucker_prager_project(F, mu, la, friction_alpha, cohesion)
+    return F
 
 
 @wp.kernel
@@ -175,9 +259,10 @@ def _compute_stress_kernel(
     stress: wp.array[wp.mat33],
     mu: float,
     la: float,
+    material_mode: int,
 ):
     p = wp.tid()
-    stress[p] = _corotated_stress(F[p], mu, la)
+    stress[p] = _material_stress(F[p], mu, la, material_mode)
 
 
 @wp.kernel
@@ -195,6 +280,7 @@ def _p2g_supercell_stress_tile_kernel(
     dx: float,
     mu: float,
     la: float,
+    material_mode: int,
     grid_mv: wp.array[wp.vec3],
     grid_m: wp.array[float],
 ):
@@ -227,7 +313,7 @@ def _p2g_supercell_stress_tile_kernel(
             xp = x[p]
             vp = v[p]
             Cp = C[p]
-            stress = _corotated_stress(F[p], mu, la)
+            stress = _material_stress(F[p], mu, la, material_mode)
 
         px = xp * inv_dx
         b0 = int(wp.floor(px[0] - 0.5))
@@ -507,6 +593,7 @@ def _p2g_supercell_stress_tile_indexed_inline_kernel(
     dx: float,
     mu: float,
     la: float,
+    material_mode: int,
     grid_mv: wp.array[wp.vec3],
     grid_m: wp.array[float],
 ):
@@ -540,7 +627,7 @@ def _p2g_supercell_stress_tile_indexed_inline_kernel(
             xp = x[src]
             vp = v[src]
             Cp = C[src]
-            stress = _corotated_stress(F[src], mu, la)
+            stress = _material_stress(F[src], mu, la, material_mode)
 
         px = xp * inv_dx
         b0 = int(wp.floor(px[0] - 0.5))
@@ -655,6 +742,11 @@ def _g2p_kernel(
     inv_dx: float,
     dx: float,
     clip_bound: float,
+    mu: float,
+    la: float,
+    friction_alpha: float,
+    cohesion: float,
+    material_mode: int,
 ):
     p = wp.tid()
     xp = x[p]
@@ -710,6 +802,7 @@ def _g2p_kernel(
     for i in range(3):
         for j in range(3):
             Fn[i, j] = wp.clamp(Fn[i, j], -2.0, 2.0)
+    Fn = _apply_material_plasticity(Fn, mu, la, friction_alpha, cohesion, material_mode)
     x_out[p] = xn
     v_out[p] = new_v
     C_out[p] = new_C
@@ -731,6 +824,11 @@ def _g2p_indexed_kernel(
     inv_dx: float,
     dx: float,
     clip_bound: float,
+    mu: float,
+    la: float,
+    friction_alpha: float,
+    cohesion: float,
+    material_mode: int,
 ):
     p = wp.tid()
     src = ids[p]
@@ -787,6 +885,7 @@ def _g2p_indexed_kernel(
     for i in range(3):
         for j in range(3):
             Fn[i, j] = wp.clamp(Fn[i, j], -2.0, 2.0)
+    Fn = _apply_material_plasticity(Fn, mu, la, friction_alpha, cohesion, material_mode)
     x_out[p] = xn
     v_out[p] = new_v
     C_out[p] = new_C
@@ -827,6 +926,13 @@ class WarpBonusSimulator:
         nu = float(cfg.material.elasticity.get("nu", 0.4))
         self.mu = E / (2.0 * (1.0 + nu))
         self.la = E * nu / ((1.0 + nu) * (1.0 - 2.0 * nu))
+        elasticity_name = cfg.material.elasticity.get("name", "CorotatedElasticityJacobi")
+        plasticity_cfg = cfg.material.plasticity
+        self.material_mode = MATERIAL_SAND if elasticity_name == "StVKElasticityJacobi" else MATERIAL_JELLY
+        friction_angle = float(plasticity_cfg.get("friction_angle", 25.0))
+        sin_phi = math.sin(math.radians(friction_angle))
+        self.friction_alpha = math.sqrt(2.0 / 3.0) * 2.0 * sin_phi / (3.0 - sin_phi)
+        self.cohesion = float(plasticity_cfg.get("cohesion", 0.0))
 
         v0 = np.broadcast_to(np.array(cfg.sim.initial_velocity, dtype=np.float32), (self.n, 3)).copy()
         C0 = np.zeros((self.n, 3, 3), dtype=np.float32)
@@ -909,7 +1015,7 @@ class WarpBonusSimulator:
 
             evt = self._timing_begin("stress")
             wp.launch(_compute_stress_kernel, dim=self.n,
-                      inputs=[self.F, self.stress, self.mu, self.la], device=self.device)
+                      inputs=[self.F, self.stress, self.mu, self.la, self.material_mode], device=self.device)
             self._timing_end(evt)
 
             evt = self._timing_begin("p2g")
@@ -930,7 +1036,9 @@ class WarpBonusSimulator:
             wp.launch(_g2p_kernel, dim=self.n,
                       inputs=[self.x, self.F, self.grid_mv,
                               self.x2, self.v2, self.C2, self.F2,
-                              self.G, self.dt, self.inv_dx, self.dx, self.clip_bound],
+                              self.G, self.dt, self.inv_dx, self.dx, self.clip_bound,
+                              self.mu, self.la, self.friction_alpha, self.cohesion,
+                              self.material_mode],
                       device=self.device)
             self._timing_end(evt)
 
@@ -985,7 +1093,7 @@ class WarpBonusSimulator:
                 wp.launch(
                     _compute_stress_kernel,
                     dim=self.n,
-                    inputs=[self.F, self.stress, self.mu, self.la],
+                    inputs=[self.F, self.stress, self.mu, self.la, self.material_mode],
                     device=self.device,
                 )
                 self._timing_end(evt)
@@ -998,7 +1106,7 @@ class WarpBonusSimulator:
                 p2g_inputs = [
                     self.ids, self.x, self.v, self.C, self.F, self.cell_start,
                     self.G, self.dt, self.vol, self.p_mass, self.inv_dx, self.dx,
-                    self.mu, self.la, self.grid_mv, self.grid_m,
+                    self.mu, self.la, self.material_mode, self.grid_mv, self.grid_m,
                 ]
             evt = self._timing_begin("p2g")
             wp.launch_tiled(
@@ -1017,7 +1125,7 @@ class WarpBonusSimulator:
                 inputs=[
                     self.xs, self.vs, self.Cs, self.Fs, self.cell_start,
                     self.G, self.dt, self.vol, self.p_mass, self.inv_dx, self.dx,
-                    self.mu, self.la, self.grid_mv, self.grid_m,
+                    self.mu, self.la, self.material_mode, self.grid_mv, self.grid_m,
                 ],
                 block_dim=self.tile_size,
                 device=self.device,
@@ -1043,6 +1151,8 @@ class WarpBonusSimulator:
                     self.ids, self.x, self.F, self.grid_mv,
                     self.x2, self.v2, self.C2, self.F2,
                     self.G, self.dt, self.inv_dx, self.dx, self.clip_bound,
+                    self.mu, self.la, self.friction_alpha, self.cohesion,
+                    self.material_mode,
                 ],
                 device=self.device,
             )
@@ -1056,6 +1166,8 @@ class WarpBonusSimulator:
                     self.xs, self.Fs, self.grid_mv,
                     self.x2, self.v2, self.C2, self.F2,
                     self.G, self.dt, self.inv_dx, self.dx, self.clip_bound,
+                    self.mu, self.la, self.friction_alpha, self.cohesion,
+                    self.material_mode,
                 ],
                 device=self.device,
             )

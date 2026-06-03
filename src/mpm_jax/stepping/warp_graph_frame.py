@@ -13,10 +13,13 @@ def build_warp_graph(cfg, *, particles, indexed_sort=False, baseline=False, **_i
     kernel_name = cfg.get('kernel', {}).get('name', 'warp_bonus_graph')
     elasticity = cfg.get('material', {}).get('elasticity', {}).get('name', None)
     plasticity = cfg.get('material', {}).get('plasticity', {}).get('name', None)
-    if elasticity != 'CorotatedElasticityJacobi' or plasticity != 'IdentityPlasticity':
+    supported_material = (
+        (elasticity == 'CorotatedElasticityJacobi' and plasticity == 'IdentityPlasticity')
+        or (elasticity == 'StVKElasticityJacobi' and plasticity == 'DruckerPragerPlasticityJacobi')
+    )
+    if not supported_material:
         raise RuntimeError(
-            f"kernel={kernel_name} currently supports material=jelly_jacobi "
-            "only: CorotatedElasticityJacobi + IdentityPlasticity."
+            f"kernel={kernel_name} supports material=jelly_jacobi or material=sand_jacobi only."
         )
     if (not baseline) and int(cfg.sim.num_grids) % 2 != 0:
         raise RuntimeError(f"kernel={kernel_name} requires sim.num_grids divisible by 2.")

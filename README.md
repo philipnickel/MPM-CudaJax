@@ -141,9 +141,9 @@ pixi run -e gpu python simulate.py sim.n_particles=1000000 sim.num_grids=64
 | `cuda_v2_inline` | Warp-shuffle coalesced inline CUDA P2G + CUDA G2P. Default `loop_kind=fori`. Override with `kernel.loop_kind=python`. |
 | `cuda_v3_inline` | Morton-sorted inline CUDA P2G + CUDA G2P. `kernel.cuda_graph=true` enables XLA command-buffer (CUDA Graph) replay. |
 | `cuda_v4_inline` | Super-cell-owned grid tile inline CUDA P2G + CUDA G2P. |
-| `warp_baseline_graph` | Pure-Warp CUDA graph baseline: simple per-particle atomic-scatter P2G, no super-cell sort (mirrors the JAX baseline). Supports `material=jelly_jacobi`. |
-| `warp_bonus_graph` | Pure Warp prototype: bins particles by super-cell, runs tiled P2G + grid update + G2P in Warp, and replays captured CUDA graphs without JAX. Supports `material=jelly_jacobi`. |
-| `warp_bonus_v2_graph` | Pure Warp graph path that sorts particle ids only (avoids copying sorted `x/v/C/F` buffers). Supports `material=jelly_jacobi`. |
+| `warp_baseline_graph` | Pure-Warp CUDA graph baseline: simple per-particle atomic-scatter P2G, no super-cell sort (mirrors the JAX baseline). Supports `material=sand_jacobi` and `material=jelly_jacobi`. |
+| `warp_bonus_graph` | Pure Warp prototype: bins particles by super-cell, runs tiled P2G + grid update + G2P in Warp, and replays captured CUDA graphs without JAX. Supports `material=sand_jacobi` and `material=jelly_jacobi`. |
+| `warp_bonus_v2_graph` | Pure Warp graph path that sorts particle ids only (avoids copying sorted `x/v/C/F` buffers). Supports `material=sand_jacobi` and `material=jelly_jacobi`. |
 
 Removed kernels (raise `ValueError` with a migration message):
 

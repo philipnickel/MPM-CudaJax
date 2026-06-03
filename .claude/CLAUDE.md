@@ -176,7 +176,7 @@ Current kernel names:
 Material baseline:
 - `material=sand_jacobi` is the default JAX/CUDA material path: StVK elasticity + Drucker-Prager plasticity, both using the in-repo Jacobi SVD.
 - `material=jelly_jacobi` remains a simple corotated-elasticity sanity-check material.
-- Pure-Warp graph kernels are still intentionally narrow and currently support `material=jelly_jacobi` only.
+- Pure-Warp graph kernels are still intentionally narrow but support both `material=sand_jacobi` and `material=jelly_jacobi`.
 
 Removed/renamed kernels (error message from `build_solver`):
 - `jax` → use `jax_v1_5` as the JAX baseline.
