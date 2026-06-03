@@ -135,7 +135,7 @@ def _stage_label(stage_name: str):
 def _roofline_metric(metrics: list[str], l1_peak_metric: str):
     def derive_roofline(*args):
         metric_values = args[: len(metrics)]
-        _stage_name, _kernel_name, n_particles, num_grids, _steps_per_frame = args[len(metrics):]
+        _stage_name, _kernel_name, n_particles, num_grids = args[len(metrics):]
         cycles = _metric_value(metric_values, metrics, "sm__cycles_elapsed.avg")
         cycles_per_second = _metric_value(
             metric_values,
@@ -252,8 +252,8 @@ def _make_cfg(args, kernel_name: str):
                 "color": "orange",
             },
             "sim": {
-                "num_frames": 1,
-                "steps_per_frame": args.steps_per_frame,
+                "num_frames": 0,
+                "steps_per_frame": 1,
                 "n_particles": args.n_particles,
                 "initial_velocity": [0.0, 0.0, 0.0],
                 "num_grids": args.num_grids,
@@ -656,7 +656,15 @@ def _parse_args():
     )
     parser.add_argument("--n-particles", type=int, default=8_000_000)
     parser.add_argument("--num-grids", type=int, default=124)
-    parser.add_argument("--steps-per-frame", type=int, default=10)
+    parser.add_argument(
+        "--steps-per-frame",
+        type=int,
+        default=10,
+        help=(
+            "Accepted for compatibility with benchmark commands. This stage profiler "
+            "runs one annotated stage invocation, not a full frame loop."
+        ),
+    )
     parser.add_argument(
         "--stage",
         default="p2g",
@@ -668,6 +676,16 @@ def _parse_args():
     )
     parser.add_argument("--loop-kind", default="fori", choices=["fori", "python"])
     parser.add_argument("--cuda-graph", action="store_true")
+    parser.add_argument(
+        "--replay-mode",
+        default="kernel",
+        choices=["range", "kernel"],
+        help=(
+            "Nsight Compute replay mode. kernel is required for the SASS FP32 counters "
+            "used by this roofline; range is only useful if the metric list is changed "
+            "to range-compatible counters."
+        ),
+    )
     parser.add_argument("--runs", type=int, default=1)
     parser.add_argument(
         "--output",
@@ -698,11 +716,10 @@ def main():
 
     dataframes = []
 
-    def profiled_variant(stage_name, kernel_name, n_particles, num_grids, steps_per_frame):
+    def profiled_variant(stage_name, kernel_name, n_particles, num_grids):
         cfg = _make_cfg(args, str(kernel_name))
         cfg.sim.n_particles = int(n_particles)
         cfg.sim.num_grids = int(num_grids)
-        cfg.sim.steps_per_frame = int(steps_per_frame)
         _build_stage_runner(cfg, nsight, str(stage_name))()
 
     with _disable_editable_pth_for_nsight():
@@ -714,18 +731,23 @@ def main():
                         kernel_name,
                         args.n_particles,
                         args.num_grids,
-                        args.steps_per_frame,
                     )
                 ],
                 runs=args.runs,
                 metrics=metrics,
                 derive_metric=_roofline_metric(metrics, l1_peak_metric),
-                replay_mode="kernel",
-                combine_kernel_metrics=_combine_roofline_metrics(metrics),
+                replay_mode=args.replay_mode,
+                combine_kernel_metrics=(
+                    _combine_roofline_metrics(metrics)
+                    if args.replay_mode == "kernel"
+                    else None
+                ),
                 ignore_kernel_list=args.ignore_kernel,
                 output="progress",
                 output_csv=args.output_csv,
-                output_prefix=str(run_dir / f"hierarchical_roofline_{kernel_name}_{args.stage}_"),
+                output_prefix=str(
+                    run_dir / f"hierarchical_roofline_{kernel_name}_{args.stage}_{args.replay_mode}_"
+                ),
             )(profiled_variant)
             previous_target = os.environ.get("NSPY_ROOFLINE_KERNEL")
             os.environ["NSPY_ROOFLINE_KERNEL"] = kernel_name
