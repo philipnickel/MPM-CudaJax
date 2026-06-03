@@ -19,6 +19,12 @@ dependencies = [
 ]
 
 [tool.scikit-build]
+# Tolerate config-settings injected by the build frontend. pixi >=0.70 passes a
+# `pixi-conda-environment` config-setting to every PEP 517 build; with the
+# default strict-config=true, scikit-build-core rejects that unknown key and
+# aborts the editable build with SystemExit(7). Relaxing it makes the key a
+# warning instead, so `pixi install` succeeds regardless of the local pixi rev.
+strict-config = false
 # Auto-rebuild the .so files on import when .cu sources change in editable mode.
 build-dir = "build/{wheel_tag}"
 wheel.packages = ["src/mpm_jax"]
