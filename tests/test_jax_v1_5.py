@@ -42,7 +42,6 @@ def _build_setup(n: int = 2000, num_grids: int = 16):
             "point": [1.0, 1.0, 0.02],
             "normal": [0.0, 0.0, 1.0],
             "surface": "sticky",
-            "friction": 0.0,
             "start_time": 0.0,
             "end_time": 1e3,
         }

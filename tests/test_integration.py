@@ -21,7 +21,7 @@ def test_jelly_simulation_10_frames():
     grid_x = _make_grid_x(num_grids)
     bc_configs = [
         {"type": "surface_collider", "point": [1.0, 1.0, 0.02],
-         "normal": [0.0, 0.0, 1.0], "surface": "sticky", "friction": 0.0,
+         "normal": [0.0, 0.0, 1.0], "surface": "sticky",
          "start_time": 0.0, "end_time": 1e3},
     ]
     pre_fn, post_fn = build_boundary_fns(bc_configs, grid_x, params.dx, x0, params.dt)
@@ -60,7 +60,7 @@ def test_per_stage_matches_per_frame():
     grid_x = _make_grid_x(num_grids)
     bc_configs = [
         {"type": "surface_collider", "point": [1.0, 1.0, 0.02],
-         "normal": [0.0, 0.0, 1.0], "surface": "sticky", "friction": 0.0,
+         "normal": [0.0, 0.0, 1.0], "surface": "sticky",
          "start_time": 0.0, "end_time": 1e3},
     ]
     pre_fn, post_fn = build_boundary_fns(bc_configs, grid_x, params.dx, x0, params.dt)
