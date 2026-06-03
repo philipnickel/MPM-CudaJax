@@ -23,12 +23,8 @@ import jax.numpy as jnp
 def _givens_cs(a_pp, a_pq, a_qq, eps=1e-10):
     """Branch-free Givens coefficients zeroing a_pq in symmetric 2x2.
 
-    Uses tau = (a_pp - a_qq) / (2 a_pq) — this is the correct sign for the
-    rotation G = [[c, -s], [s, c]] that the symmetric update below uses.
-    (The CUDA kernel `p2g_fused.cu` has tau = (a_qq - a_pp) / (2 a_pq),
-    which is a sign bug; iteration still converges thanks to Jacobi
-    robustness, but each rotation leaves residual off-diagonal — hence
-    `test_cuda_fused_matches_jax`'s "looser tolerances" comment.)
+    Uses tau = (a_pp - a_qq) / (2 a_pq), the sign for the rotation
+    G = [[c, -s], [s, c]] used by the symmetric update below.
     """
     small = jnp.abs(a_pq) < eps
     safe_pq = jnp.where(small, jnp.ones_like(a_pq), a_pq)

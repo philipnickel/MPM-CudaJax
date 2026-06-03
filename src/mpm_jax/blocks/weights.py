@@ -1,7 +1,12 @@
 import jax
 import jax.numpy as jnp
 
-from mpm_jax.types import OFFSET_27
+
+# 27 offsets for the 3x3x3 quadratic B-spline support around each particle.
+OFFSET_27 = jnp.array(
+    [[i, j, k] for i in range(3) for j in range(3) for k in range(3)],
+    dtype=jnp.float32,
+)  # (27, 3)
 
 
 def _single_particle_weights(x_p, inv_dx, dx, num_grids):

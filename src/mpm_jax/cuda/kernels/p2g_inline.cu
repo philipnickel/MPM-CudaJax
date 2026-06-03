@@ -9,14 +9,9 @@
 //                                              + p_mass*weight*(v + C@dpos)
 //        - atomicAdds mv and mass into grid buffers
 //
-// Compared to cuda_fused:
-//   - No SVD, no plasticity, no stress formula in this kernel — JAX does that
-//     upstream (via jacobi_svd_3x3 + corotated_elasticity_jacobi).
-//   - Result: ~80 lines of CUDA instead of ~400; works for ANY constitutive
-//     model (JAX just has to emit stress: (N, 3, 3)).
-//   - Mathematically identical to solver._single_particle_p2g (uses the same
-//     stress @ dweight formula, not the affine = -dt*vol*4*inv_dx^2*stress
-//     MLS-MPM trick used in cuda_fused). Equivalence vs JAX is f32-tight.
+// No SVD, plasticity, or stress formula lives in this kernel; JAX computes
+// stress upstream and the CUDA kernel only scatters it. This keeps the kernel
+// model-agnostic and avoids materialising (N, 27, *) intermediates.
 //
 // Inputs (all float32):
 //   x:      (N, 3)        particle positions

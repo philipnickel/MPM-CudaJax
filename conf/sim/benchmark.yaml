@@ -1,17 +1,15 @@
-# Standard high-performance benchmark configuration (Taichi / MLS-MPM spec).
-# 8 particles/cell, dx = 8e-3 (num_grids=125), particles in [0.1, 0.9]^3 ->
-# 100^3 active cells x 8 ppc = 8,000,000 particles. APIC + (lin/corotated)
-# elasticity. See "Standard benchmark settings" in .claude/CLAUDE.md.
+# Standard high-performance benchmark configuration.
+# Uses an even grid so JAX, inline CUDA, Warp baseline, and Warp tiled kernels
+# can all run the same apples-to-apples preset. This is close to the Taichi /
+# MLS-MPM 8 ppc setup: dx ~= 8.06e-3, particles in [0.1, 0.9]^3, 8M particles.
 #
 #   pixi run -e gpu python simulate.py -cn config sim=benchmark \
-#       kernel=cuda_v3_inline material=jelly_jacobi benchmark=true
-num_frames: 5
+#       kernel=cuda_v3_inline material=sand_jacobi benchmark=true
+num_frames: 1
 steps_per_frame: 10
-n_particles: 8000000          # 100^3 active cells x 8 ppc
+n_particles: 8000000
 initial_velocity: [0.0, 0.0, 0.0]
-num_grids: 125                # dx = 1/125 = 8e-3  (NOTE: odd -> the super-cell-tiled
-                              # warp_bonus_* variants need an EVEN grid; use num_grids=124/126
-                              # for those. jax / cuda_v* / warp_baseline_graph handle 125.)
+num_grids: 124                # even grid required by super-cell tiled Warp kernels
 dt: 5.0e-5                    # CFL: c=sqrt(E/rho)~45 m/s, dx=8e-3 -> dt_max~9e-5; 5e-5 is safe
 gravity: [0.0, 0.0, -9.8]
 rho: 1000.0
@@ -24,6 +22,5 @@ boundary_conditions:
     point: [1.0, 1.0, 0.02]
     normal: [0.0, 0.0, 1.0]
     surface: sticky
-    friction: 0.0
     start_time: 0.0
     end_time: 1e3

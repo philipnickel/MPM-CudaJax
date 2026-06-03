@@ -5,7 +5,7 @@ directory, collects every per-run ``results.json`` that ``simulate.py``
 dumped, and produces two seaborn plots into the multirun root:
 
   scaling_ms_per_step.png     ms/step vs N, one line per kernel (log-log)
-  scaling_speedup.png         speedup vs `jax` baseline, one line per kernel
+  scaling_speedup.png         speedup vs `jax_v1_5` baseline, one line per kernel
 
 Plus ``results.csv`` (long-form pandas dataframe) for downstream tooling.
 
@@ -19,7 +19,7 @@ Usage in a Hydra sweep config:
       callbacks:
         scaling_plot:
           _target_: mpm_jax.callbacks.ScalingPlotCallback
-          baseline_kernel: jax     # which kernel's ms/step is the denominator
+          baseline_kernel: jax_v1_5  # which kernel's ms/step is the denominator
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 class ScalingPlotCallback(Callback):
     """Aggregate per-run results.json files into a scaling plot."""
 
-    def __init__(self, baseline_kernel: str = "jax"):
+    def __init__(self, baseline_kernel: str = "jax_v1_5"):
         self.baseline_kernel = baseline_kernel
 
     def on_multirun_end(self, config: DictConfig, **kwargs: Any) -> None:
@@ -104,7 +104,7 @@ class ScalingPlotCallback(Callback):
         ax.set_yscale("log")
         ax.set_xlabel("Particles (N)")
         ax.set_ylabel("ms / step")
-        ax.set_title("MPM P2G scaling — A10, jelly cube, G=64")
+        ax.set_title("MPM P2G scaling")
         ax.legend(title="kernel", loc="best", fontsize=10)
         fig.tight_layout()
         ms_path = sweep_root / "scaling_ms_per_step.png"

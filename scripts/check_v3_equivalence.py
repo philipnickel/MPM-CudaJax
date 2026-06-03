@@ -20,9 +20,10 @@ from omegaconf import OmegaConf
 from mpm_jax.solver import MPMState, make_params
 from mpm_jax.constitutive import get_constitutive
 from mpm_jax.boundary import build_boundary_fns
-from mpm_jax.cuda.p2g_cuda import (
-    build_jit_frame_inline,
-    build_jit_frame_v3_inline,
+from mpm_jax.backends import (
+    build_backend_frame,
+    cuda_v1_backend,
+    cuda_v3_backend,
 )
 
 
@@ -63,7 +64,6 @@ def run(kernel_name, frames=3, steps_per_frame=10):
         'point': [1.0, 1.0, 0.02],
         'normal': [0.0, 0.0, 1.0],
         'surface': 'sticky',
-        'friction': 0.0,
         'start_time': 0.0,
         'end_time': 1e3,
     })]
@@ -73,22 +73,29 @@ def run(kernel_name, frames=3, steps_per_frame=10):
     )
 
     elast_cfg = OmegaConf.create({
-        'name': 'CorotatedElasticityJacobi',
+        'name': 'StVKElasticityJacobi',
         'E': 1e3,
         'nu': 0.2,
     })
-    plast_cfg = OmegaConf.create({'name': 'IdentityPlasticity'})
+    plast_cfg = OmegaConf.create({
+        'name': 'DruckerPragerPlasticityJacobi',
+        'E': 1e3,
+        'nu': 0.2,
+        'friction_angle': 25.0,
+        'cohesion': 0.0,
+    })
     elasticity_fn = get_constitutive(elast_cfg)
     plasticity_fn = get_constitutive(plast_cfg)
 
     if kernel_name == 'v1_inline':
-        jit_frame = build_jit_frame_inline(
-            params, elasticity_fn, plasticity_fn, pre_fn, post_fn, steps_per_frame)
+        backend = cuda_v1_backend()
     elif kernel_name == 'v3_inline':
-        jit_frame = build_jit_frame_v3_inline(
-            params, elasticity_fn, plasticity_fn, pre_fn, post_fn, steps_per_frame)
+        backend = cuda_v3_backend()
     else:
         raise ValueError(kernel_name)
+    jit_frame = build_backend_frame(
+        params, elasticity_fn, plasticity_fn, pre_fn, post_fn,
+        backend, steps_per_frame)
 
     for _ in range(frames):
         state = jit_frame(state)

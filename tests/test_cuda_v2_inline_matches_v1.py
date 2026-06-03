@@ -41,9 +41,10 @@ def _kernel_available(kind: str) -> bool:
 )
 def test_cuda_v2_inline_matches_v1_inline():
     """Run a short sim under both inline kernels and compare final state."""
-    from mpm_jax.stepping.cuda_frames import (
-        build_cuda_v1_frame as build_jit_frame_inline,
-        build_cuda_v2_frame as build_jit_frame_v2_inline,
+    from mpm_jax.backends import (
+        build_backend_frame,
+        cuda_v1_backend,
+        cuda_v2_backend,
     )
 
     n = 2000
@@ -61,17 +62,22 @@ def test_cuda_v2_inline_matches_v1_inline():
             "point": [1.0, 1.0, 0.02],
             "normal": [0.0, 0.0, 1.0],
             "surface": "sticky",
-            "friction": 0.0,
             "start_time": 0.0,
             "end_time": 1e3,
         }
     ]
     pre_fn, post_fn = build_boundary_fns(bcs, grid_x, params.dx, x0, params.dt)
 
-    # Use the Jacobi-SVD elasticity model (same as material=jelly_jacobi)
-    # so stress is computed on the JAX side without a cuSOLVER dependence.
-    e_cfg = OmegaConf.create({"name": "CorotatedElasticityJacobi", "E": 2e6, "nu": 0.4})
-    p_cfg = OmegaConf.create({"name": "IdentityPlasticity"})
+    # Use the sand Jacobi material so stress/plasticity stay on the JAX side
+    # without a cuSOLVER dependence.
+    e_cfg = OmegaConf.create({"name": "StVKElasticityJacobi", "E": 2e6, "nu": 0.4})
+    p_cfg = OmegaConf.create({
+        "name": "DruckerPragerPlasticityJacobi",
+        "E": 2e6,
+        "nu": 0.4,
+        "friction_angle": 25.0,
+        "cohesion": 0.0,
+    })
     elasticity_fn = get_constitutive(e_cfg)
     plasticity_fn = get_constitutive(p_cfg)
 
@@ -85,10 +91,12 @@ def test_cuda_v2_inline_matches_v1_inline():
     steps_per_frame = 5
     num_frames = 3
 
-    jit_v1 = build_jit_frame_inline(
-        params, elasticity_fn, plasticity_fn, pre_fn, post_fn, steps_per_frame)
-    jit_v2 = build_jit_frame_v2_inline(
-        params, elasticity_fn, plasticity_fn, pre_fn, post_fn, steps_per_frame)
+    jit_v1 = build_backend_frame(
+        params, elasticity_fn, plasticity_fn, pre_fn, post_fn,
+        cuda_v1_backend(), steps_per_frame)
+    jit_v2 = build_backend_frame(
+        params, elasticity_fn, plasticity_fn, pre_fn, post_fn,
+        cuda_v2_backend(), steps_per_frame)
 
     s1 = state0
     s2 = state0

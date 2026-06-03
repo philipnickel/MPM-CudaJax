@@ -13,7 +13,7 @@ def test_surface_collider_sticky_zeroes_velocity():
     init_pos = jnp.ones((10, 3)) * 0.5
     bc_configs = [
         {"type": "surface_collider", "point": [1.0, 1.0, 0.02],
-         "normal": [0.0, 0.0, 1.0], "surface": "sticky", "friction": 0.0,
+         "normal": [0.0, 0.0, 1.0], "surface": "sticky",
          "start_time": 0.0, "end_time": 1e3},
     ]
     pre_fn, post_fn = build_boundary_fns(bc_configs, grid_x, dx, init_pos, dt=3e-4)
@@ -39,7 +39,8 @@ def test_noop_when_no_bcs():
     assert jnp.allclose(x2, x)
     assert jnp.allclose(v2, v)
 
-def test_sdf_collider_pushes_particles_back():
+
+def test_rejects_unsupported_boundary_type():
     num_grids = 5
     dx = 1.0 / num_grids
     grid_x = _make_grid_x(num_grids)
@@ -48,9 +49,6 @@ def test_sdf_collider_pushes_particles_back():
         {"type": "sdf_collider", "bound": 0.1, "dim": 2,
          "start_time": 0.0, "end_time": 1e3},
     ]
-    pre_fn, post_fn = build_boundary_fns(bc_configs, grid_x, dx, init_pos, dt=3e-4)
-    x = jnp.ones((10, 3)) * 0.5
-    x = x.at[0, 2].set(0.05)
-    v = jnp.zeros((10, 3))
-    x2, v2 = pre_fn(x, v, 0.0)
-    assert x2[0, 2] >= 0.1 - 1e-5
+    import pytest
+    with pytest.raises(ValueError, match="only 'surface_collider' is supported"):
+        build_boundary_fns(bc_configs, grid_x, dx, init_pos, dt=3e-4)

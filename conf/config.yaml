@@ -1,10 +1,17 @@
 defaults:
-  - material: jelly
+  - material: sand_jacobi
   - sim: default
-  - kernel: jax
+  - kernel: jax_v1_5
   - profile: none
   - _self_
 
 output_dir: ./output
-tag: jelly
+tag: sand_jacobi
 benchmark: false  # skip GIF rendering and frame saving when true
+render:
+  backend: pyvista_gif  # pyvista_gif | warp_opengl | warp_usd | ovrtx_mp4
+  fps: 30
+  point_radius: 0.008
+  width: 960
+  height: 720
+  write_usd: false

@@ -3,7 +3,7 @@
 # __match_any_sync + __shfl_xor_sync warp reduction folded into every
 # atomicAdd. Tests whether warp coalescing helps the scatter once the
 # (N, 27, *) overhead is gone. Per-frame path only (uses the same lax.scan
-# wrapper as cuda_v1_inline). Pair with material=jelly_jacobi.
+# wrapper as cuda_v1_inline). Pair with material=sand_jacobi.
 name: cuda_v2_inline
 # Substep driver for the per-frame lax.scan wrapper: 'fori' = lax.fori_loop,
 # 'python' = unrolled Python loop. Mirrors the registry default; override on

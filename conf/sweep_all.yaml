@@ -3,8 +3,6 @@
 # Usage: pixi run -e gpu python simulate.py -cn sweep_all
 #
 # Build CUDA kernels first: pixi install -e gpu
-# Note: cuda_v6_inline was removed; CUDA-Graph capture of cuda_v3_inline is
-# tested via: kernel=cuda_v3_inline kernel.cuda_graph=true
 defaults:
   - config
   - _self_
@@ -14,7 +12,7 @@ hydra:
   sweeper:
     params:
       sim.n_particles: 5000,10000,50000,100000
-      kernel: jax,jax_v1_5,cuda_v2_inline,cuda_v3_inline
+      kernel: jax_v1_5,cuda_v2_inline,cuda_v3_inline
 
 benchmark: true
 tag: sweep_all
