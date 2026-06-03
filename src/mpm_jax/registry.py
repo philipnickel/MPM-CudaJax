@@ -56,7 +56,7 @@ def build_solver(cfg):
 
     Reads the resolved Hydra config: builds particles, params, grid, BCs, and
     initial state, then instantiates the registered solver class with the
-    registered frame builder.
+    registered backend factory.
     """
     name = cfg.kernel.name
     if name in REMOVED_KERNELS:

@@ -65,7 +65,7 @@ bounds and cluster → worst-case atomic contention → erratic timings. The 8-p
 benchmark removes this.
 
 **Fairness check (why `warp_baseline` wins — NOT dispatch overhead).** The JAX path is fully
-jitted: `build_jax_frame` compiles the whole frame (10 substeps) into one XLA program
+jitted: `build_backend_frame` compiles the whole frame (10 substeps) into one XLA program
 (`lax.fori_loop`), and benchmark mode dispatches frames back-to-back with one sync — so host
 dispatch is already eliminated on the JAX side. CUDA-path decomposition at the benchmark:
 `cuda_v1`=43.95, `cuda_v2`=44.23, `cuda_v3`=38.78, `cuda_v3 cuda_graph=true`=38.86. So
