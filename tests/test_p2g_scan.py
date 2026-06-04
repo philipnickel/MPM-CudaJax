@@ -1,4 +1,4 @@
-"""jax_v1_5 P2G keeps the 27-stencil loop inside the outer frame JIT."""
+"""The JAX baseline P2G (_p2g_scan): lax.scan over the 27 stencil offsets."""
 
 import jax.numpy as jnp
 

@@ -1,7 +1,7 @@
 defaults:
   - material: sand_jacobi
   - sim: default
-  - kernel: jax_v1_5
+  - kernel: jax_baseline
   - profile: none
   - _self_
 

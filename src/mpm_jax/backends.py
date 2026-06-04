@@ -7,9 +7,7 @@ from typing import Any, Callable, NamedTuple
 import jax
 import jax.numpy as jnp
 
-from mpm_jax.blocks.g2p import g2p
 from mpm_jax.blocks.grid import grid_update
-from mpm_jax.blocks.weights import compute_weights_and_indices
 from mpm_jax.types import MPMState
 
 
@@ -122,15 +120,6 @@ def build_backend_frame(params, elasticity_fn, plasticity_fn,
     return jit_frame
 
 
-def _jax_scan_prepare(params, state, stress):
-    weight, dweight, dpos, index = compute_weights_and_indices(
-        state.x, params.inv_dx, params.dx, params.num_grids)
-    return PreparedSubstep(
-        state.x, state.v, state.C, state.F, stress,
-        weight=weight, dweight=dweight, dpos=dpos, index=index,
-    )
-
-
 def _make_jax_scan_p2g():
     from mpm_jax.p2g_scan import _p2g_scan  # pylint: disable=import-outside-toplevel
 
@@ -142,51 +131,6 @@ def _make_jax_scan_p2g():
         )
 
     return p2g
-
-
-def _jax_g2p(params, prepared, grid_v):
-    return g2p(
-        grid_v, prepared.weight, prepared.dweight, prepared.dpos, prepared.index,
-        prepared.F, prepared.x, params.dt, params.inv_dx, params.clip_bound,
-    )
-
-
-def jax_v1_5_backend(**_opts):
-    return Backend(
-        name="jax_v1_5",
-        prepare=_jax_scan_prepare,
-        p2g=_make_jax_scan_p2g(),
-        g2p=_jax_g2p,
-        loop_kind="fori",
-    )
-
-
-def _make_jax_scan_g2p():
-    from mpm_jax.g2p_scan import _g2p_scan  # pylint: disable=import-outside-toplevel
-
-    def g2p(params, prepared, grid_v):
-        return _g2p_scan(
-            grid_v, prepared.x, prepared.F,
-            params.dt, params.inv_dx, params.dx, params.num_grids, params.clip_bound,
-        )
-
-    return g2p
-
-
-def jax_v2_backend(**_opts):
-    """jax_v1_5 + scan-over-27 G2P.
-
-    Both transfers now scan the 27 offsets, so neither the P2G scatter buffer
-    nor the G2P gather/APIC (N, 27, *) intermediates materialise. Uses the
-    default passthrough `prepare` (g2p recomputes weights inline), so the
-    (N, 27, *) weight arrays are never built either.
-    """
-    return Backend(
-        name="jax_v2",
-        p2g=_make_jax_scan_p2g(),
-        g2p=_make_jax_scan_g2p(),
-        loop_kind="fori",
-    )
 
 
 def _make_jax_scan_g2p_mls():
@@ -201,41 +145,18 @@ def _make_jax_scan_g2p_mls():
     return g2p
 
 
-def jax_v3_backend(**_opts):
-    """jax_v2 + unified MLS-MPM G2P: the APIC affine matrix C is reused as the
-    velocity gradient for the F-update, so G2P builds ONE (N, 3, 3) accumulator
-    instead of two. Faster than jax_v2 but NOT bit-compatible — it uses the MLS
-    velocity-gradient estimator rather than the separate B-spline one.
+def jax_baseline_backend(**_opts):
+    """The JAX/XLA baseline. lax.scan over the 27 offsets for both P2G and G2P;
+    the unified MLS-MPM G2P (the APIC affine matrix C is reused as the velocity
+    gradient for the F-update, so G2P builds ONE (N, 3, 3) accumulator instead
+    of two); scatter-free Jacobi SVD for the stress and plasticity. Every other
+    kernel reuses this exact G2P (``_make_jax_scan_g2p_mls``), so across the
+    registry only the P2G implementation varies.
     """
     return Backend(
-        name="jax_v3",
+        name="jax_baseline",
         p2g=_make_jax_scan_p2g(),
         g2p=_make_jax_scan_g2p_mls(),
-        loop_kind="fori",
-    )
-
-
-def _cuda_g2p(params, prepared, grid_v):
-    from mpm_jax.cuda.p2g_cuda import cuda_g2p_fused  # pylint: disable=import-outside-toplevel
-
-    return cuda_g2p_fused(
-        prepared.x, prepared.F, grid_v,
-        params.num_grids, params.dt,
-        params.inv_dx, params.dx, params.clip_bound,
-    )
-
-
-def jax_cuda_g2p_backend(**_opts):
-    """Hybrid: JAX scan P2G + hand-written CUDA fused G2P (the register-resident
-    g2p_fused.cu kernel). Targets the JAX baseline's G2P bottleneck while keeping
-    the rest in JAX. NOTE: plasticity (the SVD return-map, the single biggest
-    kernel) is still applied in JAX after g2p, so this only replaces the
-    gather + APIC + F-update.
-    """
-    return Backend(
-        name="jax_cuda_g2p",
-        p2g=_make_jax_scan_p2g(),
-        g2p=_cuda_g2p,
         loop_kind="fori",
     )
 
@@ -270,21 +191,21 @@ def _cuda_inline_p2g(kind):
 
 
 def cuda_v1_backend(**_opts):
-    _require_cuda("inline", "g2p_fused")
+    _require_cuda("inline")
     return Backend(
         name="cuda_v1_inline",
         p2g=_cuda_inline_p2g("inline"),
-        g2p=_cuda_g2p,
+        g2p=_make_jax_scan_g2p_mls(),
         loop_kind="fori",
     )
 
 
 def cuda_v2_backend(**_opts):
-    _require_cuda("v2_inline", "g2p_fused")
+    _require_cuda("v2_inline")
     return Backend(
         name="cuda_v2_inline",
         p2g=_cuda_inline_p2g("v2_inline"),
-        g2p=_cuda_g2p,
+        g2p=_make_jax_scan_g2p_mls(),
         loop_kind="fori",
     )
 
@@ -299,12 +220,12 @@ def _morton_prepare(params, state, stress):
 
 
 def cuda_v3_backend(**_opts):
-    _require_cuda("v3_inline", "g2p_fused")
+    _require_cuda("v3_inline")
     return Backend(
         name="cuda_v3_inline",
         prepare=_morton_prepare,
         p2g=_cuda_inline_p2g("v3_inline"),
-        g2p=_cuda_g2p,
+        g2p=_make_jax_scan_g2p_mls(),
         loop_kind="fori",
     )
 
@@ -351,12 +272,12 @@ def cuda_v4_backend(**_opts):
             f"cuda_v4_inline requires num_grids ({_opts['num_grids']}) divisible by "
             f"super-cell width ({V4_SUPER_CELL_WIDTH})."
         )
-    _require_cuda("v4_inline", "g2p_fused")
+    _require_cuda("v4_inline")
     return Backend(
         name="cuda_v4_inline",
         prepare=_cuda_v4_prepare,
         p2g=_cuda_v4_p2g,
-        g2p=_cuda_g2p,
+        g2p=_make_jax_scan_g2p_mls(),
         loop_kind="fori",
     )
 
@@ -405,11 +326,10 @@ def warp_v3_supercell_backend(*, graph_mode="jax", num_grids=None, **_opts):
             f"warp_v3_supercell_tile requires num_grids ({num_grids}) "
             f"divisible by super-cell width ({SUPER_CELL_WIDTH})."
         )
-    _require_cuda("g2p_fused")
     return Backend(
         name="warp_v3_supercell_tile",
         prepare=_warp_prepare,
         p2g=_warp_p2g(_make_jax_p2g_supercell_tile(graph_mode)),
-        g2p=_cuda_g2p,
+        g2p=_make_jax_scan_g2p_mls(),
         loop_kind="fori",
     )

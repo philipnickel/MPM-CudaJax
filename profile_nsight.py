@@ -20,7 +20,7 @@ from omegaconf import DictConfig, ListConfig, OmegaConf
 _UNSUPPORTED_ANALYZE_CONFIG_KEYS = {"configs"}
 _SCRIPT_NSIGHT_KEYS = {"phase", "write_json", "plot", "sweep", "configs", "analyze"}
 _P2G_KERNELS = {
-    "jax_v1_5",
+    "jax_baseline",
     "cuda_v1_inline",
     "cuda_v2_inline",
     "cuda_v3_inline",
@@ -166,7 +166,7 @@ def _merge_variant_cfg(
 
 
 def _sweep_kernel_names(cfg: DictConfig):
-    base_kernel = cfg.get("kernel", {}).get("name", "jax_v1_5")
+    base_kernel = cfg.get("kernel", {}).get("name", "jax_baseline")
     sweep = cfg.nsight.get("sweep", None)
     if sweep is not None:
         sweep_dict = OmegaConf.to_container(sweep, resolve=True)
@@ -470,7 +470,7 @@ def _disable_editable_pth_for_nsight():
 @hydra.main(version_base=None, config_path="conf", config_name="nsight_profile")
 def main(cfg: DictConfig):
     nsight = _require_nsight()
-    kernel_name = str(cfg.get("kernel", {}).get("name", "jax_v1_5"))
+    kernel_name = str(cfg.get("kernel", {}).get("name", "jax_baseline"))
     phase = str(cfg.nsight.get("phase", "p2g"))
     if phase != "p2g":
         raise RuntimeError("profile_nsight.py now supports only nsight.phase=p2g.")

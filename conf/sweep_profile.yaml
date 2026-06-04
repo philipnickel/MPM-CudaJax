@@ -8,7 +8,7 @@ hydra:
   mode: MULTIRUN
   sweeper:
     params:
-      kernel: jax_v1_5,cuda_v2_inline,cuda_v3_inline
+      kernel: jax_baseline,cuda_v2_inline,cuda_v3_inline
       profile: jax
 
 benchmark: true

@@ -1,4 +1,0 @@
-# Pure-JAX/XLA baseline with lax.scan over the 27 stencil offsets.
-# Avoids the (N, 27, *) intermediate that the older jax path materialised,
-# at the cost of one scatter per stencil offset.
-name: jax_v1_5

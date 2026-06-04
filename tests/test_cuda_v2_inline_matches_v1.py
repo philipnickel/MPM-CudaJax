@@ -35,9 +35,8 @@ def _kernel_available(kind: str) -> bool:
 
 
 @pytest.mark.skipif(
-    not (_kernel_available("inline") and _kernel_available("v2_inline")
-         and _kernel_available("g2p_fused")),
-    reason="cuda_v1_inline / cuda_v2_inline / g2p_fused .so not built or no GPU",
+    not (_kernel_available("inline") and _kernel_available("v2_inline")),
+    reason="cuda_v1_inline / cuda_v2_inline .so not built or no GPU",
 )
 def test_cuda_v2_inline_matches_v1_inline():
     """Run a short sim under both inline kernels and compare final state."""

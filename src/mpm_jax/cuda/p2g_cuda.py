@@ -102,10 +102,6 @@ def _register(name: str, so_name: str, symbol: str) -> bool:
             return False
 
 
-def _register_g2p_fused():
-    return _register("g2p_fused_cuda", "libg2p_fused.so", "G2PFused")
-
-
 def _register_inline():
     return _register("p2g_inline_cuda", "libp2g_inline.so", "P2GInline")
 
@@ -124,9 +120,7 @@ def _register_v4_inline():
 
 def is_available(kernel='inline'):
     """Check if a prebuilt CUDA kernel can be loaded and registered."""
-    if kernel == 'g2p_fused':
-        return _register_g2p_fused()
-    elif kernel == 'inline':
+    if kernel == 'inline':
         return _register_inline()
     elif kernel == 'v2_inline':
         return _register_v2_inline()
@@ -295,39 +289,6 @@ def cuda_p2g_v4_inline(x_sorted, v_sorted, C_sorted, stress_sorted, cell_start,
     return grid_mv, grid_m
 
 
-def cuda_g2p_fused(x, F, grid_v, num_grids, dt, inv_dx, dx, clip_bound):
-    """Fused CUDA G2P via JAX FFI.
-
-    Each thread computes its own B-spline weights in registers, gathers
-    27 grid velocities, and produces (new_x, new_v, new_C, new_F) — no
-    (N, 27, *) tensors materialised in HBM.
-    """
-    N = x.shape[0]
-    G = num_grids
-    F_flat = F.reshape(N, 9)
-
-    new_x, new_v, new_C_flat, new_F_flat = jax.ffi.ffi_call(
-        "g2p_fused_cuda",
-        (
-            jax.ShapeDtypeStruct((N, 3), jnp.float32),
-            jax.ShapeDtypeStruct((N, 3), jnp.float32),
-            jax.ShapeDtypeStruct((N, 9), jnp.float32),
-            jax.ShapeDtypeStruct((N, 9), jnp.float32),
-        ),
-        vmap_method="broadcast_all",
-    )(
-        x, F_flat, grid_v,
-        N=np.int32(N),
-        G=np.int32(G),
-        dt=np.float32(dt),
-        inv_dx=np.float32(inv_dx),
-        dx=np.float32(dx),
-        clip_bound=np.float32(clip_bound),
-    )
-
-    return new_x, new_v, new_C_flat.reshape(N, 3, 3), new_F_flat.reshape(N, 3, 3)
-
-
 __all__ = [
     # FFI registration
     "is_available",
@@ -336,7 +297,6 @@ __all__ = [
     "cuda_p2g_v2_inline",
     "cuda_p2g_v3_inline",
     "cuda_p2g_v4_inline",
-    "cuda_g2p_fused",
     # Super-cell helpers
     "V4_SUPER_CELL_WIDTH",
 ]

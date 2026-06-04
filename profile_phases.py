@@ -13,9 +13,8 @@ phases), not the optimized frame's internal split.
 
 Run (8M standard benchmark config):
 
-    pixi run -e gpu python profile_phases.py kernel=jax_v1_5 material=sand_jacobi \
-        sim.num_grids=125 sim.n_particles=8000000 \
-        sim.center=[0.5,0.5,0.5] sim.size=[0.8,0.8,0.8]
+    pixi run -e gpu python profile_phases.py -cn config sim=benchmark \
+        kernel=jax_baseline material=sand_jacobi
 """
 
 import time

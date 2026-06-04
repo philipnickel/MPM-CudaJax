@@ -1,7 +1,7 @@
 import jax.numpy as jnp
 import jax
 from mpm_jax.types import MPMState, make_params
-from mpm_jax.backends import build_backend_frame, jax_v1_5_backend
+from mpm_jax.backends import build_backend_frame, jax_baseline_backend
 from mpm_jax.constitutive import get_constitutive
 from mpm_jax.boundary import build_boundary_fns
 
@@ -40,7 +40,7 @@ def test_sand_simulation_10_frames():
     )
     frame = build_backend_frame(
         params, elasticity_fn, plasticity_fn, pre_fn, post_fn,
-        jax_v1_5_backend(), steps_per_frame=5)
+        jax_baseline_backend(), steps_per_frame=5)
     for _ in range(10):
         state = frame(state)
     jax.block_until_ready(state.x)
@@ -81,7 +81,7 @@ def test_outer_frame_jit_runs_multiple_frames():
     )
     jit_frame = build_backend_frame(
         params, elasticity_fn, plasticity_fn, pre_fn, post_fn,
-        jax_v1_5_backend(), steps_per_frame)
+        jax_baseline_backend(), steps_per_frame)
     state = jit_frame(state)
     state = jit_frame(state)
     jax.block_until_ready(state.x)

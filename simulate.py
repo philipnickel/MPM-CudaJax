@@ -226,7 +226,7 @@ def _maybe_enable_cuda_graphs(cfg: DictConfig):
     WHILE (the lax.scan substep loop) into command buffers, which the GPU
     runtime executes as a single replayed graph per substep.
     """
-    kernel_name = cfg.get('kernel', {}).get('name', 'jax_v1_5')
+    kernel_name = cfg.get('kernel', {}).get('name', 'jax_baseline')
     if kernel_name != 'cuda_v3_inline':
         return
     if not cfg.get('kernel', {}).get('cuda_graph', False):
@@ -249,7 +249,7 @@ def _run_jax_solver(solver, cfg: DictConfig, trace_dir=None, profile_opts=None):
     import jax.numpy as jnp
 
     sim = cfg.sim
-    kernel_name = cfg.get('kernel', {}).get('name', 'jax_v1_5')
+    kernel_name = cfg.get('kernel', {}).get('name', 'jax_baseline')
     bench = cfg.get('benchmark', False)
 
     def _warmup_metrics(s):
@@ -371,7 +371,7 @@ def _build_profile_options(profile_cfg):
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig):
     profile_name = cfg.get('profile', {}).get('name', 'none')
-    kernel_name = cfg.get('kernel', {}).get('name', 'jax_v1_5')
+    kernel_name = cfg.get('kernel', {}).get('name', 'jax_baseline')
 
     if profile_name not in ('none', 'jax'):
         raise RuntimeError(

@@ -1,6 +1,0 @@
-# Pure-JAX/XLA baseline with lax.scan over the 27 stencil offsets for BOTH
-# P2G and G2P. Adds g2p_scan on top of jax_v1_5: G2P gathers one node per scan
-# step and accumulates the APIC reconstruction, so the (N, 27, 3, 3) gather/
-# outer-product intermediate the vmap g2p materialises never exists (the JAX
-# analog of the register-resident g2p_fused.cu).
-name: jax_v2

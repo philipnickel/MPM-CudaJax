@@ -18,11 +18,11 @@ hydra:
   sweeper:
     params:
       sim.n_particles: 50000,200000,500000,1000000,5000000
-      kernel: jax_v1_5,cuda_v1_inline,cuda_v2_inline,cuda_v3_inline
+      kernel: jax_baseline,cuda_v1_inline,cuda_v2_inline,cuda_v3_inline
   callbacks:
     scaling_plot:
       _target_: mpm_jax.callbacks.ScalingPlotCallback
-      baseline_kernel: jax_v1_5
+      baseline_kernel: jax_baseline
 
 benchmark: true
 tag: scaling_sweep
