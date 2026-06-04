@@ -4,7 +4,7 @@
 // one thread per particle, register-resident state, inline B-spline weights,
 // no (N, 27, *) materialisation in HBM. The ONLY difference is the 27-stencil
 // scatter: before each atomicAdd, lanes inside the warp that target the same
-// grid_idx reduce their contributions via __match_any_sync + __shfl_xor_sync,
+// grid_idx reduce their contributions via __match_any_sync + __shfl_sync,
 // and only the leader lane issues the atomic.
 //
 // Question this kernel answers: now that the (N, 27, *) materialisation is
@@ -26,16 +26,15 @@ namespace ffi = xla::ffi;
 // Warp-level reduction helper for coalescing matching stencil targets.
 // ---------------------------------------------------------------------------
 
-// Reduce `val` across all lanes in `mask` using butterfly shuffle.
+// Reduce `val` across all lanes in an arbitrary `__match_any_sync` mask.
 // Returns the sum in ALL lanes of the group (not just the leader).
 __device__ __forceinline__ float warp_reduce_masked(float val, unsigned mask) {
-    for (int delta = 16; delta >= 1; delta >>= 1) {
-        float other = __shfl_xor_sync(mask, val, delta);
-        // Only add if the other lane is actually in our group.
-        if (mask & (1u << ((threadIdx.x & 31) ^ delta)))
-            val += other;
+    float sum = 0.0f;
+    for (unsigned remaining = mask; remaining; remaining &= (remaining - 1)) {
+        int src_lane = __ffs(remaining) - 1;
+        sum += __shfl_sync(mask, val, src_lane);
     }
-    return val;
+    return sum;
 }
 
 // ---------------------------------------------------------------------------

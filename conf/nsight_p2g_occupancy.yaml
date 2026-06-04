@@ -1,0 +1,52 @@
+# Occupancy and scheduler-stall data for isolated P2G variants.
+#
+# Percentage metrics should be interpreted per annotated range or postprocessed
+# carefully. The default uses range replay and leaves report plotting to pandas.
+#
+# Run:
+#   pixi run -e gpu python profile_nsight.py -cn nsight_p2g_occupancy
+defaults:
+  - nsight_profile
+  - _self_
+
+kernel:
+  name: cuda_v1_inline
+
+nsight:
+  analyze:
+    runs: 1
+    metric_presets:
+      - time
+      - occupancy
+      - scheduler
+    derive_metric: diagnostics
+    replay_mode: range
+    combine_kernel_metrics: null
+    output_csv: true
+  plot:
+    enabled: false
+    metric: issue_active_pct
+    ylabel: Issue active (%)
+    filename: nsight_p2g_occupancy.png
+    title: P2G Occupancy and Scheduler Stalls
+  sweep:
+    kernels:
+      - cuda_v1_inline
+      - cuda_v2_inline
+      - cuda_v3_inline
+      - cuda_v4_inline
+      - cutile_v1_atomic
+      - cutile_v2_supercell_reduce
+      - warp_v3_supercell_tile
+    n_particles:
+      - 65536
+    num_grids:
+      - 32
+    steps_per_frame:
+      - 1
+
+sim:
+  n_particles: 65536
+  num_grids: 32
+  num_frames: 1
+  steps_per_frame: 1

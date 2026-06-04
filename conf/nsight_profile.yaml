@@ -45,7 +45,9 @@ nsight:
   # Passed directly to nsight.analyze.kernel after Hydra resolves the config.
   # Any Nsight Python analyzer option with a YAML-serializable value can be
   # overridden here. combine_kernel_metrics accepts null, sum, max, or min.
-  # derive_metric accepts null, throughput, or speed_of_light.
+  # metric_preset accepts time, speed_of_light, memory_locality, atomics,
+  # occupancy, or scheduler. metric_presets accepts a list of those names.
+  # derive_metric accepts null, throughput, speed_of_light, or diagnostics.
   analyze:
     runs: 1
     output: progress

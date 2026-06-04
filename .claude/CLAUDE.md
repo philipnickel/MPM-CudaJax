@@ -74,7 +74,7 @@ Key knobs:
 
 - `MPM_CUDA_ARCH=sm_86` (or `sm_90`, etc.) at install time → CMake picks that arch. Default is `native` (CMake auto-detects the local GPU). Set this before `pixi install -e gpu` on cross-build hosts.
 - If `nvcc` is not on PATH (the default CPU env), CMake's `check_language(CUDA)` returns early and the wheel installs fine without CUDA kernels — the JAX baseline still works. Useful for CPU-only dev.
-- `editable.rebuild = true` in `pyproject.toml` means edits to `.cu` sources trigger a rebuild on the next `import mpm_jax.cuda.p2g_cuda`. Manual rebuild: `pixi run -e gpu rebuild-cuda` (which calls `pixi reinstall mpm-cudajax`).
+- `editable.rebuild = true` in `pyproject.toml` means edits to `.cu` sources trigger a rebuild on the next `import mpm_jax.cuda.p2g_cuda`. Manual rebuild: `pixi reinstall mpm-cudajax`.
 - `[build-system].requires` pulls in `scikit-build-core>=0.10`, `cmake>=3.24`, and `jax>=0.4.20` (jax is needed at build time so CMake can `import jax.ffi` to find the FFI headers).
 
 ## Layout
@@ -155,7 +155,10 @@ Current kernel names:
 | `cuda_v2_inline` | MPMSolver | CUDA warp-shuffle coalesced inline P2G + JAX baseline G2P; default `loop_kind=fori` |
 | `cuda_v3_inline` | MPMSolver | CUDA Morton-sorted inline P2G + JAX baseline G2P; `cuda_graph=true` enables XLA command-buffer replay |
 | `cuda_v4_inline` | MPMSolver | CUDA super-cell-owned grid tile inline P2G + JAX baseline G2P |
+| `cutile_v1_atomic` | MPMSolver | NVIDIA cuTile P2G (atomic scatter) + JAX baseline G2P. Requires `cuda-tile` |
+| `cutile_v2_supercell_reduce` | MPMSolver | cuTile super-cell tile-reduce P2G + JAX baseline G2P. Requires `cuda-tile` |
 | `warp_v3_supercell_tile` | MPMSolver | Warp `jax_callable` super-cell tiled P2G + JAX baseline G2P |
+| `warp_v4_hashgrid_gather` | MPMSolver | Warp hash-grid gather P2G + JAX baseline G2P |
 
 Material baseline:
 - `material=sand_jacobi` is the default JAX/CUDA material path: StVK elasticity + Drucker-Prager plasticity, both using the in-repo Jacobi SVD.
@@ -239,7 +242,7 @@ CMake auto-detects the local GPU arch when `MPM_CUDA_ARCH` is unset.
   4. Add a `cuda_vX_backend()` factory in `src/mpm_jax/backends.py` — set `g2p=_make_jax_scan_g2p_mls()` (the shared JAX baseline G2P) so only P2G differs.
   5. Register it in `src/mpm_jax/registry.py` `KERNELS` dict as `KernelSpec(MPMSolver, cuda_vX_backend)`.
   6. Add `conf/kernel/cuda_vX_inline.yaml`.
-  7. Rebuild: `pixi run -e gpu rebuild-cuda` (or `pixi reinstall mpm-cudajax`).
+  7. Rebuild: `pixi reinstall mpm-cudajax`.
 - **Adding a new Warp-in-JAX kernel:** put the Warp operation/bridge in a dedicated module, expose it through a `Backend` factory in `src/mpm_jax/backends.py`, and register that factory.
 - Boundary conditions and constitutive models are registry-based (`REGISTRY` dict in `constitutive.py`, `build_boundary_fns` in `boundary.py`); add a function and a config entry.
 - **No `block_until_ready` inside the timed region in benchmark mode.** Both timing modes dispatch all frames back-to-back and sync exactly once after the loop; elapsed/num_frames is the average. Per-stage breakdown comes from `profile=jax` (TensorBoard trace) or `profile_nsight.py`, not from `simulate.py`'s output.

@@ -7,11 +7,14 @@ import jax.numpy as jnp
 from mpm_jax.solver import MPMSolver
 from mpm_jax.backends import (
     jax_baseline_backend,
+    cutile_v1_backend,
+    cutile_v2_backend,
     cuda_v1_backend,
     cuda_v2_backend,
     cuda_v3_backend,
     cuda_v4_backend,
     warp_v3_supercell_backend,
+    warp_v4_hashgrid_backend,
 )
 from mpm_jax.types import MPMState, make_params
 from mpm_jax.blocks.grid import build_grid_x
@@ -29,11 +32,14 @@ class KernelSpec:
 
 KERNELS = {
     "jax_baseline":           KernelSpec(MPMSolver, jax_baseline_backend),
+    "cutile_v1_atomic":       KernelSpec(MPMSolver, cutile_v1_backend),
+    "cutile_v2_supercell_reduce": KernelSpec(MPMSolver, cutile_v2_backend),
     "cuda_v1_inline":         KernelSpec(MPMSolver, cuda_v1_backend),
     "cuda_v2_inline":         KernelSpec(MPMSolver, cuda_v2_backend, MappingProxyType({"loop_kind": "fori"})),
     "cuda_v3_inline":         KernelSpec(MPMSolver, cuda_v3_backend, MappingProxyType({"loop_kind": "fori", "cuda_graph": False})),
     "cuda_v4_inline":         KernelSpec(MPMSolver, cuda_v4_backend),
     "warp_v3_supercell_tile": KernelSpec(MPMSolver, warp_v3_supercell_backend),
+    "warp_v4_hashgrid_gather": KernelSpec(MPMSolver, warp_v4_hashgrid_backend),
 }
 
 def build_solver(cfg):

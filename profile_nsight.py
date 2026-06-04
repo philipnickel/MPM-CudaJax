@@ -25,7 +25,10 @@ _P2G_KERNELS = {
     "cuda_v2_inline",
     "cuda_v3_inline",
     "cuda_v4_inline",
+    "cutile_v1_atomic",
+    "cutile_v2_supercell_reduce",
     "warp_v3_supercell_tile",
+    "warp_v4_hashgrid_gather",
 }
 _SPEED_OF_LIGHT_METRICS = [
     "gpu__time_duration.sum",
@@ -33,6 +36,54 @@ _SPEED_OF_LIGHT_METRICS = [
     "gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed",
     "dram__throughput.avg.pct_of_peak_sustained_elapsed",
 ]
+_MEMORY_LOCALITY_METRICS = [
+    "gpu__time_duration.sum",
+    "dram__bytes.sum",
+    "dram__bytes_read.sum",
+    "dram__bytes_write.sum",
+    "l1tex__t_requests_pipe_lsu_mem_global_op_ld.sum",
+    "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum",
+    "l1tex__t_requests_pipe_lsu_mem_global_op_st.sum",
+    "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum",
+]
+_ATOMIC_METRICS = [
+    "gpu__time_duration.sum",
+    "l1tex__t_requests_pipe_lsu_mem_global_op_atom.sum",
+    "l1tex__t_sectors_pipe_lsu_mem_global_op_atom.sum",
+    "l1tex__t_requests_pipe_lsu_mem_global_op_red.sum",
+    "l1tex__t_sectors_pipe_lsu_mem_global_op_red.sum",
+]
+_OCCUPANCY_METRICS = [
+    "gpu__time_duration.sum",
+    "sm__warps_active.avg.pct_of_peak_sustained_active",
+    "smsp__warps_eligible.avg.per_cycle_active",
+    "smsp__issue_active.avg.pct_of_peak_sustained_active",
+]
+_SCHEDULER_METRICS = [
+    "gpu__time_duration.sum",
+    "smsp__warps_issue_stalled_barrier.avg.pct_of_peak_sustained_elapsed",
+    "smsp__warps_issue_stalled_lg_throttle.avg.pct_of_peak_sustained_elapsed",
+    "smsp__warps_issue_stalled_long_scoreboard.avg.pct_of_peak_sustained_elapsed",
+    "smsp__warps_issue_stalled_math_pipe_throttle.avg.pct_of_peak_sustained_elapsed",
+    "smsp__warps_issue_stalled_mio_throttle.avg.pct_of_peak_sustained_elapsed",
+    "smsp__warps_issue_stalled_not_selected.avg.pct_of_peak_sustained_elapsed",
+    "smsp__warps_issue_stalled_short_scoreboard.avg.pct_of_peak_sustained_elapsed",
+    "smsp__warps_issue_stalled_wait.avg.pct_of_peak_sustained_elapsed",
+]
+_METRIC_PRESETS = {
+    "time": ["gpu__time_duration.sum"],
+    "throughput": ["gpu__time_duration.sum"],
+    "speed_of_light": _SPEED_OF_LIGHT_METRICS,
+    "sol": _SPEED_OF_LIGHT_METRICS,
+    # These Nsight Compute metric names were checked against NCU 2025.2.1.
+    # Use `ncu --query-metrics --query-metrics-mode all` when moving GPUs or
+    # Nsight versions, especially for scheduler and L1TEX/LTS submetrics.
+    "memory_locality": _MEMORY_LOCALITY_METRICS,
+    "atomics": _ATOMIC_METRICS,
+    "atomic": _ATOMIC_METRICS,
+    "occupancy": _OCCUPANCY_METRICS,
+    "scheduler": _SCHEDULER_METRICS,
+}
 
 
 def _require_nsight():
@@ -230,6 +281,12 @@ def _value_for_metric(metric_values, metrics: list[str], metric: str):
     return float(metric_values[metrics.index(metric)])
 
 
+def _optional_value_for_metric(metric_values, metrics: list[str], metric: str):
+    if metric not in metrics:
+        return None
+    return float(metric_values[metrics.index(metric)])
+
+
 def _n_particles_from_config(config_values):
     if not config_values:
         raise RuntimeError("Expected config values to include n_particles.")
@@ -289,6 +346,103 @@ def _speed_of_light_metric(metrics: list[str]):
     return derive_speed_of_light
 
 
+def _diagnostic_metric(metrics: list[str]):
+    def derive_diagnostics(*args):
+        metric_values = args[: len(metrics)]
+        config_values = args[len(metrics):]
+        n_particles = _n_particles_from_config(config_values)
+        out = {}
+
+        time_ns = _optional_value_for_metric(metric_values, metrics, "gpu__time_duration.sum")
+        if time_ns is not None:
+            seconds = time_ns / 1e9
+            out["time_ms"] = time_ns / 1e6
+            out["p2g_mparticles_per_s"] = (n_particles / seconds) / 1e6
+
+        for metric, column in [
+            ("dram__bytes.sum", "dram_bytes_per_particle"),
+            ("dram__bytes_read.sum", "dram_read_bytes_per_particle"),
+            ("dram__bytes_write.sum", "dram_write_bytes_per_particle"),
+        ]:
+            value = _optional_value_for_metric(metric_values, metrics, metric)
+            if value is not None:
+                out[column] = value / n_particles
+
+        for op in ("ld", "st", "atom", "red"):
+            request_metric = f"l1tex__t_requests_pipe_lsu_mem_global_op_{op}.sum"
+            sector_metric = f"l1tex__t_sectors_pipe_lsu_mem_global_op_{op}.sum"
+            requests = _optional_value_for_metric(metric_values, metrics, request_metric)
+            sectors = _optional_value_for_metric(metric_values, metrics, sector_metric)
+            if requests is not None:
+                out[f"global_{op}_requests_per_particle"] = requests / n_particles
+            if sectors is not None:
+                out[f"global_{op}_sectors_per_particle"] = sectors / n_particles
+            if requests not in (None, 0.0) and sectors is not None:
+                out[f"global_{op}_sectors_per_request"] = sectors / requests
+
+        atom_requests = _optional_value_for_metric(
+            metric_values, metrics, "l1tex__t_requests_pipe_lsu_mem_global_op_atom.sum"
+        )
+        red_requests = _optional_value_for_metric(
+            metric_values, metrics, "l1tex__t_requests_pipe_lsu_mem_global_op_red.sum"
+        )
+        if atom_requests is not None or red_requests is not None:
+            out["global_atomic_or_reduction_requests_per_particle"] = (
+                (atom_requests or 0.0) + (red_requests or 0.0)
+            ) / n_particles
+            out["expected_p2g_float_atomic_ops_per_particle"] = 108.0
+
+        for metric, column in [
+            (
+                "sm__throughput.avg.pct_of_peak_sustained_elapsed",
+                "sol_sm_pct",
+            ),
+            (
+                "gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed",
+                "sol_compute_memory_pct",
+            ),
+            (
+                "dram__throughput.avg.pct_of_peak_sustained_elapsed",
+                "sol_dram_pct",
+            ),
+            (
+                "sm__warps_active.avg.pct_of_peak_sustained_active",
+                "active_warps_pct",
+            ),
+            (
+                "smsp__warps_eligible.avg.per_cycle_active",
+                "eligible_warps_per_cycle",
+            ),
+            (
+                "smsp__issue_active.avg.pct_of_peak_sustained_active",
+                "issue_active_pct",
+            ),
+        ]:
+            value = _optional_value_for_metric(metric_values, metrics, metric)
+            if value is not None:
+                out[column] = value
+
+        for metric in metrics:
+            prefix = "smsp__warps_issue_stalled_"
+            suffix = ".avg.pct_of_peak_sustained_elapsed"
+            if metric.startswith(prefix) and metric.endswith(suffix):
+                stall_name = metric.removeprefix(prefix).removesuffix(suffix)
+                value = _optional_value_for_metric(metric_values, metrics, metric)
+                if value is not None:
+                    out[f"stall_{stall_name}_pct"] = value
+
+        sol_values = [
+            out[key]
+            for key in ("sol_sm_pct", "sol_compute_memory_pct", "sol_dram_pct")
+            if key in out
+        ]
+        if sol_values:
+            out["sol_max_pct"] = max(sol_values)
+        return out
+
+    return derive_diagnostics
+
+
 def _derive_metric(name, metrics: list[str]):
     if name is None:
         return None
@@ -311,10 +465,73 @@ def _derive_metric(name, metrics: list[str]):
                 + ", ".join(missing)
             )
         return _speed_of_light_metric(metrics)
+    if name in {
+        "diagnostics",
+        "p2g_diagnostics",
+        "memory_locality",
+        "atomics",
+        "occupancy",
+        "scheduler",
+    }:
+        if "gpu__time_duration.sum" not in metrics:
+            raise RuntimeError(
+                f"derive_metric={name!r} requires "
+                "nsight.analyze.metrics=[gpu__time_duration.sum, ...]."
+            )
+        return _diagnostic_metric(metrics)
     raise RuntimeError(
         f"Unsupported nsight.analyze.derive_metric={name!r}; "
-        "supported presets: throughput, speed_of_light"
+        "supported presets: throughput, speed_of_light, diagnostics"
     )
+
+
+def _normalize_metric_preset_names(*values):
+    names = []
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, str):
+            names.append(value)
+            continue
+        if isinstance(value, ListConfig | list | tuple):
+            names.extend(str(item) for item in value)
+            continue
+        raise RuntimeError(
+            "nsight.analyze.metric_preset(s) must be a string or list of strings."
+        )
+    return names
+
+
+def _dedupe_metrics(metrics):
+    deduped = []
+    for metric in metrics:
+        metric = str(metric)
+        if metric not in deduped:
+            deduped.append(metric)
+    return deduped
+
+
+def _expand_metric_presets(kwargs):
+    preset_names = _normalize_metric_preset_names(
+        kwargs.pop("metric_preset", None),
+        kwargs.pop("metric_presets", None),
+    )
+    explicit_metrics = list(kwargs.get("metrics") or [])
+    if not preset_names:
+        kwargs["metrics"] = _dedupe_metrics(explicit_metrics or ["gpu__time_duration.sum"])
+        return
+
+    metrics = []
+    for preset_name in preset_names:
+        if preset_name not in _METRIC_PRESETS:
+            supported = ", ".join(sorted(_METRIC_PRESETS))
+            raise RuntimeError(
+                f"Unsupported nsight.analyze metric preset {preset_name!r}; "
+                f"supported presets: {supported}"
+            )
+        metrics.extend(_METRIC_PRESETS[preset_name])
+    metrics.extend(explicit_metrics)
+    kwargs["metrics"] = _dedupe_metrics(metrics)
 
 
 def _combine_kernel_metrics(name):
@@ -353,8 +570,7 @@ def _nsight_analyze_kwargs(cfg: DictConfig, run_dir: Path, kernel_name: str):
 
     kwargs = dict(kwargs)
     kwargs.setdefault("runs", 1)
-    kwargs.setdefault("metrics", ["gpu__time_duration.sum"])
-    kwargs["metrics"] = list(kwargs["metrics"])
+    _expand_metric_presets(kwargs)
     kwargs["derive_metric"] = _derive_metric(kwargs.get("derive_metric"), kwargs["metrics"])
     kwargs["combine_kernel_metrics"] = _combine_kernel_metrics(
         kwargs.get("combine_kernel_metrics")
