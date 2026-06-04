@@ -357,6 +357,36 @@ def cutile_v4_backend(*, num_grids=None, **_opts):
     )
 
 
+def _cutile_atomic_tile_p2g(params, prepared):
+    from mpm_jax.cutile_p2g import cutile_p2g_atomic_tile  # pylint: disable=import-outside-toplevel
+
+    return cutile_p2g_atomic_tile(
+        prepared.x, prepared.v, prepared.C, prepared.stress,
+        prepared.cell_start, params.num_grids, params.dt, params.vol, params.p_mass,
+        params.inv_dx, params.dx,
+    )
+
+
+def cutile_v6_backend(*, num_grids=None, **_opts):
+    """Arena P2G whose write-back is a single tile-coalesced atomic_store_add per
+    block (no coloring, one launch). Same SC=2 sort/reduction as v4."""
+    from mpm_jax.cutile_p2g import V4_ARENA_SC  # pylint: disable=import-outside-toplevel
+
+    if num_grids is not None and num_grids % V4_ARENA_SC != 0:
+        raise RuntimeError(
+            f"cutile_v6_atomic_tile requires num_grids ({num_grids}) divisible by "
+            f"arena_super_cell ({V4_ARENA_SC})."
+        )
+    _require_cutile()
+    return Backend(
+        name="cutile_v6_atomic_tile",
+        prepare=_cutile_v4_prepare,
+        p2g=_cutile_atomic_tile_p2g,
+        g2p=_make_jax_scan_g2p_mls(),
+        loop_kind="fori",
+    )
+
+
 def _make_cutile_g2p():
     """Tiled cuTile G2P (gather; conflict-free). Drop-in for the JAX baseline G2P."""
     def g2p(params, prepared, grid_v):

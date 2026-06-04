@@ -681,3 +681,108 @@ def cutile_p2g_arena(
                     ),
                 )
     return grid_mv_flat.reshape((g3, 3)), grid_m
+
+
+# ============================================================================
+# v6 — arena scatter via a single tile-coalesced atomic_store_add (no coloring)
+# ============================================================================
+# Same per-block arena reduction as v4, but the write-back is ONE launch with one
+# tile-coalesced atomic per arena instead of 8 colored non-atomic RMW launches.
+# A 1-node halo pad makes the arena's -1 apron origin align to an overlapping
+# TiledView (tile=(SC+2)**3, traversal_steps=SC), so each block does
+# view.atomic_store_add(super_cell_index, arena) and overlapping apron nodes are
+# reconciled by the per-element atomics. No coloring, no parity, no 8 launches.
+@ct.kernel
+def _p2g_atomic_tile_kernel(
+    x, v, C, stress, cell_start, grid_mv, grid_m,
+    G: ct.Constant[int],
+    dt: ct.Constant[float], vol: ct.Constant[float], p_mass: ct.Constant[float],
+    inv_dx: ct.Constant[float], dx: ct.Constant[float],
+    particle_tile: ct.Constant[int], node_tile: ct.Constant[int],
+):
+    SC = V4_ARENA_SC
+    DIM = V4_ARENA_DIM
+    Gs = G // SC
+    si = ct.bid(0)
+    sj = ct.bid(1)
+    sk = ct.bid(2)
+    super_id = si * (Gs * Gs) + sj * Gs + sk
+    tile_i = si * SC - 1            # real-grid arena origin (apron at -1)
+    tile_j = sj * SC - 1
+    tile_k = sk * SC - 1
+
+    p_start = ct.gather(cell_start, super_id)
+    p_end = ct.gather(cell_start, super_id + 1)
+    p_lane = ct.arange(particle_tile, dtype=ct.int32)
+
+    node_lane = ct.arange(node_tile, dtype=ct.int32)
+    ti = node_lane // (DIM * DIM)
+    tj = (node_lane // DIM) % DIM
+    tk = node_lane % DIM
+    gi_row = ct.reshape(tile_i + ti, (1, node_tile))
+    gj_row = ct.reshape(tile_j + tj, (1, node_tile))
+    gk_row = ct.reshape(tile_k + tk, (1, node_tile))
+
+    acc0 = ct.zeros((node_tile,), ct.float32)
+    acc1 = ct.zeros((node_tile,), ct.float32)
+    acc2 = ct.zeros((node_tile,), ct.float32)
+    accm = ct.zeros((node_tile,), ct.float32)
+
+    chunk_start = p_start
+    while chunk_start < p_end:
+        p = chunk_start + p_lane
+        active = p < p_end
+        pcols = _cols(
+            _gather_particle(x, v, C, stress, p, active, inv_dx), particle_tile)
+        active_col = ct.reshape(active, (particle_tile, 1))
+        mv0, mv1, mv2, mass, contributes = _node_contribution(
+            pcols, (gi_row, gj_row, gk_row), dt, vol, p_mass, inv_dx, dx)
+        m = contributes & active_col
+        acc0 = acc0 + ct.sum(ct.where(m, mv0, 0.0), axis=0)
+        acc1 = acc1 + ct.sum(ct.where(m, mv1, 0.0), axis=0)
+        acc2 = acc2 + ct.sum(ct.where(m, mv2, 0.0), axis=0)
+        accm = accm + ct.sum(ct.where(m, mass, 0.0), axis=0)
+        chunk_start += particle_tile
+
+    # One coalesced atomic-add per arena into the padded grid. The overlapping
+    # tiled view places this super-cell's (SC+2)**3 arena at tile index (si,sj,sk);
+    # apron nodes shared with neighbours are reconciled by the per-element atomics.
+    view_mv = grid_mv.tiled_view((DIM, DIM, DIM, 1), traversal_steps=(SC, SC, SC, 1))
+    view_m = grid_m.tiled_view((DIM, DIM, DIM), traversal_steps=(SC, SC, SC))
+    view_mv.atomic_store_add((si, sj, sk, 0), ct.reshape(acc0, (DIM, DIM, DIM, 1)))
+    view_mv.atomic_store_add((si, sj, sk, 1), ct.reshape(acc1, (DIM, DIM, DIM, 1)))
+    view_mv.atomic_store_add((si, sj, sk, 2), ct.reshape(acc2, (DIM, DIM, DIM, 1)))
+    view_m.atomic_store_add((si, sj, sk), ct.reshape(accm, (DIM, DIM, DIM)))
+
+
+def cutile_p2g_atomic_tile(
+    x, v, C, stress, cell_start, num_grids, dt, vol, p_mass, inv_dx, dx
+):
+    """One-launch arena P2G: a single tile-coalesced atomic_store_add per block,
+    no coloring. A 1-node halo pad aligns the apron to an overlapping tiled view."""
+    g = int(num_grids)
+    g3 = g ** 3
+    gp = g + 2                       # 1-node halo on each side
+    gs = g // V4_ARENA_SC
+    x_flat = x.reshape(-1)
+    v_flat = v.reshape(-1)
+    C_flat = C.reshape(-1)
+    stress_flat = stress.reshape(-1)
+
+    grid_mv = jnp.zeros((gp, gp, gp, 3), dtype=jnp.float32)
+    grid_m = jnp.zeros((gp, gp, gp), dtype=jnp.float32)
+
+    grid_mv, grid_m = cutile_call(
+        (gs, gs, gs),
+        _p2g_atomic_tile_kernel,
+        (
+            x_flat, v_flat, C_flat, stress_flat, cell_start,
+            InputOutput(grid_mv), InputOutput(grid_m),
+            g, float(dt), float(vol), float(p_mass), float(inv_dx), float(dx),
+            V4_ARENA_PARTICLE_TILE, V4_ARENA_NODES,
+        ),
+    )
+    # Strip the halo -> real (G**3, 3) / (G**3,) grids.
+    grid_mv = grid_mv[1:g + 1, 1:g + 1, 1:g + 1, :].reshape((g3, 3))
+    grid_m = grid_m[1:g + 1, 1:g + 1, 1:g + 1].reshape((g3,))
+    return grid_mv, grid_m
