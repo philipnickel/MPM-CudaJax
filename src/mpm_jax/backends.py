@@ -167,6 +167,18 @@ def _require_cuda(*kernels):
             )
 
 
+def _require_cutile():
+    try:
+        from mpm_jax.cutile_p2g import is_available  # pylint: disable=import-outside-toplevel
+    except ImportError as exc:
+        raise RuntimeError(
+            "cuTile is not available. Run `pixi install -e gpu` after adding "
+            "`cuda-tile[tileiras]` to the GPU environment."
+        ) from exc
+    if not is_available():
+        raise RuntimeError("cuTile is not available in this environment.")
+
+
 def _cuda_inline_p2g(kind):
     def p2g(params, prepared):
         from mpm_jax.cuda import p2g_cuda  # pylint: disable=import-outside-toplevel
@@ -200,6 +212,49 @@ def cuda_v2_backend(**_opts):
     return Backend(
         name="cuda_v2_inline",
         p2g=_cuda_inline_p2g("v2_inline"),
+        g2p=_cuda_g2p,
+        loop_kind="fori",
+    )
+
+
+def _cutile_p2g(params, prepared):
+    from mpm_jax.cutile_p2g import cutile_p2g_atomic  # pylint: disable=import-outside-toplevel
+
+    return cutile_p2g_atomic(
+        prepared.x, prepared.v, prepared.C, prepared.stress,
+        params.num_grids, params.dt, params.vol, params.p_mass,
+        params.inv_dx, params.dx,
+    )
+
+
+def _cutile_reduce_p2g(params, prepared):
+    from mpm_jax.cutile_p2g import cutile_p2g_supercell_reduce  # pylint: disable=import-outside-toplevel
+
+    return cutile_p2g_supercell_reduce(
+        prepared.x, prepared.v, prepared.C, prepared.stress,
+        prepared.cell_start, params.num_grids, params.dt, params.vol, params.p_mass,
+        params.inv_dx, params.dx,
+    )
+
+
+def cutile_v1_backend(**_opts):
+    _require_cutile()
+    _require_cuda("g2p_fused")
+    return Backend(
+        name="cutile_v1_atomic",
+        p2g=_cutile_p2g,
+        g2p=_cuda_g2p,
+        loop_kind="fori",
+    )
+
+
+def cutile_v2_backend(**_opts):
+    _require_cutile()
+    _require_cuda("g2p_fused")
+    return Backend(
+        name="cutile_v2_supercell_reduce",
+        prepare=_cuda_v4_prepare,
+        p2g=_cutile_reduce_p2g,
         g2p=_cuda_g2p,
         loop_kind="fori",
     )
@@ -310,7 +365,22 @@ def _warp_p2g(jax_p2g):
     return p2g
 
 
-def warp_v3_supercell_backend(*, graph_mode="jax", num_grids=None, **_opts):
+def _warp_hashgrid_p2g(jax_p2g):
+    def p2g(params, prepared):
+        from mpm_jax.warp_p2g import (  # pylint: disable=import-outside-toplevel
+            warp_p2g_hashgrid_gather,
+        )
+
+        return warp_p2g_hashgrid_gather(
+            jax_p2g, prepared.x, prepared.v, prepared.C, prepared.stress,
+            params.num_grids, params.dt, params.vol, params.p_mass,
+            params.inv_dx, params.dx,
+        )
+
+    return p2g
+
+
+def warp_v3_supercell_backend(*, graph_mode="warp", num_grids=None, **_opts):
     from mpm_jax.warp_p2g import (  # pylint: disable=import-outside-toplevel
         SUPER_CELL_WIDTH,
         _make_jax_p2g_supercell_tile,
@@ -326,6 +396,20 @@ def warp_v3_supercell_backend(*, graph_mode="jax", num_grids=None, **_opts):
         name="warp_v3_supercell_tile",
         prepare=_warp_prepare,
         p2g=_warp_p2g(_make_jax_p2g_supercell_tile(graph_mode)),
+        g2p=_cuda_g2p,
+        loop_kind="fori",
+    )
+
+
+def warp_v4_hashgrid_backend(*, graph_mode="none", **_opts):
+    from mpm_jax.warp_p2g import (  # pylint: disable=import-outside-toplevel
+        _make_jax_p2g_hashgrid_gather,
+    )
+
+    _require_cuda("g2p_fused")
+    return Backend(
+        name="warp_v4_hashgrid_gather",
+        p2g=_warp_hashgrid_p2g(_make_jax_p2g_hashgrid_gather(graph_mode)),
         g2p=_cuda_g2p,
         loop_kind="fori",
     )

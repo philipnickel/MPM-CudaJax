@@ -6,24 +6,20 @@
 //     (N, 27, *) tensor is ever materialised in HBM.
 //   * Particles are sorted by their home SUPER-cell on the JAX side; one
 //     CUDA block per super-cell aggregates
-//     its particles' contributions into a 4x4x4 shared-memory tile via fast
+//     its particles' contributions into a 6x6x6 shared-memory tile via fast
 //     shmem atomics, then flushes the tile to global memory with one
 //     atomicAdd per node.
 //
 // Super-cells (Approach B from the v4 fix plan):
 //   A super-cell of size SC^3 grid cells. One CUDA block per super-cell.
-//   At G=64 with SC=2, grid = (32)^3 = 32K blocks instead of 262K,
-//   which is 8x fewer launch / scheduler dispatches and 8x fewer
-//   per-block fixed costs (tile zero, syncs, flush).
+//   SC=4 gives 4^3 cells per CUDA block. At the standard 8 particles/cell
+//   benchmark this is roughly 512 particles per non-empty block, which is
+//   enough work to amortize tile zero/sync/flush costs.
 //
-// With SC=2:
-//   Each super-cell covers cells (Cx*2, Cx*2+1) x (similar y, z) = 8 cells.
-//   Each cell's quadratic stencil is 3^3, so the union of stencils for the
-//   8 cells in the super-cell spans (Cx*2 - 1 .. Cx*2 + 2) per axis = 4
-//   nodes, i.e. exactly the same 4^3 = 64-node smem tile as the SC=1
-//   version. So the tile size doesn't grow and we still flush only 64
-//   atomicAdds per block — but we've amortised the empty-block + setup
-//   overhead across 8x as many particles.
+// With SC=4:
+//   Each super-cell covers 64 cells. The union of quadratic 3^3 stencils spans
+//   (SC + 2)^3 = 6^3 = 216 grid nodes. The larger shared tile increases the
+//   flush cost, but reduces the block count by another 8x versus SC=2.
 //
 // The hypothesis is that the smem aggregation amortises the 27 global
 // atomicAdds per particle (108 floats) down to ~64 global atomicAdds per
@@ -53,11 +49,11 @@
 
 #include "xla/ffi/api/ffi.h"
 
-#define SC 2                                   // super-cell width (in cells)
+#define SC 4                                   // super-cell width (in cells)
 #define TILE_DIM (SC + 2)                      // stencil-union half = 1 on each side
-#define TILE_SIZE (TILE_DIM * TILE_DIM * TILE_DIM)  // 64 nodes for SC=2
+#define TILE_SIZE (TILE_DIM * TILE_DIM * TILE_DIM)  // 216 nodes for SC=4
 #define STENCIL 27
-#define BLOCK_SIZE 128  // threads per super-cell block
+#define BLOCK_SIZE 256  // threads per super-cell block
 
 namespace ffi = xla::ffi;
 
@@ -124,14 +120,14 @@ __global__ void p2g_v4_inline_kernel(
 
     // Tile origin: (base_cell - 1) so that the union of 3^3 stencils for
     // particles in any of this super-cell's SC^3 cells lands at tile-local
-    // indices 0..TILE_DIM-1. For SC=2 this gives tile_dim=4, spanning
-    // cells (base_cell - 1) .. (base_cell + 2).
+    // indices 0..TILE_DIM-1. For SC=4 this gives tile_dim=6, spanning
+    // cells (base_cell - 1) .. (base_cell + 4).
     int tile_i = base_ci - 1;
     int tile_j = base_cj - 1;
     int tile_k = base_ck - 1;
 
-    // Shared-memory tile: 64 nodes, each (mv_x, mv_y, mv_z, mass).
-    // 256 floats = 1 KB. Fits even on tiny chips.
+    // Shared-memory tile: 216 nodes, each (mv_x, mv_y, mv_z, mass).
+    // 864 floats = 3.4 KB.
     __shared__ float tile[TILE_SIZE * 4];
 
     // Cooperatively zero the tile.

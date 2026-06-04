@@ -178,10 +178,10 @@ def cuda_p2g_v2_inline(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
     """Inline-scatter CUDA P2G with warp-shuffle reduction (cuda_v2_inline).
 
     Same FFI signature as ``cuda_p2g_inline`` — only the C++ symbol is
-    different. The kernel inserts a ``__match_any_sync`` + ``__shfl_xor_sync``
-    warp reduction in front of every atomicAdd inside the 27-stencil scatter
-    loop, so warp-resident contributions to the same grid_idx collapse to a
-    single atomic.
+    different. The kernel inserts a ``__match_any_sync`` + ``__shfl_sync``
+    reduction over each arbitrary peer mask in front of every atomicAdd inside
+    the 27-stencil scatter loop, so warp-resident contributions to the same
+    grid_idx collapse to a single atomic.
     """
     N = x.shape[0]
     G = num_grids
@@ -247,12 +247,11 @@ def cuda_p2g_v3_inline(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
 
 # Super-cell width used by cuda_v4_inline. Must match the SC #define in
 # mpm_jax/cuda/kernels/p2g_v4_inline.cu. With SC=k the kernel launches
-# (G/SC)^3 blocks instead of G^3 (k^3 fewer) and each block aggregates
-# particles from SC^3 cells into a (SC+2)^3 smem tile. SC=2 is the sweet
-# spot at G=64 — the tile stays at 4^3=64 nodes (no extra flush cost) but
-# the block count drops 8x. Empirically SC=4 makes the tile too big
-# (216 nodes) and the per-block flush dominates.
-V4_SUPER_CELL_WIDTH = 2
+# (G/SC)^3 blocks instead of G^3 and each block aggregates particles from
+# SC^3 cells into a (SC+2)^3 shared-memory tile. SC=4 matches the common
+# GPU-MPM particle-block granularity: 4^3 cells, about 512 particles/block
+# at the standard 8 particles/cell benchmark, and a 6^3 grid scratchpad.
+V4_SUPER_CELL_WIDTH = 4
 
 
 def cuda_p2g_v4_inline(x_sorted, v_sorted, C_sorted, stress_sorted, cell_start,
@@ -264,10 +263,9 @@ def cuda_p2g_v4_inline(x_sorted, v_sorted, C_sorted, stress_sorted, cell_start,
     (G/SC)^3 + 1, where SC is :data:`V4_SUPER_CELL_WIDTH`.
 
     The kernel uses one CUDA block per super-cell and aggregates each
-    super-cell's contributions into a 4x4x4 shared-memory tile before
-    flushing to HBM. The super-cell coarsening (SC=2) cuts the block count
-    by 8x vs the old SC=1 cell-major variant — most of those blocks are empty
-    when the particle block occupies only a fraction of the grid.
+    super-cell's contributions into a 6x6x6 shared-memory tile before
+    flushing to HBM. With SC=4, the standard 8 particles/cell benchmark gives
+    each non-empty block enough particles to amortize the tile overhead.
     """
     N = x_sorted.shape[0]
     G = num_grids

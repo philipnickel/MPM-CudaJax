@@ -1,5 +1,5 @@
 # warp_v3_supercell_tile — hybrid JAX/Warp backend.
 # JAX owns the frame, stress, sort, grid update, and state; Warp owns the
-# super-cell tiled P2G kernel; CUDA fused G2P handles gather.
+# 4^3-super-cell tiled P2G kernel; CUDA fused G2P handles gather.
 name: warp_v3_supercell_tile
-graph_mode: jax
+graph_mode: warp

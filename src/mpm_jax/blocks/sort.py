@@ -5,7 +5,7 @@ curve clusters spatially close particles next to each other in memory. When
 those particles are then processed by the same CUDA warp (32 lanes ->
 32 consecutive after-sort particles), more warp lanes target the same
 27-stencil grid node, so a warp-shuffle reduction (`__match_any_sync` +
-`__shfl_xor_sync`) coalesces more atomics into one. See p2g_v3_inline.cu.
+`__shfl_sync`) coalesces more atomics into one. See p2g_v3_inline.cu.
 
 The bit-interleave handles up to 10 bits per axis (`num_grids` <= 1024),
 which more than covers the project's typical G in [32, 256].

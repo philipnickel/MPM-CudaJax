@@ -5,7 +5,7 @@
 //
 // Difference: before each atomicAdd into the grid, threads in the same warp
 // that happen to target the SAME grid node detect each other with
-// __match_any_sync, sum their contributions with __shfl_xor_sync, and elect
+// __match_any_sync, sum their contributions with __shfl_sync, and elect
 // a single leader to do one atomic on behalf of the group. When particles
 // are spatially sorted (Morton / Z-order) BEFORE this kernel runs, many
 // warp lanes hit the same stencil cell and the number of global atomics
@@ -34,17 +34,18 @@ namespace ffi = xla::ffi;
 
 // ---------------------------------------------------------------------------
 // Warp-level masked reduction for particles that target the same grid node.
-// Reduce `val` across all lanes in `mask` using butterfly shuffle. Returns
-// the sum in ALL lanes of the group (not just the leader).
+// `__match_any_sync` returns arbitrary lane masks, so walk the set bits rather
+// than using an XOR butterfly that only reduces aligned power-of-two groups.
+// Returns the sum in ALL lanes of the group (not just the leader).
 // ---------------------------------------------------------------------------
 
 __device__ __forceinline__ float warp_reduce_masked(float val, unsigned mask) {
-    for (int delta = 16; delta >= 1; delta >>= 1) {
-        float other = __shfl_xor_sync(mask, val, delta);
-        if (mask & (1u << ((threadIdx.x & 31) ^ delta)))
-            val += other;
+    float sum = 0.0f;
+    for (unsigned remaining = mask; remaining; remaining &= (remaining - 1)) {
+        int src_lane = __ffs(remaining) - 1;
+        sum += __shfl_sync(mask, val, src_lane);
     }
-    return val;
+    return sum;
 }
 
 // ---------------------------------------------------------------------------
