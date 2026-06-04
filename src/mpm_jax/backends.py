@@ -263,6 +263,100 @@ def cutile_v2_backend(**_opts):
     )
 
 
+def _cell_boundaries(params):
+    return jnp.arange(params.num_grids ** 3 + 1, dtype=jnp.int32)
+
+
+def _cutile_v3_prepare(params, state, stress):
+    """Sort particles by home *cell* and build a per-cell CSR ``cell_start`` of
+    length ``G**3 + 1`` so the gather kernel can stream each covering cell's
+    particle range."""
+    from mpm_jax.blocks.sort import home_cell_id  # pylint: disable=import-outside-toplevel
+
+    cell = home_cell_id(state.x, params.inv_dx, params.num_grids)
+    order = jnp.argsort(cell)
+    cell_sorted = cell[order]
+    cell_start = jnp.searchsorted(cell_sorted, _cell_boundaries(params)).astype(jnp.int32)
+    return PreparedSubstep(
+        state.x[order], state.v[order], state.C[order], state.F[order],
+        stress[order], cell_start=cell_start,
+    )
+
+
+def _cutile_gather_p2g(params, prepared):
+    from mpm_jax.cutile_p2g import cutile_p2g_gather  # pylint: disable=import-outside-toplevel
+
+    return cutile_p2g_gather(
+        prepared.x, prepared.v, prepared.C, prepared.stress,
+        prepared.cell_start, params.num_grids, params.dt, params.vol, params.p_mass,
+        params.inv_dx, params.dx,
+    )
+
+
+def cutile_v3_backend(*, num_grids=None, **_opts):
+    from mpm_jax.cutile_p2g import V3_SUPER_CELL_WIDTH  # pylint: disable=import-outside-toplevel
+
+    if num_grids is not None and num_grids % V3_SUPER_CELL_WIDTH != 0:
+        raise RuntimeError(
+            f"cutile_v3_gather requires num_grids ({num_grids}) divisible by "
+            f"super-cell width ({V3_SUPER_CELL_WIDTH})."
+        )
+    _require_cutile()
+    return Backend(
+        name="cutile_v3_gather",
+        prepare=_cutile_v3_prepare,
+        p2g=_cutile_gather_p2g,
+        g2p=_make_jax_scan_g2p_mls(),
+        loop_kind="fori",
+    )
+
+
+def _cutile_v4_prepare(params, state, stress):
+    """Sort particles by home super-cell at the arena width (SC=2) and build the
+    CSR ``cell_start`` over (G/SC)**3 super-cells."""
+    from mpm_jax.cutile_p2g import V4_ARENA_SC  # pylint: disable=import-outside-toplevel
+    from mpm_jax.blocks.sort import home_super_cell_id  # pylint: disable=import-outside-toplevel
+
+    super_id = home_super_cell_id(state.x, params.inv_dx, params.num_grids, V4_ARENA_SC)
+    order = jnp.argsort(super_id)
+    super_id_sorted = super_id[order]
+    cell_start = jnp.searchsorted(
+        super_id_sorted, _supercell_boundaries(params, V4_ARENA_SC)
+    ).astype(jnp.int32)
+    return PreparedSubstep(
+        state.x[order], state.v[order], state.C[order], state.F[order],
+        stress[order], cell_start=cell_start,
+    )
+
+
+def _cutile_arena_p2g(params, prepared):
+    from mpm_jax.cutile_p2g import cutile_p2g_arena  # pylint: disable=import-outside-toplevel
+
+    return cutile_p2g_arena(
+        prepared.x, prepared.v, prepared.C, prepared.stress,
+        prepared.cell_start, params.num_grids, params.dt, params.vol, params.p_mass,
+        params.inv_dx, params.dx,
+    )
+
+
+def cutile_v4_backend(*, num_grids=None, **_opts):
+    from mpm_jax.cutile_p2g import V4_ARENA_SC  # pylint: disable=import-outside-toplevel
+
+    if num_grids is not None and num_grids % (2 * V4_ARENA_SC) != 0:
+        raise RuntimeError(
+            f"cutile_v4_arena requires num_grids ({num_grids}) divisible by "
+            f"2*arena_super_cell ({2 * V4_ARENA_SC}) for clean 8-colour grouping."
+        )
+    _require_cutile()
+    return Backend(
+        name="cutile_v4_arena",
+        prepare=_cutile_v4_prepare,
+        p2g=_cutile_arena_p2g,
+        g2p=_make_jax_scan_g2p_mls(),
+        loop_kind="fori",
+    )
+
+
 def _morton_prepare(params, state, stress):
     from mpm_jax.blocks.sort import morton_argsort  # pylint: disable=import-outside-toplevel
 

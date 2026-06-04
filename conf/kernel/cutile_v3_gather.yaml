@@ -1,0 +1,8 @@
+# cutile_v3_gather -- atomic-free grid-tile gather P2G through cuTile JAX FFI.
+# JAX sorts particles by home *cell* and builds a per-cell CSR (cell_start of
+# length G^3+1). Each cuTile block owns one 4^3 super-cell's interior grid nodes,
+# gathers every contributing particle from the 6^3 covering home-cells, reduces
+# them in-tile, and writes each owned node exactly once with a plain scatter --
+# no atomics, fully coalesced writes (each node is written by exactly one block).
+# Requires num_grids divisible by 4.
+name: cutile_v3_gather
