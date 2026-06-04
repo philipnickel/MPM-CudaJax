@@ -19,3 +19,4 @@ outputs/
 # Large regenerable snapshot point-cloud caches (recreate via
 # make_report_snapshots.py --from-npz). Keep the rendered PNGs, drop the blobs.
 report_snapshots/*.npz
+report_snapshots/*.usd
