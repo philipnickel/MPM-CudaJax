@@ -42,7 +42,7 @@ class Backend:
 
 def build_backend_frame(params, elasticity_fn, plasticity_fn,
                         pre_fn, post_fn, backend, steps_per_frame,
-                        *, loop_kind=None, **_ignored):
+                        *, loop_kind=None, phase_barriers=False, **_ignored):
     """Build one JIT-compiled frame from a backend object.
 
     The frame owns the common MPM control flow. Backends only provide particle
@@ -78,10 +78,45 @@ def build_backend_frame(params, elasticity_fn, plasticity_fn,
                 new_F = plasticity_fn(new_F)
             return MPMState(x=new_x, v=new_v, C=new_C, F=new_F)
 
+        def step_body_phased(state):
+            # Profiling mode: collapse the timestep into the 3 classical MPM
+            # phases (P2G / Grid / G2P) and insert an optimization_barrier at
+            # each phase boundary so XLA cannot fuse across them. The barrier is
+            # an identity, so results are bit-for-bit identical to step_body —
+            # it only forces 3 separately-labelled kernels so a profiler can
+            # attribute device time per phase. Weights (`prepare`) are placed in
+            # G2P, where they are consumed (the P2G scan recomputes them inline).
+            # NOTE: jax-baseline tool — p2g gets a minimal Prepared (x,v,C,stress),
+            # which the CUDA/Warp backends' p2g does not accept.
+            with jax.named_scope("P2G"):
+                x, v = pre_fn(state.x, state.v, 0.0)
+                state = state._replace(x=x, v=v)
+                stress = elasticity_fn(state.F)
+                grid_mv, grid_m = backend.p2g(
+                    params,
+                    PreparedSubstep(state.x, state.v, state.C, state.F, stress),
+                )
+            grid_mv, grid_m, stress, sx, sv, sC, sF = jax.lax.optimization_barrier(
+                (grid_mv, grid_m, stress, state.x, state.v, state.C, state.F))
+            state = state._replace(x=sx, v=sv, C=sC, F=sF)
+
+            with jax.named_scope("Grid"):
+                grid_mv = grid_update(
+                    grid_mv, grid_m, params.gravity, params.dt, params.damping)
+                grid_v = post_fn(grid_mv, grid_m, 0.0)
+            (grid_v,) = jax.lax.optimization_barrier((grid_v,))
+
+            with jax.named_scope("G2P"):
+                prepared = backend.prepare(params, state, stress)
+                new_x, new_v, new_C, new_F = backend.g2p(params, prepared, grid_v)
+                new_F = plasticity_fn(new_F)
+            return MPMState(x=new_x, v=new_v, C=new_C, F=new_F)
+
+        body = step_body_phased if phase_barriers else step_body
         if loop_kind == "fori":
-            return jax.lax.fori_loop(0, steps_per_frame, lambda _, s: step_body(s), state)
+            return jax.lax.fori_loop(0, steps_per_frame, lambda _, s: body(s), state)
         for _ in range(steps_per_frame):
-            state = step_body(state)
+            state = body(state)
         return state
 
     return jit_frame
@@ -126,6 +161,60 @@ def jax_v1_5_backend(**_opts):
     )
 
 
+def _make_jax_scan_g2p():
+    from mpm_jax.g2p_scan import _g2p_scan  # pylint: disable=import-outside-toplevel
+
+    def g2p(params, prepared, grid_v):
+        return _g2p_scan(
+            grid_v, prepared.x, prepared.F,
+            params.dt, params.inv_dx, params.dx, params.num_grids, params.clip_bound,
+        )
+
+    return g2p
+
+
+def jax_v2_backend(**_opts):
+    """jax_v1_5 + scan-over-27 G2P.
+
+    Both transfers now scan the 27 offsets, so neither the P2G scatter buffer
+    nor the G2P gather/APIC (N, 27, *) intermediates materialise. Uses the
+    default passthrough `prepare` (g2p recomputes weights inline), so the
+    (N, 27, *) weight arrays are never built either.
+    """
+    return Backend(
+        name="jax_v2",
+        p2g=_make_jax_scan_p2g(),
+        g2p=_make_jax_scan_g2p(),
+        loop_kind="fori",
+    )
+
+
+def _make_jax_scan_g2p_mls():
+    from mpm_jax.g2p_scan import _g2p_scan_mls  # pylint: disable=import-outside-toplevel
+
+    def g2p(params, prepared, grid_v):
+        return _g2p_scan_mls(
+            grid_v, prepared.x, prepared.F,
+            params.dt, params.inv_dx, params.dx, params.num_grids, params.clip_bound,
+        )
+
+    return g2p
+
+
+def jax_v3_backend(**_opts):
+    """jax_v2 + unified MLS-MPM G2P: the APIC affine matrix C is reused as the
+    velocity gradient for the F-update, so G2P builds ONE (N, 3, 3) accumulator
+    instead of two. Faster than jax_v2 but NOT bit-compatible — it uses the MLS
+    velocity-gradient estimator rather than the separate B-spline one.
+    """
+    return Backend(
+        name="jax_v3",
+        p2g=_make_jax_scan_p2g(),
+        g2p=_make_jax_scan_g2p_mls(),
+        loop_kind="fori",
+    )
+
+
 def _cuda_g2p(params, prepared, grid_v):
     from mpm_jax.cuda.p2g_cuda import cuda_g2p_fused  # pylint: disable=import-outside-toplevel
 
@@ -133,6 +222,21 @@ def _cuda_g2p(params, prepared, grid_v):
         prepared.x, prepared.F, grid_v,
         params.num_grids, params.dt,
         params.inv_dx, params.dx, params.clip_bound,
+    )
+
+
+def jax_cuda_g2p_backend(**_opts):
+    """Hybrid: JAX scan P2G + hand-written CUDA fused G2P (the register-resident
+    g2p_fused.cu kernel). Targets the JAX baseline's G2P bottleneck while keeping
+    the rest in JAX. NOTE: plasticity (the SVD return-map, the single biggest
+    kernel) is still applied in JAX after g2p, so this only replaces the
+    gather + APIC + F-update.
+    """
+    return Backend(
+        name="jax_cuda_g2p",
+        p2g=_make_jax_scan_p2g(),
+        g2p=_cuda_g2p,
+        loop_kind="fori",
     )
 
 

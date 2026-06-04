@@ -1,0 +1,6 @@
+# Pure-JAX/XLA, scan-over-27 P2G + unified MLS-MPM G2P (jax_v2 + the C-as-grad
+# optimisation). G2P reuses the APIC affine matrix C as the velocity gradient
+# for the F-update (F = (I + dt*C)*F), so it builds one (N,3,3) accumulator
+# instead of two. NOT bit-compatible with jax_v1_5/jax_v2 — it uses the MLS
+# velocity-gradient estimator instead of the separate B-spline one.
+name: jax_v3

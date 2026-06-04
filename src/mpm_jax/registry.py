@@ -7,6 +7,9 @@ import jax.numpy as jnp
 from mpm_jax.solver import MPMSolver
 from mpm_jax.backends import (
     jax_v1_5_backend,
+    jax_v2_backend,
+    jax_v3_backend,
+    jax_cuda_g2p_backend,
     cuda_v1_backend,
     cuda_v2_backend,
     cuda_v3_backend,
@@ -29,6 +32,9 @@ class KernelSpec:
 
 KERNELS = {
     "jax_v1_5":               KernelSpec(MPMSolver, jax_v1_5_backend),
+    "jax_v2":                 KernelSpec(MPMSolver, jax_v2_backend),
+    "jax_v3":                 KernelSpec(MPMSolver, jax_v3_backend),
+    "jax_cuda_g2p":           KernelSpec(MPMSolver, jax_cuda_g2p_backend),
     "cuda_v1_inline":         KernelSpec(MPMSolver, cuda_v1_backend),
     "cuda_v2_inline":         KernelSpec(MPMSolver, cuda_v2_backend, MappingProxyType({"loop_kind": "fori"})),
     "cuda_v3_inline":         KernelSpec(MPMSolver, cuda_v3_backend, MappingProxyType({"loop_kind": "fori", "cuda_graph": False})),
@@ -75,8 +81,12 @@ def build_solver(cfg):
         num_grids=int(sim.num_grids),
         **frame_opts,
     )
+    # Phase-barrier profiling mode (jax baseline): insert optimization_barriers
+    # at the P2G/Grid/G2P boundaries so a profiler can attribute time per phase.
+    phase_barriers = bool(cfg.get("profile", {}).get("barriers", False))
     return spec.solver_cls(
         params, elasticity_fn=elasticity_fn, plasticity_fn=plasticity_fn,
         pre_fn=pre_fn, post_fn=post_fn, backend=backend,
-        steps_per_frame=int(sim.steps_per_frame), init_state=init, **frame_opts,
+        steps_per_frame=int(sim.steps_per_frame), init_state=init,
+        **frame_opts, phase_barriers=phase_barriers,
     )
