@@ -48,7 +48,7 @@ pixi run -e gpu python simulate.py -cn config sim=benchmark \
 Three environments, defined in `[tool.pixi.environments]` in `pyproject.toml`:
 
 - `default` — CPU. JAX from conda-forge, no CUDA. Use on macOS / laptop / non-GPU CI.
-- `gpu` — Linux only (`linux-64`, `linux-aarch64`). JAX with `*cuda12*` jaxlib build, `cuda-nvcc`, `gxx`, full CUDA 12 toolchain from conda-forge. `warp-lang==1.14.0` from PyPI (conda-forge only carries 1.13, which has an sm_120/Blackwell tile-kernel regression). No `module load` required on DTU HPC — everything ships from conda-forge.
+- `gpu` — Linux only (`linux-64`, `linux-aarch64`). **JAX runs on CUDA 13** (PyPI `jax[cuda13]`); `cuda-tile[tileiras]` (PyPI) is the cuTile runtime the `cutile_*` kernels require; `warp-lang==1.14.0` and `nsight-python` are PyPI too. conda-forge supplies the `cuda-nvcc` (**CUDA 12.x**) + `gxx` toolchain that compiles the FFI `.cu` kernels, plus `nsight-compute`. So the *build* toolchain is CUDA 12.x while the JAX *runtime* is CUDA 13 — they coexist and the FFI kernels load fine on the cuda13 runtime. A `[tool.pixi.feature.gpu.activation.env]` block sets `JAX_PLATFORMS=cuda` + a persistent JAX compile cache (`.jax_cache/`). No `module load` required on DTU HPC.
 - `hpc` — Linux only. JAX from PyPI with `cuda12-local` extras (links against the site's CUDA toolkit, loaded via `module load`). Use on clusters where conda-forge CUDA lags the driver. `nvcc` and `gxx` are provided by the module; `cuda-nvcc` is NOT included in this env.
 
 Common patterns:
