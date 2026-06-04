@@ -1,0 +1,8 @@
+# cutile_v5_full -- fully-tiled MPM substep through cuTile JAX FFI.
+# The first variant whose G2P is also cuTile: it pairs the cutile_v4_arena P2G
+# (colored arena scatter) with a tiled cuTile G2P. G2P is the easy direction --
+# a grid->particle gather where each particle writes only its own (x,v,C,F), so
+# there is no write conflict (no atomics/coloring). Targets the G2P+constitutive
+# phase, which dominates the timestep once the P2G is this fast.
+# Requires num_grids divisible by 4.
+name: cutile_v5_full

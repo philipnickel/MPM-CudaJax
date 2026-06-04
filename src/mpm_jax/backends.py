@@ -357,6 +357,39 @@ def cutile_v4_backend(*, num_grids=None, **_opts):
     )
 
 
+def _make_cutile_g2p():
+    """Tiled cuTile G2P (gather; conflict-free). Drop-in for the JAX baseline G2P."""
+    def g2p(params, prepared, grid_v):
+        from mpm_jax.cutile_g2p import cutile_g2p  # pylint: disable=import-outside-toplevel
+
+        return cutile_g2p(
+            grid_v, prepared.x, prepared.F,
+            params.num_grids, params.dt, params.inv_dx, params.dx, params.clip_bound,
+        )
+
+    return g2p
+
+
+def cutile_v5_backend(*, num_grids=None, **_opts):
+    """Fully-tiled substep: cuTile arena P2G + cuTile tiled G2P (the only variant
+    whose G2P is also cuTile; everything else reuses the shared JAX baseline G2P)."""
+    from mpm_jax.cutile_p2g import V4_ARENA_SC  # pylint: disable=import-outside-toplevel
+
+    if num_grids is not None and num_grids % (2 * V4_ARENA_SC) != 0:
+        raise RuntimeError(
+            f"cutile_v5_full requires num_grids ({num_grids}) divisible by "
+            f"2*arena_super_cell ({2 * V4_ARENA_SC})."
+        )
+    _require_cutile()
+    return Backend(
+        name="cutile_v5_full",
+        prepare=_cutile_v4_prepare,
+        p2g=_cutile_arena_p2g,
+        g2p=_make_cutile_g2p(),
+        loop_kind="fori",
+    )
+
+
 def _morton_prepare(params, state, stress):
     from mpm_jax.blocks.sort import morton_argsort  # pylint: disable=import-outside-toplevel
 

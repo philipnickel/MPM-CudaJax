@@ -132,6 +132,31 @@ def test_cutile_p2g_matches_jax_scan():
 
 
 @pytest.mark.skipif(
+    not _cutile_available(),
+    reason="cuTile/JAX backend requires a GPU and cuda-tile",
+)
+def test_cutile_g2p_matches_jax_scan():
+    from mpm_jax.cutile_g2p import cutile_g2p
+    from mpm_jax.g2p_scan import _g2p_scan_mls
+
+    params, state, _ = _inputs()
+    g = int(params.num_grids)
+    rng = np.random.RandomState(7)
+    grid_v = jnp.asarray((rng.randn(g ** 3, 3) * 0.1).astype(np.float32))
+
+    ref = jax.jit(lambda: _g2p_scan_mls(
+        grid_v, state.x, state.F, params.dt, params.inv_dx, params.dx,
+        params.num_grids, params.clip_bound))()
+    out = jax.jit(lambda: cutile_g2p(
+        grid_v, state.x, state.F, params.num_grids, params.dt, params.inv_dx,
+        params.dx, params.clip_bound))()
+
+    for got, exp in zip(out, ref):  # new_x, new_v, new_C, new_F
+        np.testing.assert_allclose(
+            np.asarray(got), np.asarray(exp), atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.skipif(
     not _has_cuda(),
     reason="Warp/JAX backend requires a GPU",
 )
