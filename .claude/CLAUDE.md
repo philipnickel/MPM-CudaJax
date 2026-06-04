@@ -24,10 +24,11 @@ This is a benchmarking/investigation project; the code is shaped by the followin
 All performance comparisons use one fixed, well-resolved configuration (adapted from the Taichi / MLS-MPM high-performance benchmark) so numbers are comparable across variants and architectures **and the simulation stays numerically stable** — under-resolution (too few particles per cell) makes MLS-MPM go unstable, which corrupts wall-clock timings (the falling material explodes, particles clamp to the bounds and cluster, and the atomic-scatter P2G becomes contention-bound; see below).
 
 - **8 particles per cell** — the MLS-MPM resolution sweet spot (2³ per cell). Do not benchmark below this.
-- **∆x = 8×10⁻³** → `sim.num_grids = 125` (the solver uses `dx = 1/num_grids`). The particle-filled region then spans **100³ active cells**.
+- **∆x = 8×10⁻³** → `sim.num_grids = 125` (the solver uses `dx = 1/num_grids`). The particle-filled region then spans **100³ active cells**. (The committed `sim=benchmark` preset uses `num_grids = 124`, an even grid required by the super-cell-tiled Warp/CUDA kernels.)
 - **Particles uniformly sampled in [0.1, 0.9]³** → `sim.center = [0.5, 0.5, 0.5]`, region side 0.8. 100³ active cells × 8 ppc = **8 M particles** → `sim.n_particles = 8_000_000`.
 - **APIC transfer** (codebase default) + **StVK/Drucker-Prager sand** (`material=sand_jacobi`).
 - Per-particle volume follows the region: `vol = 0.8³ / N` (`make_params` computes `vol = prod(sim.size)/n`, so set `sim.size=[0.8,0.8,0.8]`).
+- **∆t = 5×10⁻⁵** (CFL). Sand's elastic wave speed `c = √(E/ρ) ≈ 45 m/s` with `∆x ≈ 8×10⁻³` gives `∆t_max ≈ 9×10⁻⁵`, so the `sim=default` `∆t = 3×10⁻⁴` **explodes** at this resolution — vmax → 10⁶ within ~30 substeps for *every* kernel, including the `jax_v1_5` baseline. **Always run the standard benchmark via `sim=benchmark`** (below), which bakes in all of these settings at a CFL-safe `∆t`; do not hand-override `sim.num_grids`/`sim.n_particles` on top of `sim=default`.
 
 **Phase definitions** (kept broad so timing reflects real work, and to attribute the grid step):
 - **P2G**: compute force from the deformation gradient F; scatter mass + elastic force + APIC affine momentum to grid nodes; normalize grid velocity and apply gravity. *(The grid normalize+gravity step is grouped under P2G for timing.)*
@@ -35,9 +36,9 @@ All performance comparisons use one fixed, well-resolved configuration (adapted 
 
 **Reproduce:**
 ```bash
-pixi run -e gpu python simulate.py kernel=<k> material=sand_jacobi \
-    sim.num_grids=125 sim.n_particles=8000000 \
-    sim.center=[0.5,0.5,0.5] sim.size=[0.8,0.8,0.8] benchmark=true
+# sim=benchmark encodes 8M particles, num_grids=124, ∆t=5e-5, center/size, sticky floor
+pixi run -e gpu python simulate.py -cn config sim=benchmark \
+    kernel=<k> material=sand_jacobi benchmark=true
 ```
 
 ## Package manager: pixi
@@ -102,11 +103,12 @@ src/mpm_jax/
   callbacks.py         on_frame callback helpers
   backends.py          Backend interface + shared JAX-owned frame loop
   p2g_scan.py          jax_v1_5 P2G: lax.scan over 27 offsets
+  g2p_scan.py          jax_v2/jax_v3 G2P: lax.scan over 27 offsets (+ MLS C=∇v unification)
   blocks/              Pure-math building blocks (no JIT, no closures)
     weights.py         compute_weights_and_indices: B-spline weights, grid indices
     g2p.py             g2p: Grid-to-Particle gather + APIC update
     grid.py            grid_update: momentum normalise + gravity + damping; build_grid_x
-    svd.py             3x3 Jacobi SVD (used by Warp paths)
+    svd.py             3x3 Jacobi SVD, scatter-free (no .at[].set() -> XLA fuses it; used by StVK elasticity + Drucker-Prager plasticity)
     sort.py            morton_argsort, home_super_cell_id
     init.py            get_particles: uniform particle initialisation
   warp_p2g.py          Warp tiled P2G kernel + jax_callable bridge
@@ -150,6 +152,9 @@ Current kernel names:
 | `kernel=` | Class | What it does |
 |---|---|---|
 | `jax_v1_5` | MPMSolver | Pure JAX/XLA baseline. P2G uses `lax.scan` over 27 stencil offsets to avoid `(N, 27, *)` intermediates |
+| `jax_v2` | MPMSolver | `jax_v1_5` + `lax.scan` over 27 offsets for **G2P** too (`g2p_scan.py`), killing the `(N, 27, 3, 3)` gather/APIC intermediate. Bit-identical to `jax_v1_5` |
+| `jax_v3` | MPMSolver | `jax_v2` + unified MLS-MPM G2P: reuse the APIC affine `C` as the velocity gradient for the F-update (one `(N,3,3)` accumulator, not two). Not bit-compatible — MLS velocity-gradient estimator |
+| `jax_cuda_g2p` | MPMSolver | Hybrid: JAX scan P2G + hand-written CUDA fused G2P (`g2p_fused.cu`); plasticity SVD still applied in JAX after |
 | `cuda_v1_inline` | MPMSolver | Inline-weight CUDA P2G (one thread/particle, global atomicAdd) + CUDA G2P |
 | `cuda_v2_inline` | MPMSolver | Warp-shuffle coalesced inline CUDA P2G + CUDA G2P; default `loop_kind=fori` |
 | `cuda_v3_inline` | MPMSolver | Morton-sorted inline CUDA P2G + CUDA G2P; `cuda_graph=true` enables XLA command-buffer replay |
@@ -171,6 +176,9 @@ pixi run -e gpu python simulate.py benchmark=true
 
 # Switch kernel
 pixi run -e gpu python simulate.py kernel=jax_v1_5                                     # JAX/XLA baseline
+pixi run -e gpu python simulate.py kernel=jax_v2                                       # + scan G2P (bit-identical)
+pixi run -e gpu python simulate.py kernel=jax_v3                                       # + unified MLS-MPM G2P
+pixi run -e gpu python simulate.py kernel=jax_cuda_g2p material=sand_jacobi           # JAX scan P2G + CUDA fused G2P
 pixi run -e gpu python simulate.py kernel=cuda_v1_inline material=sand_jacobi         # inline CUDA P2G + G2P
 pixi run -e gpu python simulate.py kernel=cuda_v2_inline material=sand_jacobi         # warp-shuffle CUDA (fori loop)
 pixi run -e gpu python simulate.py kernel=cuda_v3_inline material=sand_jacobi         # Morton-sorted CUDA
