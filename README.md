@@ -118,7 +118,7 @@ pixi run -e gpu python simulate.py
 pixi run -e gpu python simulate.py benchmark=true
 
 # Pick a kernel
-pixi run -e gpu python simulate.py kernel=jax_v1_5                                     # JAX/XLA baseline
+pixi run -e gpu python simulate.py kernel=jax_baseline                                 # JAX/XLA baseline (scan P2G + MLS G2P)
 pixi run -e gpu python simulate.py kernel=cuda_v1_inline material=sand_jacobi
 pixi run -e gpu python simulate.py kernel=cuda_v2_inline material=sand_jacobi         # warp-shuffle (default: fori loop)
 pixi run -e gpu python simulate.py kernel=cuda_v2_inline kernel.loop_kind=python material=sand_jacobi
@@ -134,12 +134,12 @@ pixi run -e gpu python simulate.py sim.n_particles=1000000 sim.num_grids=64
 
 | `kernel=` | What it does |
 |---|---|
-| `jax_v1_5` | Pure JAX/XLA baseline. P2G scans over the 27 stencil offsets (`lax.scan`) to avoid `(N, 27, *)` HBM intermediates. |
-| `cuda_v1_inline` | Inline-weight CUDA P2G (one thread/particle, global `atomicAdd`) + CUDA G2P; no `(N, 27, *)` tensors. |
-| `cuda_v2_inline` | Warp-shuffle coalesced inline CUDA P2G + CUDA G2P. Default `loop_kind=fori`. Override with `kernel.loop_kind=python`. |
-| `cuda_v3_inline` | Morton-sorted inline CUDA P2G + CUDA G2P. `kernel.cuda_graph=true` enables XLA command-buffer (CUDA Graph) replay. |
-| `cuda_v4_inline` | Super-cell-owned grid tile inline CUDA P2G + CUDA G2P. |
-| `warp_v3_supercell_tile` | Hybrid JAX/Warp backend: JAX frame + stress/sort/grid/G2P orchestration, Warp `jax_callable` tiled P2G (`wp.launch_tiled` + `tile_scatter_add`). Default `kernel.graph_mode=jax`. |
+| `jax_baseline` | The JAX/XLA baseline: `lax.scan` over the 27 offsets for **both** P2G and G2P, unified MLS-MPM G2P (APIC affine `C` reused as ∇v), scatter-free Jacobi SVD. Every other kernel reuses this G2P, so only the P2G varies. |
+| `cuda_v1_inline` | CUDA inline-weight P2G (one thread/particle, global `atomicAdd`) + JAX baseline G2P. |
+| `cuda_v2_inline` | CUDA warp-shuffle coalesced inline P2G + JAX baseline G2P. Default `loop_kind=fori`. Override with `kernel.loop_kind=python`. |
+| `cuda_v3_inline` | CUDA Morton-sorted inline P2G + JAX baseline G2P. `kernel.cuda_graph=true` enables XLA command-buffer (CUDA Graph) replay. |
+| `cuda_v4_inline` | CUDA super-cell-owned grid tile inline P2G + JAX baseline G2P. |
+| `warp_v3_supercell_tile` | Warp `jax_callable` super-cell tiled P2G (`wp.launch_tiled` + `tile_scatter_add`) + JAX baseline G2P. Default `kernel.graph_mode=jax`. |
 
 ## Architecture
 
@@ -175,7 +175,7 @@ pixi run -e gpu python simulate.py -cn sweep_profile
 Each combination gets its own `multirun/<date>/<run>/` subdir with a `results.json`. Sweeps
 should use Hydra multirun so log parsers see the expected directory structure.
 
-For an ad-hoc sweep: `pixi run -e gpu python simulate.py -m sim.n_particles=5000,50000,200000 kernel=jax_v1_5,cuda_v2_inline benchmark=true`.
+For an ad-hoc sweep: `pixi run -e gpu python simulate.py -m sim.n_particles=5000,50000,200000 kernel=jax_baseline,cuda_v2_inline benchmark=true`.
 
 ## Profiling
 
@@ -193,7 +193,7 @@ The trace is written to `outputs/<YYYY-MM-DD>/<HH-MM-SS>/jax_trace/` and include
 
 ```bash
 pixi run -e gpu python profile_nsight.py -cn nsight_profile \
-    kernel=jax_v1_5 material=sand_jacobi nsight.phase=p2g sim.n_particles=4096
+    kernel=jax_baseline material=sand_jacobi nsight.phase=p2g sim.n_particles=4096
 ```
 
 ## Config
@@ -204,7 +204,7 @@ Hydra config groups in `conf/`:
 |---|---|---|
 | `material` | `sand_jacobi` (default) | Constitutive model |
 | `sim` | `default` | n_particles, num_grids, dt, BCs, ... |
-| `kernel` | `jax_v1_5` (default), `cuda_v*_inline`, `warp_v3_supercell_tile` | P2G/G2P implementation |
+| `kernel` | `jax_baseline` (default), `cuda_v*_inline`, `warp_v3_supercell_tile` | P2G implementation (G2P shared) |
 | `profile` | `none` (default), `jax` | Profiling backend |
 
 Top-level fields: `benchmark`, `tag`, `output_dir`. All overridable from CLI:
@@ -235,7 +235,7 @@ pixi run test
 Run focused GPU checks:
 
 ```bash
-pixi run -e gpu pytest tests/test_cuda_ffi_loader.py tests/test_jax_v1_5.py \
+pixi run -e gpu pytest tests/test_cuda_ffi_loader.py tests/test_p2g_scan.py \
     tests/test_cuda_v2_inline_matches_v1.py -q
 ```
 
@@ -254,7 +254,7 @@ MPM-CudaJax/
 │   ├── nsight_profile.yaml
 │   ├── material/            # sand_jacobi.yaml
 │   ├── sim/default.yaml
-│   ├── kernel/              # jax_v1_5.yaml, cuda_v*.yaml, warp_*.yaml
+│   ├── kernel/              # jax_baseline.yaml, cuda_v*.yaml, warp_*.yaml
 │   ├── profile/             # none.yaml, jax.yaml
 │   └── sweep_*.yaml
 └── src/
@@ -271,7 +271,7 @@ MPM-CudaJax/
             ├── p2g_cuda.py  # FFI registration + kernel wrappers
             ├── _lib/        # built .so files (gitignored)
             └── kernels/     # p2g_inline.cu, p2g_v2_inline.cu, p2g_v3_inline.cu,
-                             # p2g_v4_inline.cu, g2p_fused.cu
+                             # p2g_v4_inline.cu
 ```
 
 ## References

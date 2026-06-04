@@ -58,7 +58,7 @@ pixi run test
 pixi run lint
 pixi run python simulate.py sim.num_frames=5
 pixi run -e gpu python simulate.py benchmark=true
-pixi run -e gpu python simulate.py kernel=jax_v1_5
+pixi run -e gpu python simulate.py kernel=jax_baseline
 pixi run -e gpu python simulate.py kernel=cuda_v3_inline material=sand_jacobi
 pixi run -e gpu python simulate.py -cn sweep_quick
 ```
