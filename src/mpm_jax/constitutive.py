@@ -12,17 +12,33 @@ def _lame_params(E, nu):
     return mu, la
 
 
+def _det3x3(F):
+    """Closed-form determinant of batched 3x3 matrices.
+
+    Fully fusable (~9 mul + adds, pointwise per matrix) -- unlike
+    ``jnp.linalg.det``, which lowers to a cuSOLVER LU custom-call (host-
+    dispatched, fusion-breaking).
+    """
+    a, b, c = F[..., 0, 0], F[..., 0, 1], F[..., 0, 2]
+    d, e, f = F[..., 1, 0], F[..., 1, 1], F[..., 1, 2]
+    g, h, i = F[..., 2, 0], F[..., 2, 1], F[..., 2, 2]
+    return a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g)
+
+
 def stvk_elasticity_jacobi(E=2e6, nu=0.4):
     mu, la = _lame_params(E, nu)
 
     def compute_stress(F):
-        _, sigma, _ = jacobi_svd_3x3(F)
         Ft = jnp.swapaxes(F, -2, -1)
         FtF = Ft @ F
         I = jnp.eye(3, dtype=F.dtype)
         E_strain = 0.5 * (FtF - I)
         stvk = 2.0 * mu * (F @ E_strain)
-        J = jnp.prod(sigma, axis=-1).reshape(-1, 1, 1)
+        # J = det(F), the StVK Jacobian. The old code took prod(singular values)
+        # = |det(F)| from a full SVD whose U, Vh were thrown away -- a whole SVD
+        # per substep for one scalar. For non-inverted F (det>0, the physical
+        # regime) the closed-form determinant is identical, and it fuses.
+        J = _det3x3(F).reshape(-1, 1, 1)
         volume = la * J * (J - 1.0) * I
         return stvk + volume
 
