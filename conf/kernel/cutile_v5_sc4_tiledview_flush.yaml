@@ -1,0 +1,5 @@
+# cutile_v5_sc4_tiledview_flush -- SC=4 cuTile supercell reduction with TiledView flush.
+# Keeps CUDA v4-style 4^3 supercell sorting/binning. Interior supercell tiles
+# flush a padded 8^3x4 update through TiledView.atomic_store_add; boundary
+# supercells use the conservative scalar raw-memory fallback.
+name: cutile_v5_sc4_tiledview_flush

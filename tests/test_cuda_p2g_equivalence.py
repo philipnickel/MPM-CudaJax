@@ -103,7 +103,16 @@ def test_cuda_p2g_variants_match_jax_scan():
     reason="cuTile/JAX backend requires a GPU, cuda-tile, and the CUDA G2P kernel library",
 )
 def test_cutile_p2g_matches_jax_scan():
-    from mpm_jax.backends import cutile_v1_backend, cutile_v2_backend, jax_v1_5_backend
+    from mpm_jax.backends import (
+        cutile_v1_backend,
+        cutile_v2_backend,
+        cutile_v3_backend,
+        cutile_v4_native4_backend,
+        cutile_v5_sc4_tiledview_flush_backend,
+        cutile_v6_sc4_colored_tiledview_store_backend,
+        cutile_v7_sc4_colored_arena256_store_backend,
+        jax_v1_5_backend,
+    )
 
     params, state, stress = _inputs()
     ref_mv, ref_m = _p2g_output(jax_v1_5_backend(), params, state, stress)
@@ -111,6 +120,11 @@ def test_cutile_p2g_matches_jax_scan():
     for backend in (
         cutile_v1_backend(num_grids=params.num_grids),
         cutile_v2_backend(num_grids=params.num_grids),
+        cutile_v3_backend(num_grids=params.num_grids),
+        cutile_v4_native4_backend(num_grids=params.num_grids),
+        cutile_v5_sc4_tiledview_flush_backend(num_grids=params.num_grids),
+        cutile_v6_sc4_colored_tiledview_store_backend(num_grids=params.num_grids),
+        cutile_v7_sc4_colored_arena256_store_backend(num_grids=params.num_grids),
     ):
         grid_mv, grid_m = _p2g_output(backend, params, state, stress)
 

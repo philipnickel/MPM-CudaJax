@@ -1,0 +1,6 @@
+# cutile_v7_sc4_colored_arena256_store -- SC=4 arena256 with colored writeback.
+# Runs eight parity-color passes over the sorted supercells. Each pass uses a
+# 256-lane local arena for the physical 6x6x6 stencil union, then writes to a
+# padded 4-channel grid with non-atomic raw offset stores because same-color
+# supercell arenas do not overlap.
+name: cutile_v7_sc4_colored_arena256_store

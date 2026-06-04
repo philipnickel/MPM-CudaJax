@@ -1,0 +1,4 @@
+# cutile_v4_native4 -- native cuTile 4x4x4 node tile.
+# Sorts particles into 2x2x2 grid supercells, whose quadratic P2G stencil
+# union is exactly 4x4x4 nodes, avoiding the flattened/padded 6^3 -> 256 tile.
+name: cutile_v4_native4

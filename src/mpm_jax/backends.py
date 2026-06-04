@@ -237,6 +237,64 @@ def _cutile_reduce_p2g(params, prepared):
     )
 
 
+def _cutile_tiled_loads_p2g(params, prepared):
+    from mpm_jax.cutile_p2g import (  # pylint: disable=import-outside-toplevel
+        cutile_p2g_supercell_reduce_tiled_loads,
+    )
+
+    return cutile_p2g_supercell_reduce_tiled_loads(
+        prepared.x, prepared.v, prepared.C, prepared.stress,
+        prepared.cell_start, params.num_grids, params.dt, params.vol, params.p_mass,
+        params.inv_dx, params.dx,
+    )
+
+
+def _cutile_native4_p2g(params, prepared):
+    from mpm_jax.cutile_p2g import cutile_p2g_native4  # pylint: disable=import-outside-toplevel
+
+    return cutile_p2g_native4(
+        prepared.x, prepared.v, prepared.C, prepared.stress,
+        prepared.cell_start, params.num_grids, params.dt, params.vol, params.p_mass,
+        params.inv_dx, params.dx,
+    )
+
+
+def _cutile_tiledview_flush_p2g(params, prepared):
+    from mpm_jax.cutile_p2g import (  # pylint: disable=import-outside-toplevel
+        cutile_p2g_sc4_tiledview_flush,
+    )
+
+    return cutile_p2g_sc4_tiledview_flush(
+        prepared.x, prepared.v, prepared.C, prepared.stress,
+        prepared.cell_start, params.num_grids, params.dt, params.vol, params.p_mass,
+        params.inv_dx, params.dx,
+    )
+
+
+def _cutile_colored_tiledview_p2g(params, prepared):
+    from mpm_jax.cutile_p2g import (  # pylint: disable=import-outside-toplevel
+        cutile_p2g_sc4_colored_tiledview_store,
+    )
+
+    return cutile_p2g_sc4_colored_tiledview_store(
+        prepared.x, prepared.v, prepared.C, prepared.stress,
+        prepared.cell_start, params.num_grids, params.dt, params.vol, params.p_mass,
+        params.inv_dx, params.dx,
+    )
+
+
+def _cutile_colored_arena256_p2g(params, prepared):
+    from mpm_jax.cutile_p2g import (  # pylint: disable=import-outside-toplevel
+        cutile_p2g_sc4_colored_arena256_store,
+    )
+
+    return cutile_p2g_sc4_colored_arena256_store(
+        prepared.x, prepared.v, prepared.C, prepared.stress,
+        prepared.cell_start, params.num_grids, params.dt, params.vol, params.p_mass,
+        params.inv_dx, params.dx,
+    )
+
+
 def cutile_v1_backend(**_opts):
     _require_cutile()
     _require_cuda("g2p_fused")
@@ -255,6 +313,75 @@ def cutile_v2_backend(**_opts):
         name="cutile_v2_supercell_reduce",
         prepare=_cuda_v4_prepare,
         p2g=_cutile_reduce_p2g,
+        g2p=_cuda_g2p,
+        loop_kind="fori",
+    )
+
+
+def cutile_v3_backend(**_opts):
+    _require_cutile()
+    _require_cuda("g2p_fused")
+    return Backend(
+        name="cutile_v3_tiled_loads",
+        prepare=_cuda_v4_prepare,
+        p2g=_cutile_tiled_loads_p2g,
+        g2p=_cuda_g2p,
+        loop_kind="fori",
+    )
+
+
+def cutile_v5_sc4_tiledview_flush_backend(*, num_grids=None, **_opts):
+    from mpm_jax.cutile_p2g import SUPER_CELL_WIDTH  # pylint: disable=import-outside-toplevel
+
+    if num_grids is not None and num_grids % SUPER_CELL_WIDTH != 0:
+        raise RuntimeError(
+            f"cutile_v5_sc4_tiledview_flush requires num_grids ({num_grids}) "
+            f"divisible by super-cell width ({SUPER_CELL_WIDTH})."
+        )
+    _require_cutile()
+    _require_cuda("g2p_fused")
+    return Backend(
+        name="cutile_v5_sc4_tiledview_flush",
+        prepare=_cuda_v4_prepare,
+        p2g=_cutile_tiledview_flush_p2g,
+        g2p=_cuda_g2p,
+        loop_kind="fori",
+    )
+
+
+def cutile_v6_sc4_colored_tiledview_store_backend(*, num_grids=None, **_opts):
+    from mpm_jax.cutile_p2g import SUPER_CELL_WIDTH  # pylint: disable=import-outside-toplevel
+
+    if num_grids is not None and num_grids % SUPER_CELL_WIDTH != 0:
+        raise RuntimeError(
+            f"cutile_v6_sc4_colored_tiledview_store requires num_grids ({num_grids}) "
+            f"divisible by super-cell width ({SUPER_CELL_WIDTH})."
+        )
+    _require_cutile()
+    _require_cuda("g2p_fused")
+    return Backend(
+        name="cutile_v6_sc4_colored_tiledview_store",
+        prepare=_cuda_v4_prepare,
+        p2g=_cutile_colored_tiledview_p2g,
+        g2p=_cuda_g2p,
+        loop_kind="fori",
+    )
+
+
+def cutile_v7_sc4_colored_arena256_store_backend(*, num_grids=None, **_opts):
+    from mpm_jax.cutile_p2g import SUPER_CELL_WIDTH  # pylint: disable=import-outside-toplevel
+
+    if num_grids is not None and num_grids % SUPER_CELL_WIDTH != 0:
+        raise RuntimeError(
+            f"cutile_v7_sc4_colored_arena256_store requires num_grids ({num_grids}) "
+            f"divisible by super-cell width ({SUPER_CELL_WIDTH})."
+        )
+    _require_cutile()
+    _require_cuda("g2p_fused")
+    return Backend(
+        name="cutile_v7_sc4_colored_arena256_store",
+        prepare=_cuda_v4_prepare,
+        p2g=_cutile_colored_arena256_p2g,
         g2p=_cuda_g2p,
         loop_kind="fori",
     )
@@ -285,6 +412,26 @@ def _supercell_boundaries(params, super_cell_width):
     return jnp.arange(Gs ** 3 + 1, dtype=jnp.int32)
 
 
+def _cutile_native4_prepare(params, state, stress):
+    from mpm_jax.blocks.sort import home_super_cell_id  # pylint: disable=import-outside-toplevel
+    from mpm_jax.cutile_p2g import (  # pylint: disable=import-outside-toplevel
+        NATIVE_SUPER_CELL_WIDTH,
+    )
+
+    super_id = home_super_cell_id(
+        state.x, params.inv_dx, params.num_grids, NATIVE_SUPER_CELL_WIDTH
+    )
+    order = jnp.argsort(super_id)
+    super_id_sorted = super_id[order]
+    cell_start = jnp.searchsorted(
+        super_id_sorted, _supercell_boundaries(params, NATIVE_SUPER_CELL_WIDTH)
+    ).astype(jnp.int32)
+    return PreparedSubstep(
+        state.x[order], state.v[order], state.C[order], state.F[order],
+        stress[order], cell_start=cell_start,
+    )
+
+
 def _cuda_v4_prepare(params, state, stress):
     from mpm_jax.cuda.p2g_cuda import (  # pylint: disable=import-outside-toplevel
         V4_SUPER_CELL_WIDTH,
@@ -301,6 +448,27 @@ def _cuda_v4_prepare(params, state, stress):
     return PreparedSubstep(
         state.x[order], state.v[order], state.C[order], state.F[order],
         stress[order], cell_start=cell_start,
+    )
+
+
+def cutile_v4_native4_backend(*, num_grids=None, **_opts):
+    from mpm_jax.cutile_p2g import (  # pylint: disable=import-outside-toplevel
+        NATIVE_SUPER_CELL_WIDTH,
+    )
+
+    if num_grids is not None and num_grids % NATIVE_SUPER_CELL_WIDTH != 0:
+        raise RuntimeError(
+            f"cutile_v4_native4 requires num_grids ({num_grids}) divisible by "
+            f"super-cell width ({NATIVE_SUPER_CELL_WIDTH})."
+        )
+    _require_cutile()
+    _require_cuda("g2p_fused")
+    return Backend(
+        name="cutile_v4_native4",
+        prepare=_cutile_native4_prepare,
+        p2g=_cutile_native4_p2g,
+        g2p=_cuda_g2p,
+        loop_kind="fori",
     )
 
 

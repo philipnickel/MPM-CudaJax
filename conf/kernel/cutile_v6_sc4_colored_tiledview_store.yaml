@@ -1,0 +1,5 @@
+# cutile_v6_sc4_colored_tiledview_store -- SC=4 tiled-view arena with colored writeback.
+# Runs eight parity-color passes so same-color 8x8x8 padded arenas do not
+# overlap, allowing interior writeback via tiled_view.load() + store() instead
+# of whole-tile atomics.
+name: cutile_v6_sc4_colored_tiledview_store

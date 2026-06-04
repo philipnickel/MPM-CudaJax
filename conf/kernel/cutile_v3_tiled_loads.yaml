@@ -1,0 +1,4 @@
+# cutile_v3_tiled_loads -- cuTile supercell reduction with tile-shaped particle loads.
+# Keeps the v2 supercell reduction algorithm, but loads particle attributes as
+# padded tile slices before broadcasting them across the node tile.
+name: cutile_v3_tiled_loads

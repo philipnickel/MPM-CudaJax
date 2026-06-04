@@ -81,12 +81,15 @@ cuda-version = "12.*"
 cuda-nvcc = "*"
 nsight-compute = ">=2025.2,<2025.3"
 gxx = "*"
+setuptools = "<81"
 
 [tool.pixi.feature.gpu.pypi-dependencies]
 nsight-python = "*"
 warp-lang = "==1.14.0"
 cuda-tile = { version = ">=1.4.0, <2", extras = ["tileiras"] }
 jax = { version = ">=0.10.1, <0.11", extras = ["cuda13"] }
+tensorboard = ">=2.20.0, <3"
+xprof = ">=2.22.1, <3"
 
 [tool.pixi.feature.gpu.activation.env]
 JAX_PLATFORMS = "cuda"
