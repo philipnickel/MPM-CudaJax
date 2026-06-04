@@ -692,7 +692,7 @@ def cutile_p2g_arena(
 # TiledView (tile=(SC+2)**3, traversal_steps=SC), so each block does
 # view.atomic_store_add(super_cell_index, arena) and overlapping apron nodes are
 # reconciled by the per-element atomics. No coloring, no parity, no 8 launches.
-@ct.kernel
+@ct.kernel(occupancy=6)  # ncu: register-limited -> hint lifts occupancy ~18%->higher
 def _p2g_atomic_tile_kernel(
     x, v, C, stress, cell_start, grid_mv, grid_m,
     G: ct.Constant[int],
