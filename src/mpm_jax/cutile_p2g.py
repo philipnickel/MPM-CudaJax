@@ -692,7 +692,11 @@ def cutile_p2g_arena(
 # TiledView (tile=(SC+2)**3, traversal_steps=SC), so each block does
 # view.atomic_store_add(super_cell_index, arena) and overlapping apron nodes are
 # reconciled by the per-element atomics. No coloring, no parity, no 8 launches.
-@ct.kernel(occupancy=6)  # ncu: register-limited -> hint lifts occupancy ~18%->higher
+# ncu on H100 flagged this kernel register-limited (3 CTAs/SM, 18% occ); occupancy=6
+# lifts it to 6 CTAs/SM (~37% occ, ~17% faster). That value is H100-specific, so it
+# is set per-arch with ByTarget -- other architectures fall back to compiler-auto
+# (None) and should be tuned with their own ncu/nsight sweep rather than inheriting 6.
+@ct.kernel(occupancy=ct.ByTarget(sm_90=6, default=None))
 def _p2g_atomic_tile_kernel(
     x, v, C, stress, cell_start, grid_mv, grid_m,
     G: ct.Constant[int],
