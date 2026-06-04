@@ -286,28 +286,110 @@ def render_snapshot(points, out_path, *, label, t, point_size):
     p.close()
 
 
+def _enrich_usd_realism(usd_path, sand_rgb=(0.80, 0.64, 0.42)):
+    """Make a warp-generated USD look more photoreal: bind matte PBR materials to
+    the sand + floor and tune the sky dome / warm angled sun. Pure pxr — must run
+    before `import ovrtx`."""
+    from pxr import Usd, UsdGeom, UsdLux, UsdShade, Sdf, Gf
+    stage = Usd.Stage.Open(usd_path)
+
+    # Soft sky dome (ambient fill) + a warm, slightly-soft directional sun (key).
+    # Kept modest so the floor doesn't blow out to white.
+    dome = UsdLux.DomeLight(stage.GetPrimAtPath("/dome_light"))
+    if dome:
+        dome.GetIntensityAttr().Set(1.1)
+        dome.CreateColorAttr().Set(Gf.Vec3f(0.82, 0.86, 0.95))
+    sun_prim = stage.GetPrimAtPath("/distant_light")
+    sun = UsdLux.DistantLight(sun_prim)
+    if sun:
+        sun.GetIntensityAttr().Set(2.6)
+        sun.CreateColorAttr().Set(Gf.Vec3f(1.0, 0.94, 0.82))
+        sun.CreateAngleAttr().Set(1.6)                       # soft shadow edges
+        xf = UsdGeom.Xformable(sun_prim)
+        xf.ClearXformOpOrder()
+        xf.AddRotateXYZOp().Set(Gf.Vec3f(-48.0, 12.0, 28.0))  # upper-front key
+
+    def surface(path, color, rough, spec):
+        mat = UsdShade.Material.Define(stage, path)
+        sh = UsdShade.Shader.Define(stage, path + "/surface")
+        sh.CreateIdAttr("UsdPreviewSurface")
+        sh.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*color))
+        sh.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(rough)
+        sh.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
+        sh.CreateInput("specular", Sdf.ValueTypeNames.Float).Set(spec)
+        mat.CreateSurfaceOutput().ConnectToSource(sh.ConnectableAPI(), "surface")
+        return mat
+
+    sand = surface("/root/mat_sand", sand_rgb, 0.95, 0.15)
+    floor = surface("/root/mat_floor", (0.40, 0.38, 0.35), 0.92, 0.08)
+    for path, mat in (("/root/particles/sphere", sand), ("/root/particles", sand),
+                      ("/root/ground", floor)):
+        prim = stage.GetPrimAtPath(path)
+        if prim and prim.IsValid():
+            UsdShade.MaterialBindingAPI.Apply(prim).Bind(mat)
+
+    # warp's ground is only size=1.0 (a small floating plane). Enlarge it so it
+    # fills the frame and reaches the horizon instead of floating in the void.
+    ground = stage.GetPrimAtPath("/root/ground")
+    if ground and ground.IsValid():
+        UsdGeom.Xformable(ground).AddScaleOp().Set(Gf.Vec3f(30.0, 30.0, 1.0))
+    stage.GetRootLayer().Save()
+
+
+def _set_rtx_background(usd_path, product_path, sky_rgb=(0.62, 0.70, 0.85)):
+    """Force a solid sky-colour OVRTX background (default renders black). Authors
+    the OmniRtxSettingsCommon background attrs on the render product + a settings
+    prim — best-effort; harmless if OVRTX ignores them. Pure pxr."""
+    from pxr import Usd, UsdRender, Sdf, Gf
+    stage = Usd.Stage.Open(usd_path)
+
+    def author(prim):
+        prim.CreateAttribute("omni:rtx:background:source:type",
+                             Sdf.ValueTypeNames.Token).Set("color")
+        prim.CreateAttribute("omni:rtx:background:source:color",
+                             Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*sky_rgb))
+
+    prod = stage.GetPrimAtPath(product_path)
+    if prod and prod.IsValid():
+        author(prod)
+    settings = UsdRender.Settings.Define(stage, "/Render/rtxSettings")
+    author(settings.GetPrim())
+    settings.CreateProductsRel().SetTargets([Sdf.Path(product_path)])
+    stage.GetRootLayer().Save()
+
+
 def render_selection_ovrtx(clouds, labels, times, args):
     """Ray-trace the selected clouds to per-frame PNGs via the project's OVRTX path.
 
-    Reuses simulate.py's USD writer + render-product setup (shared camera + ground
-    plane), then steps the OVRTX renderer one USD time-sample per frame and writes
-    the LdrColor buffer to a PNG instead of an MP4. Run in the `rendering` env.
+    Writes a warp USD (points + ground + lights), optionally enriches it with PBR
+    materials + tuned lighting (``--realism``), then ray-traces each frame. Renders
+    at ``supersample x`` resolution and downscales (LANCZOS) to suppress the
+    missing-denoiser grain on no-RT-core GPUs. Run in the `rendering` env.
     """
     import imageio.v2 as imageio
+    from PIL import Image
 
     import simulate as S  # tested USD + render-product helpers
+
+    ss = max(1, int(args.supersample))
+    w, h = int(args.width), int(args.height)
+    rw, rh = w * ss, h * ss
 
     frames = [np.ascontiguousarray(c, dtype=np.float32) for c in clouds]
     usd_path = os.path.join(args.out, f"{args.tag}_ovrtx.usd")
     # fps=1 => USD time-sample i lands exactly on integer time i (clean per-frame seek).
     S.visualize_frames_warp_usd(frames, usd_path, color=args.color, radius=args.radius, fps=1)
-    product_path = S._ensure_ovrtx_render_product(usd_path, width=args.width, height=args.height)
+    if args.realism:
+        _enrich_usd_realism(usd_path)
+    product_path = S._ensure_ovrtx_render_product(usd_path, width=rw, height=rh)
+    if args.realism:
+        _set_rtx_background(usd_path, product_path)
 
     # Import ovrtx ONLY after every pxr/USD stage op above: importing it earlier
     # registers USD schema plugins that collide with usd-core's UsdVol (the
     # 'ParticleField' alias) and break Usd.Stage.CreateNew. (Mirrors simulate.py.)
     import ovrtx
-    print("Creating OVRTX renderer (first run compiles shaders)...")
+    print(f"Creating OVRTX renderer (first run compiles shaders); render {rw}x{rh} -> {w}x{h}...")
     renderer = ovrtx.Renderer()
     renderer.open_usd(str(usd_path))
 
@@ -320,14 +402,16 @@ def render_selection_ovrtx(clouds, labels, times, args):
             raise RuntimeError("OVRTX returned no frames.")
         var = product.frames[0].render_vars["LdrColor"].map(device=ovrtx.Device.CPU)
         img = np.asarray(np.from_dlpack(var)[..., :3])
+        if ss > 1:
+            img = np.asarray(Image.fromarray(img).resize((w, h), Image.LANCZOS))
         out = os.path.join(args.out, f"{args.tag}_{n}_{label}.png")
         imageio.imwrite(out, img)
         print(f"  [{n}/{len(clouds)}] {out}  ({os.path.getsize(out) // 1024} KB)  "
               f"[{label}, t={float(t) * 1000:.1f} ms]")
         written.append(out)
     print("\nDone. OVRTX snapshots:")
-    for w in written:
-        print(f"  {w}")
+    for ww in written:
+        print(f"  {ww}")
 
 
 def render_selection_opengl(clouds, labels, times, args):
@@ -421,6 +505,11 @@ def main():
     ap.add_argument("--width", type=int, default=1920, help="ovrtx image width")
     ap.add_argument("--height", type=int, default=1080, help="ovrtx image height")
     ap.add_argument("--color", type=str, default="orange", help="ovrtx particle color")
+    ap.add_argument("--supersample", type=int, default=1,
+                    help="ovrtx: render at NxN resolution and downscale (denoise-free grain fix)")
+    ap.add_argument("--no-realism", dest="realism", action="store_false",
+                    help="ovrtx: skip PBR-material + lighting enrichment (plain warp USD)")
+    ap.set_defaults(realism=True)
     ap.add_argument("--impact-window", type=float, default=0.215,
                     help="seconds after floor-contact onset that the 3 impact stages span")
     ap.add_argument("--v-cap", type=float, default=6.0,
