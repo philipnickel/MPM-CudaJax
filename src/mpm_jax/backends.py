@@ -357,19 +357,24 @@ def cutile_v4_backend(*, num_grids=None, **_opts):
     )
 
 
-def _cutile_atomic_tile_p2g(params, prepared):
-    from mpm_jax.cutile_p2g import cutile_p2g_atomic_tile  # pylint: disable=import-outside-toplevel
+def _make_cutile_atomic_tile_p2g(kernel):
+    def p2g(params, prepared):
+        from mpm_jax.cutile_p2g import cutile_p2g_atomic_tile  # pylint: disable=import-outside-toplevel
 
-    return cutile_p2g_atomic_tile(
-        prepared.x, prepared.v, prepared.C, prepared.stress,
-        prepared.cell_start, params.num_grids, params.dt, params.vol, params.p_mass,
-        params.inv_dx, params.dx,
-    )
+        return cutile_p2g_atomic_tile(
+            prepared.x, prepared.v, prepared.C, prepared.stress,
+            prepared.cell_start, params.num_grids, params.dt, params.vol, params.p_mass,
+            params.inv_dx, params.dx, kernel=kernel,
+        )
+
+    return p2g
 
 
-def cutile_v6_backend(*, num_grids=None, **_opts):
+def cutile_v6_backend(*, num_grids=None, autotune=True, **_opts):
     """Arena P2G whose write-back is a single tile-coalesced atomic_store_add per
-    block (no coloring, one launch). Same SC=2 sort/reduction as v4."""
+    block (no coloring, one launch). Same SC=2 sort/reduction as v4. The occupancy
+    hint is autotuned per-GPU and cached (``autotune=False`` skips it -> compiler
+    default; occupancy does not affect results, only speed)."""
     from mpm_jax.cutile_p2g import V4_ARENA_SC  # pylint: disable=import-outside-toplevel
 
     if num_grids is not None and num_grids % V4_ARENA_SC != 0:
@@ -378,10 +383,15 @@ def cutile_v6_backend(*, num_grids=None, **_opts):
             f"arena_super_cell ({V4_ARENA_SC})."
         )
     _require_cutile()
+    kernel = None
+    if autotune:
+        from mpm_jax.cutile_autotune import tuned_atomic_tile_kernel  # pylint: disable=import-outside-toplevel
+
+        kernel = tuned_atomic_tile_kernel()
     return Backend(
         name="cutile_v6_atomic_tile",
         prepare=_cutile_v4_prepare,
-        p2g=_cutile_atomic_tile_p2g,
+        p2g=_make_cutile_atomic_tile_p2g(kernel),
         g2p=_make_jax_scan_g2p_mls(),
         loop_kind="fori",
     )

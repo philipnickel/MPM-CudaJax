@@ -692,11 +692,10 @@ def cutile_p2g_arena(
 # TiledView (tile=(SC+2)**3, traversal_steps=SC), so each block does
 # view.atomic_store_add(super_cell_index, arena) and overlapping apron nodes are
 # reconciled by the per-element atomics. No coloring, no parity, no 8 launches.
-# ncu on H100 flagged this kernel register-limited (3 CTAs/SM, 18% occ); occupancy=6
-# lifts it to 6 CTAs/SM (~37% occ, ~17% faster). That value is H100-specific, so it
-# is set per-arch with ByTarget -- other architectures fall back to compiler-auto
-# (None) and should be tuned with their own ncu/nsight sweep rather than inheriting 6.
-@ct.kernel(occupancy=ct.ByTarget(sm_90=6, default=None))
+# Occupancy is left to the compiler here; the best value is GPU-specific (ncu flags
+# this kernel register-limited), so it is chosen per-machine by cutile_autotune
+# (kernel.replace_hints(occupancy=...)) rather than hardcoded for one architecture.
+@ct.kernel
 def _p2g_atomic_tile_kernel(
     x, v, C, stress, cell_start, grid_mv, grid_m,
     G: ct.Constant[int],
@@ -760,10 +759,14 @@ def _p2g_atomic_tile_kernel(
 
 
 def cutile_p2g_atomic_tile(
-    x, v, C, stress, cell_start, num_grids, dt, vol, p_mass, inv_dx, dx
+    x, v, C, stress, cell_start, num_grids, dt, vol, p_mass, inv_dx, dx, kernel=None
 ):
     """One-launch arena P2G: a single tile-coalesced atomic_store_add per block,
-    no coloring. A 1-node halo pad aligns the apron to an overlapping tiled view."""
+    no coloring. A 1-node halo pad aligns the apron to an overlapping tiled view.
+
+    ``kernel`` lets the autotuner pass an occupancy-tuned variant of
+    ``_p2g_atomic_tile_kernel``; defaults to the module kernel.
+    """
     g = int(num_grids)
     g3 = g ** 3
     gp = g + 2                       # 1-node halo on each side
@@ -778,7 +781,7 @@ def cutile_p2g_atomic_tile(
 
     grid_mv, grid_m = cutile_call(
         (gs, gs, gs),
-        _p2g_atomic_tile_kernel,
+        kernel if kernel is not None else _p2g_atomic_tile_kernel,
         (
             x_flat, v_flat, C_flat, stress_flat, cell_start,
             InputOutput(grid_mv), InputOutput(grid_m),

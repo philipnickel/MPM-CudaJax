@@ -120,7 +120,7 @@ def test_cutile_p2g_matches_jax_scan():
         cutile_v2_backend(num_grids=params.num_grids),
         cutile_v3_backend(num_grids=params.num_grids),
         cutile_v4_backend(num_grids=params.num_grids),
-        cutile_v6_backend(num_grids=params.num_grids),
+        cutile_v6_backend(num_grids=params.num_grids, autotune=False),
     ):
         grid_mv, grid_m = _p2g_output(backend, params, state, stress)
 
