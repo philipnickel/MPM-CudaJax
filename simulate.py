@@ -238,8 +238,13 @@ def _maybe_enable_cuda_graphs(cfg: DictConfig):
         print(f"cuda_v3_inline: enabling XLA CUDA Graph capture via XLA_FLAGS={os.environ['XLA_FLAGS']}")
 
 
-def _run_jax_solver(solver, cfg: DictConfig):
-    """Drive an MPMSolver (JAX backend): warmup, then benchmark or GIF loop."""
+def _run_jax_solver(solver, cfg: DictConfig, trace_dir=None, profile_opts=None):
+    """Drive an MPMSolver (JAX backend): warmup, then benchmark or GIF loop.
+
+    When ``trace_dir`` is set, the JAX profiler is started *after* warmup and
+    stopped after the steady-state loop, so the one-time JIT compile +
+    autotuning (and the Python import-tracer flood) stay out of the trace.
+    """
     import jax
     import jax.numpy as jnp
 
@@ -262,32 +267,45 @@ def _run_jax_solver(solver, cfg: DictConfig):
     frames = []
     frame_metrics = []
 
-    if bench:
-        with jax.profiler.TraceAnnotation("benchmark", kernel=kernel_name):
+    # Start the profiler AFTER warmup so only steady-state work is captured —
+    # the one-time JIT compile + autotuning (and its import-tracer flood) stay
+    # out of the window.
+    tracing = trace_dir is not None
+    if tracing:
+        jax.profiler.start_trace(trace_dir, profiler_options=profile_opts)
+        print(f"JAX profiler started (steady-state only) -> {trace_dir}")
+
+    try:
+        if bench:
+            with jax.profiler.TraceAnnotation("benchmark", kernel=kernel_name):
+                t0 = time.perf_counter()
+                for frame in tqdm(range(sim.num_frames), desc='JAX'):
+                    with jax.profiler.StepTraceAnnotation("frame", step_num=frame):
+                        solver.step()
+                jax.block_until_ready(solver.state.x)
+                elapsed = time.perf_counter() - t0
+        else:
             t0 = time.perf_counter()
-            for frame in tqdm(range(sim.num_frames), desc='JAX'):
-                with jax.profiler.StepTraceAnnotation("frame", step_num=frame):
-                    solver.step()
-            jax.block_until_ready(solver.state.x)
+            with jax.profiler.TraceAnnotation("render_loop", kernel=kernel_name):
+                for frame in tqdm(range(sim.num_frames), desc='JAX'):
+                    with jax.profiler.StepTraceAnnotation("frame", step_num=frame):
+                        # capture current state BEFORE advancing (frame 0 == initial config)
+                        frames.append(np.array(solver.state.x))
+                        t_frame = time.perf_counter()
+                        solver.step()
+                        jax.block_until_ready(solver.state.x)
+                        frame_ms = (time.perf_counter() - t_frame) * 1000
+                        frame_metrics.append({
+                            'x_mean_z': float(solver.state.x[:, 2].mean()),
+                            'v_max': float(jnp.abs(solver.state.v).max()),
+                            'frame_ms': frame_ms,
+                            'timestep_ms': frame_ms,
+                        })
             elapsed = time.perf_counter() - t0
-    else:
-        t0 = time.perf_counter()
-        with jax.profiler.TraceAnnotation("render_loop", kernel=kernel_name):
-            for frame in tqdm(range(sim.num_frames), desc='JAX'):
-                with jax.profiler.StepTraceAnnotation("frame", step_num=frame):
-                    # capture current state BEFORE advancing (frame 0 == initial config)
-                    frames.append(np.array(solver.state.x))
-                    t_frame = time.perf_counter()
-                    solver.step()
-                    jax.block_until_ready(solver.state.x)
-                    frame_ms = (time.perf_counter() - t_frame) * 1000
-                    frame_metrics.append({
-                        'x_mean_z': float(solver.state.x[:, 2].mean()),
-                        'v_max': float(jnp.abs(solver.state.v).max()),
-                        'frame_ms': frame_ms,
-                        'timestep_ms': frame_ms,
-                    })
-        elapsed = time.perf_counter() - t0
+    finally:
+        if tracing:
+            jax.profiler.stop_trace()
+            print(f"JAX trace saved (steady-state only) -> {trace_dir}")
 
     total_steps = sim.num_frames * solver.steps_per_frame
     avg_frame_ms = elapsed / sim.num_frames * 1000
@@ -302,7 +320,7 @@ def _run_jax_solver(solver, cfg: DictConfig):
     return frames, elapsed, total_steps, summary, frame_metrics
 
 
-def run(cfg: DictConfig):
+def run(cfg: DictConfig, trace_dir=None, profile_opts=None):
     """Construct the solver via the registry and drive it to results.
 
     Returns (frames, elapsed, total_steps, summary, frame_metrics).
@@ -310,13 +328,45 @@ def run(cfg: DictConfig):
     from mpm_jax.registry import build_solver
 
     solver = build_solver(cfg)
-    return _run_jax_solver(solver, cfg)
+    return _run_jax_solver(solver, cfg, trace_dir=trace_dir, profile_opts=profile_opts)
 
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
+def _build_profile_options(profile_cfg):
+    """Translate the `conf/profile/jax.yaml` block into a ProfileOptions.
+
+    python_tracer_level defaults to 0: the Python import/call tracer otherwise
+    adds ~1e6 events and buries the device timeline. host_tracer_level=2 keeps
+    the TraceMe annotations. The `gpu:` sub-block maps to CUPTI
+    advanced_configuration knobs (NVTX, CUDA-graph tracing, event caps, PM
+    sampling).
+    """
+    import jax
+    opts = jax.profiler.ProfileOptions()
+    opts.python_tracer_level = int(profile_cfg.get('python_tracer_level', 0))
+    opts.host_tracer_level = int(profile_cfg.get('host_tracer_level', 2))
+    gpu = profile_cfg.get('gpu', {}) or {}
+    adv = opts.advanced_configuration
+    if gpu.get('nvtx'):
+        adv['gpu_enable_nvtx_tracking'] = True
+    if gpu.get('cuda_graph_trace'):
+        adv['gpu_enable_cupti_activity_graph_trace'] = True
+    if gpu.get('graph_node_mapping'):
+        adv['gpu_dump_graph_node_mapping'] = True
+    if gpu.get('max_activity_events'):
+        adv['gpu_max_activity_api_events'] = int(gpu['max_activity_events'])
+    if gpu.get('max_callback_events'):
+        adv['gpu_max_callback_api_events'] = int(gpu['max_callback_events'])
+    if gpu.get('pm_sample_counters'):
+        adv['gpu_pm_sample_counters'] = str(gpu['pm_sample_counters'])
+    # Reassign in case advanced_configuration returns a fresh container.
+    opts.advanced_configuration = adv
+    return opts
+
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig):
@@ -334,25 +384,23 @@ def main(cfg: DictConfig):
     # import inside run(cfg) (which pulls in jax.numpy).
     _maybe_enable_cuda_graphs(cfg)
 
-    # JAX profiler (in-process, writes TensorBoard trace)
+    # JAX profiler: resolve the trace dir + options here, but let the solver
+    # driver start/stop the trace around the steady-state loop only, so warmup /
+    # JIT compile / autotuning is excluded from the window.
     jax_trace_dir = None
+    profile_opts = None
     if profile_name == 'jax':
-        import jax
         from hydra.core.hydra_config import HydraConfig
         # Hydra >=1.2 doesn't chdir, so use the output dir from HydraConfig.
         run_dir = os.path.abspath(HydraConfig.get().runtime.output_dir)
         jax_trace_dir = os.path.join(run_dir, "jax_trace")
-        jax.profiler.start_trace(jax_trace_dir)
-        print(f"JAX profiler started -> {jax_trace_dir}")
+        profile_opts = _build_profile_options(cfg.get('profile', {}))
 
-    # Run simulation (construction routed through build_solver).
-    frames, elapsed, total_steps, summary, _frame_metrics = run(cfg)
-
-    # Stop JAX profiler
-    if profile_name == 'jax':
-        import jax
-        jax.profiler.stop_trace()
-        print(f"JAX trace saved to {jax_trace_dir}")
+    # Run simulation (construction routed through build_solver). When profiling,
+    # the driver wraps only the steady-state loop.
+    frames, elapsed, total_steps, summary, _frame_metrics = run(
+        cfg, trace_dir=jax_trace_dir, profile_opts=profile_opts
+    )
 
     # Print timing summary
     steps_per_sec = total_steps / elapsed
