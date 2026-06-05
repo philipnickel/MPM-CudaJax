@@ -30,30 +30,21 @@ class MPMSolver:
         self.pre_fn = pre_fn
         self.post_fn = post_fn
         self.backend = backend
-        self.frame_opts = dict(frame_opts)
         self._frame = build_backend_frame(
             params, elasticity_fn, plasticity_fn, pre_fn, post_fn,
             backend, steps_per_frame, **frame_opts,
         )
 
-    def _frame_for_iterations(self, iterations):
-        if iterations is None or int(iterations) == int(self.steps_per_frame):
-            return self._frame
-        return build_backend_frame(
-            self.params, self.elasticity_fn, self.plasticity_fn,
-            self.pre_fn, self.post_fn, self.backend, int(iterations), **self.frame_opts,
-        )
-
-    def stepped(self, iterations=None):
-        """Return a new solver with state advanced by ``iterations`` substeps."""
-        new_state = self._frame_for_iterations(iterations)(self.state)
+    def stepped(self):
+        """Return a new solver with state advanced one frame (steps_per_frame)."""
+        new_state = self._frame(self.state)
         new = copy.copy(self)          # shallow: shares _frame + backend + closures
         new.state = new_state
         return new
 
-    def step(self, iterations=None):
+    def step(self):
         """Advance this solver in place and return the new state."""
-        self.state = self.stepped(iterations).state
+        self.state = self.stepped().state
         return self.state
 
     def solve(self, num_frames, on_frame=None):
@@ -61,10 +52,6 @@ class MPMSolver:
             self.step()
             if on_frame is not None:
                 on_frame(f, self.state)
-        return self.state
-
-    def reset(self, init_state):
-        self.state = init_state
         return self.state
 
     def reset_to_initial(self):

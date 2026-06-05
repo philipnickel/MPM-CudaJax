@@ -43,11 +43,7 @@ class PreparedSubstep(NamedTuple):
     C: Any
     F: Any
     stress: Any
-    weight: Any = None
-    dweight: Any = None
-    dpos: Any = None
-    index: Any = None
-    cell_start: Any = None
+    cell_start: Any = None   # set by the sorted variants (CSR start offsets)
 
 
 # ============================================================================
