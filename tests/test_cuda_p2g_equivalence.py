@@ -123,32 +123,3 @@ def test_cutile_p2g_matches_jax_scan():
             np.asarray(grid_m), np.asarray(ref_m), atol=1e-5, rtol=1e-5
         )
         np.testing.assert_allclose(float(grid_m.sum()), float(ref_m.sum()), atol=1e-5, rtol=0.0)
-
-
-@pytest.mark.skipif(
-    not _has_cuda(),
-    reason="Warp/JAX backend requires a GPU",
-)
-def test_warp_supercell_p2g_matches_jax_scan():
-    from mpm_jax.backends import (
-        jax_baseline_backend,
-        warp_v3_supercell_backend,
-        warp_v4_hashgrid_backend,
-    )
-
-    params, state, stress = _inputs()
-    ref_mv, ref_m = _p2g_output(jax_baseline_backend(), params, state, stress)
-
-    for backend in (
-        warp_v3_supercell_backend(num_grids=params.num_grids),
-        warp_v4_hashgrid_backend(num_grids=params.num_grids),
-    ):
-        grid_mv, grid_m = _p2g_output(backend, params, state, stress)
-
-        np.testing.assert_allclose(
-            np.asarray(grid_mv), np.asarray(ref_mv), atol=1e-5, rtol=1e-5
-        )
-        np.testing.assert_allclose(
-            np.asarray(grid_m), np.asarray(ref_m), atol=1e-5, rtol=1e-5
-        )
-        np.testing.assert_allclose(float(grid_m.sum()), float(ref_m.sum()), atol=1e-5, rtol=0.0)

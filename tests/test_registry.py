@@ -6,7 +6,6 @@ def test_every_kernel_has_a_spec():
         "jax_baseline",
         "cutile_v6_atomic_tile",
         "cuda_v1_inline", "cuda_v2_inline", "cuda_v3_inline", "cuda_v4_inline",
-        "warp_v3_supercell_tile", "warp_v4_hashgrid_gather",
     }
     assert set(KERNELS) == expected
     for spec in KERNELS.values():

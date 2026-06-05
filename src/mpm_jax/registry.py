@@ -12,8 +12,6 @@ from mpm_jax.backends import (
     cuda_v2_backend,
     cuda_v3_backend,
     cuda_v4_backend,
-    warp_v3_supercell_backend,
-    warp_v4_hashgrid_backend,
 )
 from mpm_jax.types import MPMState, make_params
 from mpm_jax.blocks.grid import build_grid_x
@@ -36,8 +34,6 @@ KERNELS = {
     "cuda_v2_inline":         KernelSpec(MPMSolver, cuda_v2_backend, MappingProxyType({"loop_kind": "fori"})),
     "cuda_v3_inline":         KernelSpec(MPMSolver, cuda_v3_backend, MappingProxyType({"loop_kind": "fori", "cuda_graph": False})),
     "cuda_v4_inline":         KernelSpec(MPMSolver, cuda_v4_backend),
-    "warp_v3_supercell_tile": KernelSpec(MPMSolver, warp_v3_supercell_backend),
-    "warp_v4_hashgrid_gather": KernelSpec(MPMSolver, warp_v4_hashgrid_backend),
 }
 
 def build_solver(cfg):
@@ -72,7 +68,7 @@ def build_solver(cfg):
         F=jnp.tile(jnp.eye(3), (n, 1, 1)),
     )
     frame_opts = dict(spec.defaults)
-    for k in ("loop_kind", "cuda_graph", "graph_mode"):
+    for k in ("loop_kind", "cuda_graph"):
         if k in cfg.kernel:
             frame_opts[k] = cfg.kernel[k]
     backend = spec.backend_factory(

@@ -36,7 +36,6 @@ nsight:
       - cuda_v3_inline
       - cuda_v4_inline
       - cutile_v6_atomic_tile
-      - warp_v3_supercell_tile
     n_particles:
       - 65536
     num_grids:

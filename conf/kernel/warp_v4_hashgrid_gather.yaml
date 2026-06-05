@@ -1,5 +1,0 @@
-# warp_v4_hashgrid_gather — hybrid JAX/Warp backend.
-# JAX owns the frame, stress, grid update, and state; Warp builds a HashGrid
-# and runs a grid-node-owned gather P2G kernel with no scatter atomics.
-name: warp_v4_hashgrid_gather
-graph_mode: none
