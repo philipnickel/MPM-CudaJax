@@ -1,5 +1,4 @@
 import jax.numpy as jnp
-import equinox as eqx
 from omegaconf import OmegaConf
 from mpm_jax.types import MPMState, make_params
 from mpm_jax.solver import MPMSolver
@@ -53,19 +52,21 @@ def test_reset_restores_state():
     assert s.state is init
 
 
-def test_stepped_returns_new_equinox_solver():
+def test_stepped_returns_new_solver():
     s = _make_solver()
     out = s.stepped()
     assert isinstance(out, MPMSolver)
     assert out is not s
+    # shallow copy shares the static parts; only state is replaced
+    assert out.backend is s.backend
+    assert out._frame is s._frame
+    assert out.state is not s.state
     assert out.state.x.shape == s.state.x.shape
     assert not jnp.array_equal(out.state.x, s.state.x)
 
 
-def test_solver_filters_backend_callables_as_static():
+def test_solver_exposes_backend_and_constitutive():
     s = _make_solver()
-    dynamic, static = eqx.partition(s, eqx.is_array)
-    assert dynamic.state.x is not None
-    assert dynamic.state.v is not None
-    assert static.backend.name == "jax_baseline"
-    assert callable(static.elasticity_fn)
+    assert s.backend.name == "jax_baseline"
+    assert callable(s.elasticity_fn)
+    assert s.state.x is not None and s.state.v is not None

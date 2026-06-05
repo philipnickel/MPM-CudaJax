@@ -1,32 +1,22 @@
-import equinox as eqx
+import copy
 
-from mpm_jax.types import (
-    MPMState,
-    MPMParams, make_params,  # noqa: F401  (re-exported via __init__._SOLVER_EXPORTS)
-)
+# Re-exported through mpm_jax.__init__._SOLVER_EXPORTS (the lazy loader pulls
+# these off this module), so keep them importable here even though the solver
+# body no longer references them directly.
+from mpm_jax.types import MPMState, MPMParams, make_params  # noqa: F401
 from mpm_jax.backends import build_backend_frame
 
 
-class MPMSolver(eqx.Module):
-    """Equinox shell over the functional JAX core.
+class MPMSolver:
+    """Stateful driver over the functional JAX core.
 
-    Backend choices (backend object, constitutive functions, boundary closures)
-    are static fields. Array state is a dynamic PyTree leaf. This keeps one
-    solver object as the public API while preserving JAX's requirement that
-    backend functions are fixed at trace time.
+    A plain Python object: array state (`state`) is mutated in place by the
+    driver API, while the backend object, constitutive/boundary closures, and
+    the compiled `_frame` are fixed for the solver's lifetime. The solver itself
+    is never a JAX argument — only `state` (an `MPMState` pytree) is traced; the
+    backend/fns are baked into `_frame`'s closure at build time. So no pytree
+    machinery is needed here.
     """
-
-    params: MPMParams
-    state: MPMState
-    _init_state: MPMState
-    steps_per_frame: int
-    elasticity_fn: object = eqx.field(static=True)
-    plasticity_fn: object = eqx.field(static=True)
-    pre_fn: object = eqx.field(static=True)
-    post_fn: object = eqx.field(static=True)
-    backend: object = eqx.field(static=True)
-    frame_opts: object = eqx.field(static=True)
-    _frame: object = eqx.field(static=True)
 
     def __init__(self, params, *, elasticity_fn, plasticity_fn,
                  pre_fn, post_fn, backend, steps_per_frame, init_state,
@@ -56,13 +46,14 @@ class MPMSolver(eqx.Module):
 
     def stepped(self, iterations=None):
         """Return a new solver with state advanced by ``iterations`` substeps."""
-        frame = self._frame_for_iterations(iterations)
-        new_state = frame(self.state)
-        return eqx.tree_at(lambda solver: solver.state, self, new_state)
+        new_state = self._frame_for_iterations(iterations)(self.state)
+        new = copy.copy(self)          # shallow: shares _frame + backend + closures
+        new.state = new_state
+        return new
 
     def step(self, iterations=None):
         """Advance this solver in place and return the new state."""
-        object.__setattr__(self, "state", self.stepped(iterations).state)
+        self.state = self.stepped(iterations).state
         return self.state
 
     def solve(self, num_frames, on_frame=None):
@@ -73,9 +64,9 @@ class MPMSolver(eqx.Module):
         return self.state
 
     def reset(self, init_state):
-        object.__setattr__(self, "state", init_state)
+        self.state = init_state
         return self.state
 
     def reset_to_initial(self):
-        object.__setattr__(self, "state", self._init_state)
+        self.state = self._init_state
         return self.state

@@ -14,7 +14,6 @@ dependencies = [
     "matplotlib",
     "tqdm",
     "numpy",
-    "equinox",
     "warp-lang",
     "pyvista",
 ]
