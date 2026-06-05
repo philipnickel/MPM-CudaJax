@@ -99,17 +99,15 @@ conf/                  Hydra config groups
   sweep_*.yaml         pre-baked Hydra multirun sweeps
 src/mpm_jax/
   types.py             MPMState, MPMParams
-  solver.py            RuntimeConfig + MPMSolver + build_backend_frame (the compiled per-frame loop)
+  solver.py            RuntimeConfig + MPMSolver + build_backend_frame (per-frame loop) + get_particles
   constitutive.py      StVK elastic stress (the jelly material), SVD-free
   boundary.py          sticky surface collider
   backends.py          Backend class hierarchy + build_backend
-  p2g_scan.py          JAX baseline P2G: lax.scan over 27 offsets
+  p2g_scan.py          JAX baseline P2G: lax.scan over 27 offsets (defines OFFSET_27)
   g2p_scan.py          JAX baseline G2P: lax.scan over 27 offsets + MLS C=∇v (shared by ALL kernels)
   blocks/              Pure-math building blocks (no JIT, no closures)
-    weights.py         OFFSET_27: the 27 quadratic B-spline stencil offsets (shared by p2g_scan/g2p_scan)
     grid.py            grid_update: momentum normalise + gravity + damping; build_grid_x
     sort.py            morton_argsort, home_super_cell_id
-    init.py            get_particles: uniform particle initialisation
   cutile_p2g.py        cuTile arena-scatter P2G kernel + cutile_call bridge
   cuda/
     p2g_cuda.py        loads prebuilt .so + jax.ffi.register_ffi_target

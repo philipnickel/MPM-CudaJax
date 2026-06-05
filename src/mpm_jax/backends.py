@@ -37,7 +37,7 @@ from mpm_jax.p2g_scan import _p2g_scan
 
 # NOTE: the pure-JAX p2g/g2p/sort modules are imported eagerly (at import time,
 # outside any trace). They build module-level stencil constants (e.g.
-# weights.OFFSET_27); importing them lazily inside a Backend method would
+# p2g_scan.OFFSET_27); importing them lazily inside a Backend method would
 # run that module body *during* a jit trace and leak the constant as a tracer.
 
 

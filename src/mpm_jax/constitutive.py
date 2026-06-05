@@ -33,19 +33,12 @@ def stvk_elasticity_jacobi(E=2e6, nu=0.4):
     return jax.vmap(stress_single)
 
 
-# Name -> constitutive-factory registry. jelly wires StVK elasticity, with no
-# plasticity. (A neo-Hookean elastic stress was tried for jelly but dropped: its
-# log(J)/F^-T singularity blows up at fine grids on impact; StVK is polynomial in
-# F and stable.) Add a function and a config entry to extend it.
-REGISTRY = {
-    "StVKElasticityJacobi": stvk_elasticity_jacobi,
-}
+# Config name -> constitutive factory; only jelly's StVK stress is wired up.
+# (StVK, not neo-Hookean: the latter's 1/J stress blows up at fine grids on impact.)
+REGISTRY = {"StVKElasticityJacobi": stvk_elasticity_jacobi}
 
 
 def get_constitutive(cfg):
-    """Construct a constitutive fn from a config node: look up ``cfg['name']`` in
-    REGISTRY and pass the remaining keys as kwargs. ``dict(cfg)`` materialises
-    both a plain dict and an OmegaConf DictConfig."""
+    """Build a constitutive fn from a ``{name, **kwargs}`` config node."""
     params = dict(cfg)
-    name = params.pop("name")
-    return REGISTRY[name](**params)
+    return REGISTRY[params.pop("name")](**params)

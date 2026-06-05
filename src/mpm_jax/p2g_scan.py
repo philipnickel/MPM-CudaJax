@@ -19,7 +19,10 @@ The CUDA inline backends take the same HBM-saving idea further by running the
 import jax
 import jax.numpy as jnp
 
-from mpm_jax.blocks.weights import OFFSET_27
+# The 27 integer offsets of the 3x3x3 quadratic B-spline support, in lexicographic
+# (i, j, k) order over {0,1,2}^3 -- the order is load-bearing for the lax.scan and
+# per-axis weight indexing here and in g2p_scan.py (which imports OFFSET_27 from here).
+OFFSET_27 = jnp.indices((3, 3, 3)).reshape(3, -1).T.astype(jnp.int32)  # (27, 3)
 
 
 def _single_particle_one_stencil(

@@ -21,7 +21,7 @@ P2G implementation varies.
 import jax
 import jax.numpy as jnp
 
-from mpm_jax.blocks.weights import OFFSET_27
+from mpm_jax.p2g_scan import OFFSET_27
 
 
 def _weights_one_stencil(x_p, offset_int, inv_dx, dx, num_grids):
