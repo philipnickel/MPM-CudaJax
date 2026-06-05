@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import NamedTuple
 import jax
 import jax.numpy as jnp
@@ -11,21 +12,20 @@ class MPMState(NamedTuple):
     F: jax.Array      # (N, 3, 3) deformation gradient
 
 
+@dataclass(init=False)
 class MPMParams:
     """Derived runtime constants for the compiled MPM frame."""
 
-    __slots__ = (
-        "num_grids",
-        "dt",
-        "gravity",
-        "dx",
-        "inv_dx",
-        "clip_bound",
-        "damping",
-        "vol",
-        "p_mass",
-        "n_particles",
-    )
+    num_grids: int
+    dt: float
+    gravity: jax.Array
+    dx: float
+    inv_dx: float
+    clip_bound: float
+    damping: float
+    vol: float
+    p_mass: float
+    n_particles: int
 
     def __init__(self, sim):
         self.num_grids = int(sim.num_grids)
