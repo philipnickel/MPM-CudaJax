@@ -23,7 +23,7 @@ from typing import Any, NamedTuple
 
 import jax.numpy as jnp
 
-from mpm_jax.blocks.sort import home_super_cell_id, morton_argsort
+from mpm_jax.sort import home_super_cell_id, morton_argsort
 from mpm_jax.cuda import p2g_cuda
 from mpm_jax.cuda.p2g_cuda import (
     SUPPORTED_SC,

@@ -215,7 +215,7 @@ def cuda_p2g_v3_inline(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
 
     Identical kernel-side reduction as ``cuda_p2g_v2_inline``. Designed to
     be called on Morton-sorted particles (see
-    :func:`mpm_jax.blocks.sort.morton_argsort`) so adjacent warp lanes share
+    :func:`mpm_jax.sort.morton_argsort`) so adjacent warp lanes share
     stencil targets — the sort is what makes the warp reduction productive.
     """
     N = x.shape[0]

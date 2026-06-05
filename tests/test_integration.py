@@ -51,7 +51,6 @@ def test_elastic_simulation_10_frames():
     elasticity_fn = get_constitutive(
         OmegaConf.create({"name": "StVKElasticityJacobi", "E": 2e6, "nu": 0.4})
     )
-    plasticity_fn = None  # jelly: elastic, no plasticity
     state = MPMState(
         x=x0,
         v=jnp.broadcast_to(jnp.array([0.0, 0.0, -0.5]), (N, 3)).copy(),
@@ -61,7 +60,6 @@ def test_elastic_simulation_10_frames():
     frame = build_backend_frame(
         params,
         elasticity_fn,
-        plasticity_fn,
         pre_fn,
         post_fn,
         Backend(),
@@ -96,7 +94,6 @@ def test_outer_frame_jit_runs_multiple_frames():
     elasticity_fn = get_constitutive(
         OmegaConf.create({"name": "StVKElasticityJacobi", "E": 2e6, "nu": 0.4})
     )
-    plasticity_fn = None  # jelly: elastic, no plasticity
 
     state = MPMState(
         x=x0,
@@ -107,7 +104,6 @@ def test_outer_frame_jit_runs_multiple_frames():
     jit_frame = build_backend_frame(
         params,
         elasticity_fn,
-        plasticity_fn,
         pre_fn,
         post_fn,
         Backend(),

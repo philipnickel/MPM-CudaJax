@@ -24,7 +24,7 @@ import jax
 from omegaconf import DictConfig
 
 from mpm_jax.backends import PreparedSubstep
-from mpm_jax.blocks.grid import grid_update
+from mpm_jax.grid import grid_update
 from mpm_jax.solver import MPMSolver
 
 
@@ -43,7 +43,7 @@ def main(cfg: DictConfig):
     solver = MPMSolver(hydra.utils.instantiate(cfg.solver))
     p, be = solver.params, solver.backend
     pre_fn, post_fn = solver.pre_fn, solver.post_fn
-    elasticity_fn, plasticity_fn = solver.elasticity_fn, solver.plasticity_fn
+    elasticity_fn = solver.elasticity_fn
 
     # Advance to a representative steady state (the fused frame), then freeze it.
     for _ in range(2):
@@ -68,16 +68,12 @@ def main(cfg: DictConfig):
         return post_fn(grid_mv, grid_m, 0.0)
 
     @jax.jit
-    def g2p_phase(
-        state, stress, grid_v
-    ):  # weights + gather + F-update + advect + return-map
+    def g2p_phase(state, stress, grid_v):  # weights + gather + F-update + advect
         prepared = be.prepare(p, state, stress)
-        nx, nv, nC, nF = be.g2p(p, prepared, grid_v)
-        return nx, nv, nC, nF, plasticity_fn(nF)
+        return be.g2p(p, prepared, grid_v)
 
-    # bonus: isolate the two expensive "physics" kernels inside the phases
+    # bonus: isolate the elasticity (stress) kernel inside the phases
     elast = jax.jit(elasticity_fn)
-    plast = jax.jit(plasticity_fn)
 
     # produce each phase's representative input once
     grid_mv, grid_m, stress, state2 = p2g_phase(state)
@@ -90,7 +86,6 @@ def main(cfg: DictConfig):
     t_grid = _ms_per_call(grid_phase, (grid_mv, grid_m), K)
     t_g2p = _ms_per_call(g2p_phase, (state2, stress, grid_v), K)
     t_elast = _ms_per_call(elast, (state.F,), K)
-    t_plast = _ms_per_call(plast, (state2.F,), K)
     total = t_p2g + t_grid + t_g2p
 
     print(
@@ -100,7 +95,7 @@ def main(cfg: DictConfig):
     rows = [
         ("P2G  (BC + stress (StVK) + scatter)", t_p2g),
         ("Grid (normalize + gravity + BC)", t_grid),
-        ("G2P  (weights + gather + F + advect + plast)", t_g2p),
+        ("G2P  (weights + gather + F-update + advect)", t_g2p),
     ]
     for name, t in rows:
         print(f"  {name:46} {t:8.3f} ms   {t / total * 100:5.1f}%")
@@ -108,7 +103,6 @@ def main(cfg: DictConfig):
     print(f"  {'sum (unfused phases)':46} {total:8.3f} ms")
     print("\n  of which (isolated):")
     print(f"    {'elasticity / stress (StVK)':44} {t_elast:8.3f} ms")
-    print(f"    {'plasticity / return-mapping':44} {t_plast:8.3f} ms")
 
 
 if __name__ == "__main__":

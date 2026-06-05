@@ -6,7 +6,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from mpm_jax.blocks.grid import build_grid_x, grid_update
+from mpm_jax.grid import build_grid_x, grid_update
 from mpm_jax.boundary import build_boundary_fns
 from mpm_jax.constitutive import get_constitutive
 from mpm_jax.types import MPMParams, MPMState
@@ -23,12 +23,12 @@ def get_particles(n_particles, center, size):
 
 
 def build_backend_frame(
-    params, elasticity_fn, plasticity_fn, pre_fn, post_fn, backend, steps_per_frame
+    params, elasticity_fn, pre_fn, post_fn, backend, steps_per_frame
 ):
     """Build one JIT-compiled frame from a backend object.
 
     The frame owns the common MPM control flow (boundary conditions, elasticity,
-    grid update, optional plasticity, the substep loop). The backend owns only the
+    grid update, the substep loop). The backend owns only the
     P2G — ``backend.step`` orders the particles and scatters — and ``g2p``.
     The ``steps_per_frame`` substeps run as a single ``lax.fori_loop``.
     """
@@ -55,9 +55,6 @@ def build_backend_frame(
             with jax.named_scope(f"{backend.name}_g2p"):
                 new_x, new_v, new_C, new_F = backend.g2p(params, prepared, grid_v)
 
-            if plasticity_fn is not None:
-                with jax.named_scope("plasticity"):
-                    new_F = plasticity_fn(new_F)
             return MPMState(x=new_x, v=new_v, C=new_C, F=new_F)
 
         return jax.lax.fori_loop(0, steps_per_frame, lambda _, s: step_body(s), state)
@@ -121,16 +118,12 @@ class MPMSolver:
         self._init_state = init_state
         self.state = init_state
         self.elasticity_fn = get_constitutive(mat.elasticity)
-        self.plasticity_fn = (
-            get_constitutive(mat.plasticity) if "plasticity" in mat else None
-        )
         self.pre_fn = pre_fn
         self.post_fn = post_fn
         self.backend = backend
         self._frame = build_backend_frame(
             params,
             self.elasticity_fn,
-            self.plasticity_fn,
             pre_fn,
             post_fn,
             backend,

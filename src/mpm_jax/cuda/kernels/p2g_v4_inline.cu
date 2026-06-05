@@ -40,7 +40,7 @@
 //
 // Scalar attributes: dt, vol, p_mass, inv_dx, dx
 //
-// Home cell convention (matches `home_super_cell_id` in blocks/sort.py):
+// Home cell convention (matches `home_super_cell_id` in sort.py):
 //   For a particle at x, the stencil base node is
 //     base = floor(x * inv_dx - 0.5)
 //   and the center stencil node (offset (1,1,1)) is

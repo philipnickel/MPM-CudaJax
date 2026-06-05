@@ -105,9 +105,8 @@ src/mpm_jax/
   backends.py          Backend class hierarchy + build_backend
   p2g_scan.py          JAX baseline P2G: lax.scan over 27 offsets (defines OFFSET_27)
   g2p_scan.py          JAX baseline G2P: lax.scan over 27 offsets + MLS C=∇v (shared by ALL kernels)
-  blocks/              Pure-math building blocks (no JIT, no closures)
-    grid.py            grid_update: momentum normalise + gravity + damping; build_grid_x
-    sort.py            morton_argsort, home_super_cell_id
+  grid.py              grid_update: momentum normalise + gravity + damping; build_grid_x
+  sort.py              morton_argsort, home_super_cell_id
   cutile_p2g.py        cuTile arena-scatter P2G kernel + cutile_call bridge
   cuda/
     p2g_cuda.py        loads prebuilt .so + jax.ffi.register_ffi_target
@@ -132,7 +131,7 @@ Three embarrassingly parallel phases per substep:
 
 `MPMSolver` (in `src/mpm_jax/solver.py`) is a plain Python class wrapping the functional JAX core:
 
-- Built once from `params`, an `elasticity_fn`, `plasticity_fn`, boundary functions `pre_fn`/`post_fn`, a `Backend`, and `steps_per_frame`. Array state is mutated in place by the driver API; the backend, closures, and the compiled `_frame` are fixed for the solver's lifetime. The solver is never a JAX argument — only `state` (an `MPMState` pytree) is traced — so it needs no pytree machinery.
+- Built once from `params`, an `elasticity_fn`, boundary functions `pre_fn`/`post_fn`, a `Backend`, and `steps_per_frame`. Array state is mutated in place by the driver API; the backend, closures, and the compiled `_frame` are fixed for the solver's lifetime. The solver is never a JAX argument — only `state` (an `MPMState` pytree) is traced — so it needs no pytree machinery.
 - `stepped()` returns a new solver with advanced state. `step()` keeps the existing mutating driver API and advances one frame (= `steps_per_frame` substeps) by calling `_frame(self.state)`.
 - `solve(num_frames, on_frame=None)` loops `step()` with an optional IO callback.
 - The `steps_per_frame` substeps run inside `build_backend_frame` as a single `lax.fori_loop`.
@@ -223,7 +222,7 @@ CMake auto-detects the local GPU arch when `MPM_CUDA_ARCH` is unset.
 
 - **Sweeps must use Hydra multirun**, never a bash `for` loop. Either use a pre-baked sweep config (`-cn sweep_*`) or pass axes inline: `pixi run -e gpu python simulate.py -m sim.n_particles=5000,50000,200000 backend=jax_baseline,cuda_v1_inline,cuda_v2_inline benchmark=true`. Add new sweep configs under `conf/sweep_<name>.yaml`. Hydra puts each combination in its own `multirun/<date>/<run>/` subdir.
 - **Default to short benchmarks.** Steady-state ms/step is stable after the first frame (warmup), so `sim.num_frames=5` (50 substeps) gives reliable timings.
-- Single-particle functions live in `src/mpm_jax/blocks/`; vectorise via `jax.vmap`. Don't write batched code by hand — vmap is the contract.
+- Single-particle functions vectorise via `jax.vmap` (e.g. `constitutive.stvk_elasticity_jacobi` is `jax.vmap` of a single-3×3 stress). Don't write batched code by hand — vmap is the contract.
 - **Adding a new CUDA P2G kernel** (e.g. `cuda_vX_inline`) — only the P2G varies; G2P stays the JAX baseline:
   1. Add `src/mpm_jax/cuda/kernels/p2g_vX_inline.cu`.
   2. Add the kernel name to the `KERNELS` list in `CMakeLists.txt`.

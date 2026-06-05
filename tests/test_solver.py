@@ -2,7 +2,7 @@ import jax.numpy as jnp
 import numpy as np
 from omegaconf import OmegaConf
 from mpm_jax.types import MPMState, MPMParams
-from mpm_jax.blocks.grid import grid_update
+from mpm_jax.grid import grid_update
 
 
 def test_mpm_state_is_namedtuple():

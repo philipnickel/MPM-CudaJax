@@ -24,8 +24,8 @@ The main entry points are:
 - `src/mpm_jax/solver.py` - Equinox-based `MPMSolver`.
 - `src/mpm_jax/backends.py` - shared backend interface and JAX-owned frame
   loop.
-- `src/mpm_jax/blocks/` - pure math blocks for weights, P2G, G2P, grid update,
-  sorting, and initialization.
+- `src/mpm_jax/grid.py`, `sort.py` - pure-math helpers (grid update; Morton +
+  super-cell sorting).
 - `src/mpm_jax/warp_p2g.py` - Warp tiled kernel bridge helpers.
 - `src/mpm_jax/cuda/` - JAX FFI CUDA loading plus CUDA kernel sources.
 - `conf/` - Hydra config groups for simulation, materials, kernels, profiling,

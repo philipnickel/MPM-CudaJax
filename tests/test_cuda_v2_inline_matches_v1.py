@@ -80,7 +80,6 @@ def test_cuda_v2_inline_matches_v1_inline():
     # side without a cuSOLVER dependence.
     e_cfg = OmegaConf.create({"name": "StVKElasticityJacobi", "E": 2e6, "nu": 0.4})
     elasticity_fn = get_constitutive(e_cfg)
-    plasticity_fn = None
 
     state0 = MPMState(
         x=x0,
@@ -95,7 +94,6 @@ def test_cuda_v2_inline_matches_v1_inline():
     jit_v1 = build_backend_frame(
         params,
         elasticity_fn,
-        plasticity_fn,
         pre_fn,
         post_fn,
         build_backend("cuda_v1_inline", num_grids),
@@ -104,7 +102,6 @@ def test_cuda_v2_inline_matches_v1_inline():
     jit_v2 = build_backend_frame(
         params,
         elasticity_fn,
-        plasticity_fn,
         pre_fn,
         post_fn,
         build_backend("cuda_v2_inline", num_grids),

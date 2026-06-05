@@ -25,7 +25,7 @@ __device__ __forceinline__ void p2g_load_particle(
 }
 
 // Quadratic B-spline base node + fractional offset for a particle position.
-// home/base convention must stay matched to home_super_cell_id in blocks/sort.py.
+// home/base convention must stay matched to home_super_cell_id in sort.py.
 __device__ __forceinline__ void p2g_base_fx(
     const float px[3], float inv_dx, int base[3], float fx[3]) {
     for (int d = 0; d < 3; d++) {

@@ -302,7 +302,8 @@ MPM-CudaJax/
         ├── solver.py        # MPMSolver
         ├── constitutive.py  # StVK elastic stress (jelly material)
         ├── boundary.py      # sticky surface collider
-        ├── blocks/          # Pure math: weights, grid, sort, init
+        ├── grid.py          # grid_update + build_grid_x
+        ├── sort.py          # morton_argsort, home_super_cell_id
         ├── backends.py      # Backend interface + shared JAX-owned frame loop
         ├── cutile_p2g.py    # cuTile arena-scatter P2G kernel + jax bridge
         ├── cutile_autotune.py  # per-GPU occupancy autotune for the cuTile kernel
