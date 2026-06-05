@@ -2,7 +2,7 @@
 
 Runs the *standard benchmark physics* (``sim=benchmark``: 8M particles,
 num_grids=124, CFL-safe dt=5e-5, sticky floor) with the fast Morton-sorted
-CUDA P2G (``kernel=cuda_v3_inline``) and captures still PNGs at five
+CUDA P2G (``p2g=cuda_v3_inline``) and captures still PNGs at five
 physically-meaningful moments of the fall -> impact -> settle arc:
 
     initial -> impact-onset -> impact-peak -> impact-spread -> settled
@@ -39,6 +39,7 @@ REPO = os.path.dirname(os.path.abspath(__file__))
 def build_cfg(args):
     from hydra import compose, initialize_config_dir
     from hydra.core.global_hydra import GlobalHydra
+    import mpm_jax.zen_build  # noqa: F401  # registers the `solver` ConfigStore group before compose
 
     if GlobalHydra().is_initialized():
         GlobalHydra.instance().clear()
@@ -47,7 +48,7 @@ def build_cfg(args):
             config_name="config",
             overrides=[
                 "sim=benchmark",
-                "kernel=cuda_v3_inline",
+                "p2g=cuda_v3_inline",
                 "material=sand_jacobi",
             ],
         )
@@ -86,7 +87,7 @@ def run_arc(cfg, args, target_frames=None):
 
     ctr, sz = list(cfg.sim.center), list(cfg.sim.size)
     margin = (1.0 - float(sz[0])) / 2.0  # lateral gap to the (wall-free) grid edge
-    print(f"Building solver: kernel={cfg.kernel.name} n_particles={n:,} "
+    print(f"Building solver: p2g={cfg.p2g.name} n_particles={n:,} "
           f"num_grids={cfg.sim.num_grids} dx={1.0/float(cfg.sim.num_grids):.5f} dt={dt:g} "
           f"steps/frame={spf} frames={cfg.sim.num_frames}")
     print(f"  block center={ctr} size={sz} -> lateral margin to edge ~{margin:.3f} "

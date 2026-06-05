@@ -14,7 +14,7 @@ phases), not the optimized frame's internal split.
 Run (8M standard benchmark config):
 
     pixi run -e gpu python profile_phases.py -cn config sim=benchmark \
-        kernel=jax_baseline material=sand_jacobi
+        p2g=jax_baseline material=sand_jacobi
 """
 
 import time
@@ -90,7 +90,7 @@ def main(cfg: DictConfig):
     t_plast = _ms_per_call(plast, (state2.F,), K)
     total = t_p2g + t_grid + t_g2p
 
-    print(f"\nPer-phase timing — {cfg.kernel.name}, {int(cfg.sim.n_particles):,} particles "
+    print(f"\nPer-phase timing — {cfg.p2g.name}, {int(cfg.sim.n_particles):,} particles "
           f"(jit each phase separately, {K} iters, ms/substep):\n")
     rows = [("P2G  (BC + stress/SVD + scatter)", t_p2g),
             ("Grid (normalize + gravity + BC)", t_grid),
