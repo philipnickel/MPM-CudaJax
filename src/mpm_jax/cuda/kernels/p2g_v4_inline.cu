@@ -52,7 +52,6 @@
 #define SC 4                                   // super-cell width (in cells)
 #define TILE_DIM (SC + 2)                      // stencil-union half = 1 on each side
 #define TILE_SIZE (TILE_DIM * TILE_DIM * TILE_DIM)  // 216 nodes for SC=4
-#define STENCIL 27
 #define BLOCK_SIZE 256  // threads per super-cell block
 
 namespace ffi = xla::ffi;

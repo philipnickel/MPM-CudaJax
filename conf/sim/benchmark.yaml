@@ -1,15 +1,15 @@
 # Standard high-performance benchmark configuration.
-# Uses an even grid so JAX, inline CUDA, Warp baseline, and Warp tiled kernels
-# can all run the same apples-to-apples preset. This is close to the Taichi /
+# Uses an even grid so JAX, inline CUDA, and the super-cell-tiled cuTile/CUDA
+# kernels can all run the same apples-to-apples preset. This is close to the Taichi /
 # MLS-MPM 8 ppc setup: dx ~= 8.06e-3, particles in [0.1, 0.9]^3, 8M particles.
 #
 #   pixi run -e gpu python simulate.py -cn config sim=benchmark \
-#       kernel=cuda_v3_inline material=sand_jacobi benchmark=true
+#       p2g=cuda_v3_inline material=sand_jacobi benchmark=true
 num_frames: 1
 steps_per_frame: 10
 n_particles: 8000000
 initial_velocity: [0.0, 0.0, 0.0]
-num_grids: 124                # even grid required by super-cell tiled Warp kernels
+num_grids: 124                # even grid required by the super-cell-tiled cuTile/CUDA kernels
 dt: 5.0e-5                    # CFL: c=sqrt(E/rho)~45 m/s, dx=8e-3 -> dt_max~9e-5; 5e-5 is safe
 gravity: [0.0, 0.0, -9.8]
 rho: 1000.0

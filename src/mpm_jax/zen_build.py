@@ -1,9 +1,11 @@
-"""hydra-zen experiment: build the MPMSolver from config via `instantiate`.
+"""Declarative MPMSolver construction from config via hydra-zen `instantiate`.
 
-This is the declarative alternative to the imperative `registry.build_solver`:
-the construction graph is expressed as a tree of `hydra_zen.builds(...)` configs
-whose interpolations (`${sim.*}`, `${material.*}`, `${p2g.name}`) resolve
-against the composed Hydra config. `instantiate(cfg.solver)` then builds it.
+This module IS the solver construction path (`registry.build_solver` is just a
+re-export of `build_solver` below). The construction graph is expressed as a
+tree of `hydra_zen.builds(...)` configs whose interpolations (`${sim.*}`,
+`${material.*}`, `${p2g.name}`) resolve against the composed Hydra config, and
+it is registered as the `solver` config group so `instantiate(cfg.solver)`
+builds the solver.
 
 Two tiny adapters bridge the parts plain `instantiate` can't express:
 - `_boundary` reads `dx`/`p_mass` off the built `params` object (instantiate

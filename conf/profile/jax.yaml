@@ -15,7 +15,7 @@ host_tracer_level: 2
 # Defaults are off; flip from the CLI, e.g. profile.gpu.nvtx=true.
 gpu:
   nvtx: false               # gpu_enable_nvtx_tracking: capture Warp / NVTX-annotated CUDA ranges
-  cuda_graph_trace: false   # gpu_enable_cupti_activity_graph_trace: see inside CUDA graphs (cuda_graph=true)
+  cuda_graph_trace: false   # gpu_enable_cupti_activity_graph_trace: see inside CUDA graphs (command buffers are always on via the gpu env's XLA_FLAGS)
   graph_node_mapping: false # gpu_dump_graph_node_mapping: map graph nodes -> kernels
   max_activity_events: null # gpu_max_activity_api_events (null = CUPTI default 2*1024*1024); raise for long traces
   max_callback_events: null # gpu_max_callback_api_events

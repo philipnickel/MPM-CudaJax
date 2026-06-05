@@ -90,7 +90,7 @@ def test_cuda_p2g_variants_match_jax_scan():
 
 @pytest.mark.skipif(
     not _cutile_available(),
-    reason="cuTile/JAX backend requires a GPU, cuda-tile, and the CUDA G2P kernel library",
+    reason="cuTile/JAX backend requires a GPU and cuda-tile",
 )
 def test_cutile_p2g_matches_jax_scan():
     from mpm_jax.backends import build_backend, jax_baseline_backend

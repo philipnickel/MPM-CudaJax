@@ -20,17 +20,11 @@ from omegaconf import DictConfig, ListConfig, OmegaConf
 # Side-effect import: registers the `solver` ConfigStore group so the inherited
 # `- solver: default` default resolves at compose time (before @hydra.main runs).
 import mpm_jax.zen_build  # noqa: F401, E402
+from mpm_jax.backends import KERNEL_NAMES  # noqa: E402
 
 _UNSUPPORTED_ANALYZE_CONFIG_KEYS = {"configs"}
 _SCRIPT_NSIGHT_KEYS = {"phase", "write_json", "plot", "sweep", "configs", "analyze"}
-_P2G_KERNELS = {
-    "jax_baseline",
-    "cuda_v1_inline",
-    "cuda_v2_inline",
-    "cuda_v3_inline",
-    "cuda_v4_inline",
-    "cutile_v6_atomic_tile",
-}
+_P2G_KERNELS = set(KERNEL_NAMES)  # the supported P2G variants (single source of truth)
 _SPEED_OF_LIGHT_METRICS = [
     "gpu__time_duration.sum",
     "sm__throughput.avg.pct_of_peak_sustained_elapsed",
@@ -73,7 +67,6 @@ _SCHEDULER_METRICS = [
 ]
 _METRIC_PRESETS = {
     "time": ["gpu__time_duration.sum"],
-    "throughput": ["gpu__time_duration.sum"],
     "speed_of_light": _SPEED_OF_LIGHT_METRICS,
     "sol": _SPEED_OF_LIGHT_METRICS,
     # These Nsight Compute metric names were checked against NCU 2025.2.1.
@@ -621,7 +614,6 @@ def _prepare_nsight_child_python(run_dir: Path):
                 paths.append(path)
 
     os.environ["PYTHONPATH"] = os.pathsep.join(paths)
-    os.environ["NSPY_ORIGINAL_PYTHON"] = original_python
     sys.executable = str(wrapper)
 
 

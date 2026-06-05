@@ -45,11 +45,12 @@ pixi run -e gpu python simulate.py -cn config sim=benchmark \
 
 **Always use `pixi` to install, sync, and run.** Never invoke `pip`, `pip install`, `python -m pip`, or a bare `python` from the system interpreter — those will miss the project's locked environment.
 
-Three environments, defined in `[tool.pixi.environments]` in `pyproject.toml`:
+Four environments, defined in `[tool.pixi.environments]` in `pyproject.toml`:
 
 - `default` — CPU. JAX from conda-forge, no CUDA. Use on macOS / laptop / non-GPU CI.
 - `gpu` — Linux only (`linux-64`, `linux-aarch64`). **JAX runs on CUDA 13** (PyPI `jax[cuda13]`); `cuda-tile[tileiras]` (PyPI) is the cuTile runtime the `cutile_*` kernels require; `warp-lang==1.14.0` (now used only by the optional `warp_opengl`/`warp_usd` renderers, not by any P2G kernel) and `nsight-python` are PyPI too. conda-forge supplies the `cuda-nvcc` (**CUDA 12.x**) + `gxx` toolchain that compiles the FFI `.cu` kernels, plus `nsight-compute`. So the *build* toolchain is CUDA 12.x while the JAX *runtime* is CUDA 13 — they coexist and the FFI kernels load fine on the cuda13 runtime. A `[tool.pixi.feature.gpu.activation.env]` block sets `JAX_PLATFORMS=cuda` + a persistent JAX compile cache (`.jax_cache/`). No `module load` required on DTU HPC.
 - `hpc` — Linux only. JAX from PyPI with `cuda12-local` extras (links against the site's CUDA toolkit, loaded via `module load`). Use on clusters where conda-forge CUDA lags the driver. `nvcc` and `gxx` are provided by the module; `cuda-nvcc` is NOT included in this env.
+- `rendering` — `linux-64` only; `gpu` + a `rendering` feature (`imageio-ffmpeg`, OVRTX deps). Used for the `ovrtx_mp4` / `warp_usd` render backends in `simulate.py`; the core solver/benchmark path does not need it.
 
 Common patterns:
 
@@ -106,8 +107,7 @@ src/mpm_jax/
   p2g_scan.py          JAX baseline P2G: lax.scan over 27 offsets
   g2p_scan.py          JAX baseline G2P: lax.scan over 27 offsets + MLS C=∇v (shared by ALL kernels)
   blocks/              Pure-math building blocks (no JIT, no closures)
-    weights.py         compute_weights_and_indices: B-spline weights, grid indices
-    g2p.py             g2p: Grid-to-Particle gather + APIC update
+    weights.py         OFFSET_27: the 27 quadratic B-spline stencil offsets (shared by p2g_scan/g2p_scan)
     grid.py            grid_update: momentum normalise + gravity + damping; build_grid_x
     svd.py             3x3 Jacobi SVD, scatter-free (no .at[].set() -> XLA fuses it; used by StVK elasticity + Drucker-Prager plasticity)
     sort.py            morton_argsort, home_super_cell_id

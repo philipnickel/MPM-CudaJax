@@ -34,11 +34,6 @@ ARENA_NODES = ARENA_DIM ** 3              # 64 arena nodes (power of two)
 ARENA_PARTICLE_TILE = 16                     # particles per chunk (occupancy sweet spot)
 
 
-def is_available():
-    """Return True when cuTile's Python package can be imported."""
-    return True
-
-
 # ============================================================================
 # Shared tile-math helpers (metaprogramming: emit cuTile ops inline)
 # ============================================================================

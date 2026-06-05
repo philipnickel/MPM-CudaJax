@@ -11,11 +11,11 @@ of the ``(N, 27, *)`` blow-up that ``p2g_scan`` was written to avoid.
 This module mirrors ``p2g_scan``: ``lax.scan`` over the 27 offsets, gather one
 ``(N, 3)`` node per step, and accumulate the APIC reconstruction into the carry.
 Peak intermediate is ``(N, 3, 3)``; the ``(N, 27, 3, 3)`` never materialises.
-Weights are recomputed inline (identical math to
-``weights._single_particle_weights``), so ``prepare`` need not build the
-``(N, 27, *)`` weight arrays either. ``_g2p_scan_mls`` is the G2P shared by every
-registered kernel (jax_baseline and all CUDA/Warp P2G variants), so across the
-registry only the P2G implementation varies.
+Weights are recomputed inline (the standard quadratic B-spline math), so
+``prepare`` need not build the ``(N, 27, *)`` weight arrays either.
+``_g2p_scan_mls`` is the G2P shared by every registered kernel (jax_baseline,
+the CUDA variants, and the cuTile arena P2G), so across the registry only the
+P2G implementation varies.
 """
 
 import jax
