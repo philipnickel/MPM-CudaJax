@@ -1,9 +1,9 @@
 # MPM-CudaJax
 
 3D MLS-MPM (Moving Least Squares Material Point Method) solver in **JAX**
-with hand-written **CUDA** and **Warp** kernels. Investigates where
-JAX/XLA's automatic GPU compilation is sufficient and where custom kernels
-win.
+with hand-written **CUDA** kernels and an **NVIDIA cuTile** (tiled
+programming model) kernel. Investigates where JAX/XLA's automatic GPU
+compilation is sufficient and where custom kernels win.
 
 The solver uses a **registry-based class API**: `build_solver(cfg)` reads
 `KERNELS[kernel.name]`, constructs an `MPMSolver`, and returns it ready to call.
@@ -102,9 +102,9 @@ MPM_CUDA_ARCH=sm_90 pixi install -e hpc
 pixi run -e hpc python simulate.py ...
 ```
 
-**Warp 1.14:** The `gpu` env pins `warp-lang==1.14.0` from PyPI.
-conda-forge only carries 1.13, which has a tile-kernel bug on
-sm_120/Blackwell GPUs. The `glibc 2.34` system-requirement lets both the
+**Warp 1.14:** `warp-lang==1.14.0` is kept in the `gpu` env for the optional
+`warp_opengl` / `warp_usd` render backends (`warp.render`); it is no longer
+used for any P2G kernel. The `glibc 2.34` system-requirement lets both the
 `manylinux_2_34` aarch64 wheel (GH200) and the `manylinux_2_28` x86_64
 wheel (H100/A100) resolve correctly.
 
@@ -124,7 +124,8 @@ pixi run -e gpu python simulate.py kernel=cuda_v2_inline material=sand_jacobi   
 pixi run -e gpu python simulate.py kernel=cuda_v2_inline kernel.loop_kind=python material=sand_jacobi
 pixi run -e gpu python simulate.py kernel=cuda_v3_inline material=sand_jacobi         # Morton sort
 pixi run -e gpu python simulate.py kernel=cuda_v3_inline kernel.cuda_graph=true material=sand_jacobi
-pixi run -e gpu python simulate.py kernel=warp_v3_supercell_tile material=sand_jacobi benchmark=true
+pixi run -e gpu python simulate.py kernel=cuda_v4_inline material=sand_jacobi         # super-cell grid tile
+pixi run -e gpu python simulate.py kernel=cutile_v6_atomic_tile material=sand_jacobi benchmark=true  # cuTile (tiled model)
 
 # Override sim params
 pixi run -e gpu python simulate.py sim.n_particles=1000000 sim.num_grids=64
@@ -139,7 +140,7 @@ pixi run -e gpu python simulate.py sim.n_particles=1000000 sim.num_grids=64
 | `cuda_v2_inline` | CUDA warp-shuffle coalesced inline P2G + JAX baseline G2P. Default `loop_kind=fori`. Override with `kernel.loop_kind=python`. |
 | `cuda_v3_inline` | CUDA Morton-sorted inline P2G + JAX baseline G2P. `kernel.cuda_graph=true` enables XLA command-buffer (CUDA Graph) replay. |
 | `cuda_v4_inline` | CUDA super-cell-owned grid tile inline P2G + JAX baseline G2P. |
-| `warp_v3_supercell_tile` | Warp `jax_callable` super-cell tiled P2G (`wp.launch_tiled` + `tile_scatter_add`) + JAX baseline G2P. Default `kernel.graph_mode=jax`. |
+| `cutile_v6_atomic_tile` | NVIDIA cuTile (tiled programming model) P2G + JAX baseline G2P: SPGrid-style arena scatter — sort by SC=2 home super-cell, reduce each super-cell into a 4³ L1 arena, write back with one tile-coalesced `atomic_store_add` (no coloring). Occupancy autotuned per-GPU. Requires `cuda-tile`. |
 
 ## Architecture
 
@@ -158,7 +159,7 @@ Kernel selection is driven by `src/mpm_jax/registry.py`:
 - `build_solver(cfg)` reads the registry, builds all closures (particles, params, BCs, constitutive fns), and returns the fully initialised solver.
 - No if/elif dispatch in `simulate.py`; the routing is entirely in the registry.
 
-All solver variants now run through the same JAX-owned frame loop. The pure-JAX path compiles the entire frame (multiple substeps) as one XLA program. The inline CUDA variants (`cuda_v*_inline`) move per-particle stencil work into CUDA kernels so the `(N, 27, *)` intermediate tensors never materialize in HBM. The Warp variant uses the official Warp/JAX bridge (`jax_callable`) to launch a tiled Warp P2G kernel from inside that same JAX frame.
+All solver variants now run through the same JAX-owned frame loop. The pure-JAX path compiles the entire frame (multiple substeps) as one XLA program. The inline CUDA variants (`cuda_v*_inline`) move per-particle stencil work into CUDA kernels so the `(N, 27, *)` intermediate tensors never materialize in HBM. The cuTile variant (`cutile_v6_atomic_tile`) launches a tiled-programming-model P2G kernel from inside that same JAX frame via the cuTile/JAX bridge.
 
 ## Sweeps
 
@@ -230,9 +231,7 @@ jax.profiler.stop_trace()
 This workflow works for all registered kernels because they all enter the same
 JAX-owned frame loop through `build_solver(cfg)`. Pure JAX variants are shown as
 XLA-generated operations and fusion kernels. CUDA and cuTile variants appear as
-JAX/XLA custom calls plus their GPU kernels. Warp variants are visible through
-the outer JAX scope and CUDA activity, though the labels may be less direct
-because Warp launches run through `warp.jax_callable`.
+JAX/XLA custom calls plus their GPU kernels.
 
 **Nsight Python profiler** (per-stage kernel analysis, requires `nsight-python`):
 
@@ -249,7 +248,7 @@ Hydra config groups in `conf/`:
 |---|---|---|
 | `material` | `sand_jacobi` (default) | Constitutive model |
 | `sim` | `default` | n_particles, num_grids, dt, BCs, ... |
-| `kernel` | `jax_baseline` (default), `cuda_v*_inline`, `warp_v3_supercell_tile` | P2G implementation (G2P shared) |
+| `kernel` | `jax_baseline` (default), `cuda_v*_inline`, `cutile_v6_atomic_tile` | P2G implementation (G2P shared) |
 | `profile` | `none` (default), `jax` | Profiling backend |
 
 Top-level fields: `benchmark`, `tag`, `output_dir`. All overridable from CLI:
@@ -267,8 +266,8 @@ pixi run -e gpu python simulate.py kernel=cuda_v2_inline kernel.loop_kind=python
 # cuda_graph: enable XLA command-buffer capture for cuda_v3_inline
 pixi run -e gpu python simulate.py kernel=cuda_v3_inline kernel.cuda_graph=true
 
-# graph_mode for Warp's jax_callable bridge: jax (default) | none | warp | warp_staged | warp_staged_ex
-pixi run -e gpu python simulate.py kernel=warp_v3_supercell_tile kernel.graph_mode=jax
+# autotune: cutile_v6 occupancy is tuned per-GPU and cached; disable with autotune=false
+pixi run -e gpu python simulate.py kernel=cutile_v6_atomic_tile kernel.autotune=false
 ```
 
 ## Tests
@@ -299,7 +298,7 @@ MPM-CudaJax/
 │   ├── nsight_profile.yaml
 │   ├── material/            # sand_jacobi.yaml
 │   ├── sim/default.yaml
-│   ├── kernel/              # jax_baseline.yaml, cuda_v*.yaml, warp_*.yaml
+│   ├── kernel/              # jax_baseline.yaml, cuda_v*.yaml, cutile_v6_atomic_tile.yaml
 │   ├── profile/             # none.yaml, jax.yaml
 │   └── sweep_*.yaml
 └── src/
@@ -311,7 +310,8 @@ MPM-CudaJax/
         ├── boundary.py      # sticky surface collider
         ├── blocks/          # Pure math: weights, g2p, grid, svd, sort, init
         ├── backends.py      # Backend interface + shared JAX-owned frame loop
-        ├── warp_p2g.py      # Warp tiled P2G bridge + jax_callable wrapper
+        ├── cutile_p2g.py    # cuTile arena-scatter P2G kernel + jax bridge
+        ├── cutile_autotune.py  # per-GPU occupancy autotune for the cuTile kernel
         └── cuda/
             ├── p2g_cuda.py  # FFI registration + kernel wrappers
             ├── _lib/        # built .so files (gitignored)

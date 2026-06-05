@@ -110,10 +110,10 @@ def _arena_timing_inputs(super_cell_width):
 def tuned_atomic_tile_kernel(force=False):
     """Occupancy-autotuned ``_p2g_atomic_tile_kernel`` (cutile_v6) for this GPU."""
     from mpm_jax.cutile_p2g import (  # noqa: E402
-        V4_ARENA_SC, _p2g_atomic_tile_kernel, cutile_p2g_atomic_tile,
+        ARENA_SC, _p2g_atomic_tile_kernel, cutile_p2g_atomic_tile,
     )
 
-    xs, vs, cs, ss, cell_start, g, inv_dx = _arena_timing_inputs(V4_ARENA_SC)
+    xs, vs, cs, ss, cell_start, g, inv_dx = _arena_timing_inputs(ARENA_SC)
 
     def make_timing_fn(kernel):
         return jax.jit(lambda: cutile_p2g_atomic_tile(

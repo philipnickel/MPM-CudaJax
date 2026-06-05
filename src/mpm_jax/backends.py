@@ -222,64 +222,6 @@ def cuda_v2_backend(**_opts):
     )
 
 
-def _cutile_arena_prepare(params, state, stress):
-    """Sort particles by home super-cell at the arena width (SC=2) and build the
-    CSR ``cell_start`` over (G/SC)**3 super-cells."""
-    from mpm_jax.cutile_p2g import V4_ARENA_SC  # pylint: disable=import-outside-toplevel
-    from mpm_jax.blocks.sort import home_super_cell_id  # pylint: disable=import-outside-toplevel
-
-    super_id = home_super_cell_id(state.x, params.inv_dx, params.num_grids, V4_ARENA_SC)
-    order = jnp.argsort(super_id)
-    super_id_sorted = super_id[order]
-    cell_start = jnp.searchsorted(
-        super_id_sorted, _supercell_boundaries(params, V4_ARENA_SC)
-    ).astype(jnp.int32)
-    return PreparedSubstep(
-        state.x[order], state.v[order], state.C[order], state.F[order],
-        stress[order], cell_start=cell_start,
-    )
-
-
-def _make_cutile_atomic_tile_p2g(kernel):
-    def p2g(params, prepared):
-        from mpm_jax.cutile_p2g import cutile_p2g_atomic_tile  # pylint: disable=import-outside-toplevel
-
-        return cutile_p2g_atomic_tile(
-            prepared.x, prepared.v, prepared.C, prepared.stress,
-            prepared.cell_start, params.num_grids, params.dt, params.vol, params.p_mass,
-            params.inv_dx, params.dx, kernel=kernel,
-        )
-
-    return p2g
-
-
-def cutile_v6_backend(*, num_grids=None, autotune=True, **_opts):
-    """Arena P2G whose write-back is a single tile-coalesced atomic_store_add per
-    block (no coloring, one launch). Same SC=2 sort/reduction as v4. The occupancy
-    hint is autotuned per-GPU and cached (``autotune=False`` skips it -> compiler
-    default; occupancy does not affect results, only speed)."""
-    from mpm_jax.cutile_p2g import V4_ARENA_SC  # pylint: disable=import-outside-toplevel
-
-    if num_grids is not None and num_grids % V4_ARENA_SC != 0:
-        raise RuntimeError(
-            f"cutile_v6_atomic_tile requires num_grids ({num_grids}) divisible by "
-            f"arena_super_cell ({V4_ARENA_SC})."
-        )
-    _require_cutile()
-    kernel = None
-    if autotune:
-        from mpm_jax.cutile_autotune import tuned_atomic_tile_kernel  # pylint: disable=import-outside-toplevel
-
-        kernel = tuned_atomic_tile_kernel()
-    return Backend(
-        name="cutile_v6_atomic_tile",
-        prepare=_cutile_arena_prepare,
-        p2g=_make_cutile_atomic_tile_p2g(kernel),
-        g2p=_make_jax_scan_g2p_mls(),
-        loop_kind="fori",
-    )
-
-
 def _morton_prepare(params, state, stress):
     from mpm_jax.blocks.sort import morton_argsort  # pylint: disable=import-outside-toplevel
 
@@ -347,6 +289,66 @@ def cuda_v4_backend(**_opts):
         name="cuda_v4_inline",
         prepare=_cuda_v4_prepare,
         p2g=_cuda_v4_p2g,
+        g2p=_make_jax_scan_g2p_mls(),
+        loop_kind="fori",
+    )
+
+
+# --- cuTile (tiled programming model) ---------------------------------------
+def _cutile_arena_prepare(params, state, stress):
+    """Sort particles by home super-cell at the arena width (SC=2) and build the
+    CSR ``cell_start`` over (G/SC)**3 super-cells."""
+    from mpm_jax.cutile_p2g import ARENA_SC  # pylint: disable=import-outside-toplevel
+    from mpm_jax.blocks.sort import home_super_cell_id  # pylint: disable=import-outside-toplevel
+
+    super_id = home_super_cell_id(state.x, params.inv_dx, params.num_grids, ARENA_SC)
+    order = jnp.argsort(super_id)
+    super_id_sorted = super_id[order]
+    cell_start = jnp.searchsorted(
+        super_id_sorted, _supercell_boundaries(params, ARENA_SC)
+    ).astype(jnp.int32)
+    return PreparedSubstep(
+        state.x[order], state.v[order], state.C[order], state.F[order],
+        stress[order], cell_start=cell_start,
+    )
+
+
+def _make_cutile_atomic_tile_p2g(kernel):
+    def p2g(params, prepared):
+        from mpm_jax.cutile_p2g import cutile_p2g_atomic_tile  # pylint: disable=import-outside-toplevel
+
+        return cutile_p2g_atomic_tile(
+            prepared.x, prepared.v, prepared.C, prepared.stress,
+            prepared.cell_start, params.num_grids, params.dt, params.vol, params.p_mass,
+            params.inv_dx, params.dx, kernel=kernel,
+        )
+
+    return p2g
+
+
+def cutile_v6_backend(*, num_grids=None, autotune=True, **_opts):
+    """Arena P2G whose write-back is a single tile-coalesced atomic_store_add per
+    block (no coloring, one launch): sort by SC=2 home super-cell, reduce each
+    super-cell into a 4**3 arena, then one atomic_store_add per arena. The
+    occupancy hint is autotuned per-GPU and cached (``autotune=False`` skips it ->
+    compiler default; occupancy does not affect results, only speed)."""
+    from mpm_jax.cutile_p2g import ARENA_SC  # pylint: disable=import-outside-toplevel
+
+    if num_grids is not None and num_grids % ARENA_SC != 0:
+        raise RuntimeError(
+            f"cutile_v6_atomic_tile requires num_grids ({num_grids}) divisible by "
+            f"arena_super_cell ({ARENA_SC})."
+        )
+    _require_cutile()
+    kernel = None
+    if autotune:
+        from mpm_jax.cutile_autotune import tuned_atomic_tile_kernel  # pylint: disable=import-outside-toplevel
+
+        kernel = tuned_atomic_tile_kernel()
+    return Backend(
+        name="cutile_v6_atomic_tile",
+        prepare=_cutile_arena_prepare,
+        p2g=_make_cutile_atomic_tile_p2g(kernel),
         g2p=_make_jax_scan_g2p_mls(),
         loop_kind="fori",
     )

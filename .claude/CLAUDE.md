@@ -1,6 +1,6 @@
 # MPM-CudaJax
 
-3D MLS-MPM (Moving Least Squares Material Point Method) solver in **JAX**, progressively optimised with hand-written **CUDA** kernels (via JAX FFI) and, as an alternative, an **NVIDIA Warp** (tiled programming model) implementation. The project investigates three questions in sequence: where JAX/XLA's automatic GPU compilation is sufficient, where custom CUDA kernels are needed, and whether the tiled programming model (Warp) can match or beat them.
+3D MLS-MPM (Moving Least Squares Material Point Method) solver in **JAX**, progressively optimised with hand-written **CUDA** kernels (via JAX FFI) and, as an alternative, an **NVIDIA cuTile** (tiled programming model) implementation. The project investigates three questions in sequence: where JAX/XLA's automatic GPU compilation is sufficient, where custom CUDA kernels are needed, and whether the tiled programming model (cuTile) can match or beat them.
 
 ## Project narrative & analysis method
 
@@ -11,7 +11,7 @@ This is a benchmarking/investigation project; the code is shaped by the followin
 1. **Start in JAX.** Implement the full MLS-MPM timestep in pure JAX/XLA (`kernel=jax_baseline`) — the baseline. It scans over the 27 stencil offsets for **both** P2G and G2P (so neither `(N, 27, *)` intermediate materialises), uses the unified MLS-MPM G2P (the APIC affine `C` doubles as ∇v), and a scatter-free Jacobi SVD for stress + plasticity. **Every other variant reuses this exact JAX G2P (`_make_jax_scan_g2p_mls`), so across the registry only the P2G implementation varies.**
 2. **Profile to find the bottlenecks.** Use the JAX profiler trace (`profile=jax`) to locate the *canonical MPM bottlenecks* — chiefly the P2G scatter and the `(N, 27, *)` stencil materialisation.
 3. **Optimise the P2G with custom CUDA.** JAX FFI lets us drop hand-written CUDA **P2G** kernels in (`cuda_v1..v4_inline`) while the rest of the timestep — G2P, grid, constitutive — stays the JAX baseline. Holding G2P fixed isolates the P2G question: "where is XLA's scatter enough vs. where does a custom kernel win?"
-4. **Try a different programming model — tiled (Warp).** Finally, investigate whether the **tiled programming model** (NVIDIA Warp) can reach similar or better P2G performance while keeping the same JAX-owned frame loop. The Warp path is `warp_v3_supercell_tile`: JAX computes stress, sorts particles by super-cell, updates the grid, and runs the **same JAX baseline G2P**; Warp owns only the tiled P2G kernel via the official `warp.jax_callable` bridge.
+4. **Try a different programming model — tiled (cuTile).** Finally, investigate whether the **tiled programming model** (NVIDIA cuTile) can reach similar or better P2G performance while keeping the same JAX-owned frame loop. The cuTile path is `cutile_v6_atomic_tile`: JAX computes stress, sorts particles by super-cell, updates the grid, and runs the **same JAX baseline G2P**; cuTile owns only the tiled P2G kernel (an SPGrid-style arena scatter — reduce each SC=2 super-cell into a 4³ L1 arena, then one tile-coalesced `atomic_store_add` per arena) via the cuTile/JAX bridge. At the standard 8M-particle benchmark it is the fastest P2G in the registry, ahead of the hand-written CUDA kernels. (An NVIDIA Warp tiled path was also explored and then dropped — it was slower than both cuTile and the CUDA kernels at this resolution.)
 
 **The analysis method (applied to every variant, in this order):**
 
@@ -24,7 +24,7 @@ This is a benchmarking/investigation project; the code is shaped by the followin
 All performance comparisons use one fixed, well-resolved configuration (adapted from the Taichi / MLS-MPM high-performance benchmark) so numbers are comparable across variants and architectures **and the simulation stays numerically stable** — under-resolution (too few particles per cell) makes MLS-MPM go unstable, which corrupts wall-clock timings (the falling material explodes, particles clamp to the bounds and cluster, and the atomic-scatter P2G becomes contention-bound; see below).
 
 - **8 particles per cell** — the MLS-MPM resolution sweet spot (2³ per cell). Do not benchmark below this.
-- **∆x = 8×10⁻³** → `sim.num_grids = 125` (the solver uses `dx = 1/num_grids`). The particle-filled region then spans **100³ active cells**. (The committed `sim=benchmark` preset uses `num_grids = 124`, an even grid required by the super-cell-tiled Warp/CUDA kernels.)
+- **∆x = 8×10⁻³** → `sim.num_grids = 125` (the solver uses `dx = 1/num_grids`). The particle-filled region then spans **100³ active cells**. (The committed `sim=benchmark` preset uses `num_grids = 124`, an even grid required by the super-cell-tiled cuTile/CUDA kernels.)
 - **Particles uniformly sampled in [0.1, 0.9]³** → `sim.center = [0.5, 0.5, 0.5]`, region side 0.8. 100³ active cells × 8 ppc = **8 M particles** → `sim.n_particles = 8_000_000`.
 - **APIC transfer** (codebase default) + **StVK/Drucker-Prager sand** (`material=sand_jacobi`).
 - Per-particle volume follows the region: `vol = 0.8³ / N` (`make_params` computes `vol = prod(sim.size)/n`, so set `sim.size=[0.8,0.8,0.8]`).
@@ -48,7 +48,7 @@ pixi run -e gpu python simulate.py -cn config sim=benchmark \
 Three environments, defined in `[tool.pixi.environments]` in `pyproject.toml`:
 
 - `default` — CPU. JAX from conda-forge, no CUDA. Use on macOS / laptop / non-GPU CI.
-- `gpu` — Linux only (`linux-64`, `linux-aarch64`). **JAX runs on CUDA 13** (PyPI `jax[cuda13]`); `cuda-tile[tileiras]` (PyPI) is the cuTile runtime the `cutile_*` kernels require; `warp-lang==1.14.0` and `nsight-python` are PyPI too. conda-forge supplies the `cuda-nvcc` (**CUDA 12.x**) + `gxx` toolchain that compiles the FFI `.cu` kernels, plus `nsight-compute`. So the *build* toolchain is CUDA 12.x while the JAX *runtime* is CUDA 13 — they coexist and the FFI kernels load fine on the cuda13 runtime. A `[tool.pixi.feature.gpu.activation.env]` block sets `JAX_PLATFORMS=cuda` + a persistent JAX compile cache (`.jax_cache/`). No `module load` required on DTU HPC.
+- `gpu` — Linux only (`linux-64`, `linux-aarch64`). **JAX runs on CUDA 13** (PyPI `jax[cuda13]`); `cuda-tile[tileiras]` (PyPI) is the cuTile runtime the `cutile_*` kernels require; `warp-lang==1.14.0` (now used only by the optional `warp_opengl`/`warp_usd` renderers, not by any P2G kernel) and `nsight-python` are PyPI too. conda-forge supplies the `cuda-nvcc` (**CUDA 12.x**) + `gxx` toolchain that compiles the FFI `.cu` kernels, plus `nsight-compute`. So the *build* toolchain is CUDA 12.x while the JAX *runtime* is CUDA 13 — they coexist and the FFI kernels load fine on the cuda13 runtime. A `[tool.pixi.feature.gpu.activation.env]` block sets `JAX_PLATFORMS=cuda` + a persistent JAX compile cache (`.jax_cache/`). No `module load` required on DTU HPC.
 - `hpc` — Linux only. JAX from PyPI with `cuda12-local` extras (links against the site's CUDA toolkit, loaded via `module load`). Use on clusters where conda-forge CUDA lags the driver. `nvcc` and `gxx` are provided by the module; `cuda-nvcc` is NOT included in this env.
 
 Common patterns:
@@ -91,7 +91,7 @@ conf/                  Hydra config groups
   nsight_profile.yaml  top-level defaults for profile_nsight.py
   material/            sand_jacobi.yaml  (constitutive model)
   sim/default.yaml     n_particles, num_grids, dt, BCs, ...
-  kernel/              jax_baseline.yaml, cuda_v*.yaml, warp_*.yaml (P2G impl)
+  kernel/              jax_baseline.yaml, cuda_v*.yaml, cutile_v6_atomic_tile.yaml (P2G impl)
   profile/             none.yaml, jax.yaml
   sweep_*.yaml         pre-baked Hydra multirun sweeps
 src/mpm_jax/
@@ -111,7 +111,8 @@ src/mpm_jax/
     svd.py             3x3 Jacobi SVD, scatter-free (no .at[].set() -> XLA fuses it; used by StVK elasticity + Drucker-Prager plasticity)
     sort.py            morton_argsort, home_super_cell_id
     init.py            get_particles: uniform particle initialisation
-  warp_p2g.py          Warp tiled P2G kernel + jax_callable bridge
+  cutile_p2g.py        cuTile arena-scatter P2G kernel + cutile_call bridge
+  cutile_autotune.py   per-GPU occupancy autotune for the cuTile P2G kernel
   cuda/
     p2g_cuda.py        loads prebuilt .so + jax.ffi.register_ffi_target
     _lib/              prebuilt .so files (gitignored, populated by CMake)
@@ -155,14 +156,11 @@ Current kernel names:
 | `cuda_v2_inline` | MPMSolver | CUDA warp-shuffle coalesced inline P2G + JAX baseline G2P; default `loop_kind=fori` |
 | `cuda_v3_inline` | MPMSolver | CUDA Morton-sorted inline P2G + JAX baseline G2P; `cuda_graph=true` enables XLA command-buffer replay |
 | `cuda_v4_inline` | MPMSolver | CUDA super-cell-owned grid tile inline P2G + JAX baseline G2P |
-| `cutile_v1_atomic` | MPMSolver | NVIDIA cuTile P2G (atomic scatter) + JAX baseline G2P. Requires `cuda-tile` |
-| `cutile_v2_supercell_reduce` | MPMSolver | cuTile super-cell tile-reduce P2G + JAX baseline G2P. Requires `cuda-tile` |
-| `warp_v3_supercell_tile` | MPMSolver | Warp `jax_callable` super-cell tiled P2G + JAX baseline G2P |
-| `warp_v4_hashgrid_gather` | MPMSolver | Warp hash-grid gather P2G + JAX baseline G2P |
+| `cutile_v6_atomic_tile` | MPMSolver | NVIDIA cuTile (tiled programming model) P2G + JAX baseline G2P: SPGrid-style arena scatter (SC=2 super-cell → 4³ L1 arena → one tile-coalesced `atomic_store_add`, no coloring), occupancy autotuned per-GPU. Fastest P2G in the registry. Requires `cuda-tile` |
 
 Material baseline:
 - `material=sand_jacobi` is the default JAX/CUDA material path: StVK elasticity + Drucker-Prager plasticity, both using the in-repo Jacobi SVD.
-- The Warp backend is part of the same JAX loop as the CUDA/JAX variants, so `profile=jax` and ordinary benchmark timing apply.
+- The cuTile backend is part of the same JAX loop as the CUDA/JAX variants, so `profile=jax` and ordinary benchmark timing apply.
 
 ## Common commands
 
@@ -179,7 +177,8 @@ pixi run -e gpu python simulate.py kernel=cuda_v1_inline material=sand_jacobi   
 pixi run -e gpu python simulate.py kernel=cuda_v2_inline material=sand_jacobi         # warp-shuffle CUDA (fori loop)
 pixi run -e gpu python simulate.py kernel=cuda_v3_inline material=sand_jacobi         # Morton-sorted CUDA
 pixi run -e gpu python simulate.py kernel=cuda_v3_inline cuda_graph=true material=sand_jacobi  # with XLA CUDA graphs
-pixi run -e gpu python simulate.py kernel=warp_v3_supercell_tile material=sand_jacobi benchmark=true
+pixi run -e gpu python simulate.py kernel=cuda_v4_inline material=sand_jacobi         # super-cell grid tile CUDA
+pixi run -e gpu python simulate.py kernel=cutile_v6_atomic_tile material=sand_jacobi benchmark=true  # cuTile tiled P2G
 
 # loop_kind override (python = unrolled, fori = lax.fori_loop; fori is the default)
 pixi run -e gpu python simulate.py kernel=cuda_v2_inline kernel.loop_kind=python
@@ -228,7 +227,7 @@ pixi run -e hpc python simulate.py ...
 
 CMake auto-detects the local GPU arch when `MPM_CUDA_ARCH` is unset.
 
-**Warp 1.14 note:** The `gpu` env pins `warp-lang==1.14.0` from PyPI (conda-forge only carries 1.13, which has a tile-kernel bug on sm_120/Blackwell). `libc = { family = "glibc", version = "2.34" }` in `pyproject.toml` lets both the `manylinux_2_34` aarch64 wheel (GH200) and the `manylinux_2_28` x86_64 wheel (H100/A100) resolve correctly.
+**Warp 1.14 note:** `warp-lang==1.14.0` (PyPI) is kept in the `gpu` env only for the optional `warp_opengl`/`warp_usd` render backends (`warp.render`); no P2G kernel uses Warp anymore. `libc = { family = "glibc", version = "2.34" }` in `pyproject.toml` lets both the `manylinux_2_34` aarch64 wheel (GH200) and the `manylinux_2_28` x86_64 wheel (H100/A100) resolve correctly.
 
 ## Conventions
 
@@ -243,7 +242,7 @@ CMake auto-detects the local GPU arch when `MPM_CUDA_ARCH` is unset.
   5. Register it in `src/mpm_jax/registry.py` `KERNELS` dict as `KernelSpec(MPMSolver, cuda_vX_backend)`.
   6. Add `conf/kernel/cuda_vX_inline.yaml`.
   7. Rebuild: `pixi reinstall mpm-cudajax`.
-- **Adding a new Warp-in-JAX kernel:** put the Warp operation/bridge in a dedicated module, expose it through a `Backend` factory in `src/mpm_jax/backends.py`, and register that factory.
+- **Adding a new cuTile-in-JAX kernel:** put the cuTile kernel + `cutile_call` bridge in a dedicated module (see `cutile_p2g.py`), expose it through a `Backend` factory in `src/mpm_jax/backends.py` (set `g2p=_make_jax_scan_g2p_mls()` so only P2G differs), and register that factory in `registry.py`.
 - Boundary conditions and constitutive models are registry-based (`REGISTRY` dict in `constitutive.py`, `build_boundary_fns` in `boundary.py`); add a function and a config entry.
 - **No `block_until_ready` inside the timed region in benchmark mode.** Both timing modes dispatch all frames back-to-back and sync exactly once after the loop; elapsed/num_frames is the average. Per-stage breakdown comes from `profile=jax` (TensorBoard trace) or `profile_nsight.py`, not from `simulate.py`'s output.
 - `simulate.py` enables XLA CUDA graph capture for `kernel=cuda_v3_inline cuda_graph=true` by setting `XLA_FLAGS` before JAX is imported. This must happen before any `import jax` in the process.

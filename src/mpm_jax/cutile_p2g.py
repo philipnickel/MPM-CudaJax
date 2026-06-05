@@ -20,17 +20,18 @@ import cuda.tile as ct
 from cuda.tile.jax import InputOutput, cutile_call
 
 
-# --- arena (colored/atomic scatter, atomic-free reduction, no read redundancy) ---
+# --- arena scatter (atomic-free reduction, single tile-coalesced atomic write) ---
 # SPGrid-style: each block reduces its OWN super-cell's particles into a padded
-# local arena (L1-resident), then writes the arena back to the global grid.
+# local arena (L1-resident), then writes the arena back to the global grid with
+# one tile-coalesced atomic_store_add (no coloring, no read redundancy).
 #
 # Uses a SMALL super-cell (SC=2) so the arena is exactly 4**3 = 64 nodes -- a
 # clean power-of-two tile with great occupancy, where each particle is read only
 # ONCE (no gather redundancy) and evaluated against 64 nodes.
-V4_ARENA_SC = 2                                 # arena super-cell width
-V4_ARENA_DIM = V4_ARENA_SC + 2                  # 4 nodes per axis (SC + 1 apron each side)
-V4_ARENA_NODES = V4_ARENA_DIM ** 3              # 64 arena nodes (power of two)
-V4_ARENA_PARTICLE_TILE = 16                     # particles per chunk (occupancy sweet spot)
+ARENA_SC = 2                                 # arena super-cell width
+ARENA_DIM = ARENA_SC + 2                  # 4 nodes per axis (SC + 1 apron each side)
+ARENA_NODES = ARENA_DIM ** 3              # 64 arena nodes (power of two)
+ARENA_PARTICLE_TILE = 16                     # particles per chunk (occupancy sweet spot)
 
 
 def is_available():
@@ -190,8 +191,8 @@ def _p2g_atomic_tile_kernel(
     inv_dx: ct.Constant[float], dx: ct.Constant[float],
     particle_tile: ct.Constant[int], node_tile: ct.Constant[int],
 ):
-    SC = V4_ARENA_SC
-    DIM = V4_ARENA_DIM
+    SC = ARENA_SC
+    DIM = ARENA_DIM
     Gs = G // SC
     si = ct.bid(0)
     sj = ct.bid(1)
@@ -257,7 +258,7 @@ def cutile_p2g_atomic_tile(
     g = int(num_grids)
     g3 = g ** 3
     gp = g + 2                       # 1-node halo on each side
-    gs = g // V4_ARENA_SC
+    gs = g // ARENA_SC
     x_flat = x.reshape(-1)
     v_flat = v.reshape(-1)
     C_flat = C.reshape(-1)
@@ -273,7 +274,7 @@ def cutile_p2g_atomic_tile(
             x_flat, v_flat, C_flat, stress_flat, cell_start,
             InputOutput(grid_mv), InputOutput(grid_m),
             g, float(dt), float(vol), float(p_mass), float(inv_dx), float(dx),
-            V4_ARENA_PARTICLE_TILE, V4_ARENA_NODES,
+            ARENA_PARTICLE_TILE, ARENA_NODES,
         ),
     )
     # Strip the halo -> real (G**3, 3) / (G**3,) grids.
