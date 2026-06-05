@@ -2,7 +2,7 @@
 #
 # Example:
 #   pixi run -e gpu python profile_nsight.py -cn nsight_profile \
-#     backend=jax_baseline material=sand_jacobi nsight.phase=p2g sim.n_particles=65536
+#     backend=jax_baseline material=jelly nsight.phase=p2g sim.n_particles=65536
 defaults:
   - config
   - _self_

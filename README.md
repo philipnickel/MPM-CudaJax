@@ -28,21 +28,21 @@ cd MPM-CudaJax
 pixi install
 pixi run python simulate.py sim.num_frames=20
 ```
-A sand block falls onto a sticky floor and renders to
-`output/sand_jacobi_jax_v1_5.gif`. With `sim.num_frames=20` it takes a few seconds.
+A jelly block falls onto a sticky floor and renders to
+`output/jelly_jax_v1_5.gif`. With `sim.num_frames=20` it takes a few seconds.
 
 **Have an NVIDIA GPU (Linux)?** Install the `gpu` env (this also builds
 the custom CUDA kernels via CMake — `nvcc` and `gxx` ship from
 conda-forge inside the env, no system module load needed):
 ```bash
 pixi install -e gpu
-pixi run -e gpu python simulate.py backend=cuda_v3_inline material=sand_jacobi
+pixi run -e gpu python simulate.py backend=cuda_v3_inline material=jelly
 ```
 
 To benchmark instead of rendering:
 ```bash
 pixi run -e gpu python simulate.py \
-    backend=cuda_v3_inline material=sand_jacobi \
+    backend=cuda_v3_inline material=jelly \
     sim.n_particles=500000 sim.num_grids=64 sim.num_frames=15 \
     benchmark=true
 ```
@@ -120,11 +120,11 @@ pixi run -e gpu python simulate.py benchmark=true
 
 # Pick a kernel
 pixi run -e gpu python simulate.py backend=jax_baseline                                 # JAX/XLA baseline (scan P2G + MLS G2P)
-pixi run -e gpu python simulate.py backend=cuda_v1_inline material=sand_jacobi
-pixi run -e gpu python simulate.py backend=cuda_v2_inline material=sand_jacobi         # warp-shuffle coalescing
-pixi run -e gpu python simulate.py backend=cuda_v3_inline material=sand_jacobi         # Morton sort
-pixi run -e gpu python simulate.py backend=cuda_v4_inline material=sand_jacobi         # super-cell grid tile
-pixi run -e gpu python simulate.py backend=cutile_v6_atomic_tile material=sand_jacobi benchmark=true  # cuTile (tiled model)
+pixi run -e gpu python simulate.py backend=cuda_v1_inline material=jelly
+pixi run -e gpu python simulate.py backend=cuda_v2_inline material=jelly         # warp-shuffle coalescing
+pixi run -e gpu python simulate.py backend=cuda_v3_inline material=jelly         # Morton sort
+pixi run -e gpu python simulate.py backend=cuda_v4_inline material=jelly         # super-cell grid tile
+pixi run -e gpu python simulate.py backend=cutile_v6_atomic_tile material=jelly benchmark=true  # cuTile (tiled model)
 
 # Override sim params
 pixi run -e gpu python simulate.py sim.n_particles=1000000 sim.num_grids=64
@@ -134,7 +134,7 @@ pixi run -e gpu python simulate.py sim.n_particles=1000000 sim.num_grids=64
 
 | `backend=` | What it does |
 |---|---|
-| `jax_baseline` | The JAX/XLA baseline: `lax.scan` over the 27 offsets for **both** P2G and G2P, unified MLS-MPM G2P (APIC affine `C` reused as ∇v), scatter-free Jacobi SVD. Every other kernel reuses this G2P, so only the P2G varies. |
+| `jax_baseline` | The JAX/XLA baseline: `lax.scan` over the 27 offsets for **both** P2G and G2P, unified MLS-MPM G2P (APIC affine `C` reused as ∇v), closed-form StVK stress. Every other kernel reuses this G2P, so only the P2G varies. |
 | `cuda_v1_inline` | CUDA inline-weight P2G (one thread/particle, global `atomicAdd`) + JAX baseline G2P. |
 | `cuda_v2_inline` | CUDA warp-shuffle coalesced inline P2G + JAX baseline G2P. |
 | `cuda_v3_inline` | CUDA Morton-sorted inline P2G + JAX baseline G2P. (XLA command-buffer / CUDA-Graph capture is on for every kernel via the gpu env's `XLA_FLAGS`.) |
@@ -145,7 +145,7 @@ pixi run -e gpu python simulate.py sim.n_particles=1000000 sim.num_grids=64
 
 Three embarrassingly parallel phases per timestep:
 
-1. **P2G** — per-particle: stress (SVD) + B-spline weights + APIC momentum → scatter to grid
+1. **P2G** — per-particle: stress (StVK) + B-spline weights + APIC momentum → scatter to grid
 2. **Grid update** — per-node: normalize momentum, apply gravity + damping + boundary conditions
 3. **G2P** — per-particle: gather grid velocities, update position/velocity/F
 
@@ -183,7 +183,7 @@ For an ad-hoc sweep: `pixi run -e gpu python simulate.py -m sim.n_particles=5000
 
 ```bash
 pixi run -e gpu python simulate.py profile=jax benchmark=true \
-    backend=cuda_v3_inline material=sand_jacobi
+    backend=cuda_v3_inline material=jelly
 ```
 
 The trace is written to `outputs/<YYYY-MM-DD>/<HH-MM-SS>/jax_trace/` and includes
@@ -236,7 +236,7 @@ JAX/XLA custom calls plus their GPU kernels.
 
 ```bash
 pixi run -e gpu python profile_nsight.py -cn nsight_profile \
-    backend=jax_baseline material=sand_jacobi nsight.phase=p2g sim.n_particles=4096
+    backend=jax_baseline material=jelly nsight.phase=p2g sim.n_particles=4096
 ```
 
 ## Config
@@ -245,7 +245,7 @@ Hydra config groups in `conf/`:
 
 | Group | Options | Description |
 |---|---|---|
-| `material` | `sand_jacobi` (default) | Constitutive model |
+| `material` | `jelly` (default) | Constitutive model |
 | `sim` | `default` | n_particles, num_grids, dt, BCs, ... |
 | `backend` | `jax_baseline` (default), `cuda_v*_inline`, `cutile_v6_atomic_tile` | P2G implementation (G2P shared) |
 | `profile` | `none` (default), `jax` | Profiling backend |
@@ -291,7 +291,7 @@ MPM-CudaJax/
 ├── conf/
 │   ├── config.yaml
 │   ├── nsight_profile.yaml
-│   ├── material/            # sand_jacobi.yaml
+│   ├── material/            # jelly.yaml
 │   ├── sim/default.yaml
 │   ├── backend/          # jax_baseline.yaml, cuda_v*.yaml, cutile_v6_atomic_tile.yaml
 │   ├── profile/             # none.yaml, jax.yaml
@@ -300,9 +300,9 @@ MPM-CudaJax/
     └── mpm_jax/
         ├── types.py         # MPMState, MPMParams
         ├── solver.py        # MPMSolver
-        ├── constitutive.py  # sand Jacobi elasticity + plasticity
+        ├── constitutive.py  # StVK elastic stress (jelly material)
         ├── boundary.py      # sticky surface collider
-        ├── blocks/          # Pure math: weights, g2p, grid, svd, sort, init
+        ├── blocks/          # Pure math: weights, grid, sort, init
         ├── backends.py      # Backend interface + shared JAX-owned frame loop
         ├── cutile_p2g.py    # cuTile arena-scatter P2G kernel + jax bridge
         ├── cutile_autotune.py  # per-GPU occupancy autotune for the cuTile kernel

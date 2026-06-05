@@ -76,20 +76,11 @@ def test_cuda_v2_inline_matches_v1_inline():
     ]
     pre_fn, post_fn = build_boundary_fns(bcs, grid_x, params.dx)
 
-    # Use the sand Jacobi material so stress/plasticity stay on the JAX side
-    # without a cuSOLVER dependence.
+    # jelly material (StVK elasticity, no plasticity): stress stays on the JAX
+    # side without a cuSOLVER dependence.
     e_cfg = OmegaConf.create({"name": "StVKElasticityJacobi", "E": 2e6, "nu": 0.4})
-    p_cfg = OmegaConf.create(
-        {
-            "name": "DruckerPragerPlasticityJacobi",
-            "E": 2e6,
-            "nu": 0.4,
-            "friction_angle": 25.0,
-            "cohesion": 0.0,
-        }
-    )
     elasticity_fn = get_constitutive(e_cfg)
-    plasticity_fn = get_constitutive(p_cfg)
+    plasticity_fn = None
 
     state0 = MPMState(
         x=x0,

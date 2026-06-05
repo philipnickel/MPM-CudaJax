@@ -1,5 +1,5 @@
 defaults:
-  - material: sand_jacobi
+  - material: jelly
   - sim: default
   - backend: jax_baseline
   - profile: none
@@ -12,7 +12,7 @@ solver:
   backend: ${backend}
 
 output_dir: ./output
-tag: sand_jacobi
+tag: jelly
 benchmark: false  # skip GIF rendering and frame saving when true
 render:
   backend: pyvista_gif  # pyvista_gif | warp_opengl | warp_usd | ovrtx_mp4

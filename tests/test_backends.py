@@ -54,13 +54,6 @@ def test_hydra_instantiates_runtime_config_and_solver():
             },
             "material": {
                 "elasticity": {"name": "StVKElasticityJacobi", "E": 2e6, "nu": 0.4},
-                "plasticity": {
-                    "name": "DruckerPragerPlasticityJacobi",
-                    "E": 2e6,
-                    "nu": 0.4,
-                    "friction_angle": 25.0,
-                    "cohesion": 0.0,
-                },
             },
         }
     )

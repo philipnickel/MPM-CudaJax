@@ -6,11 +6,11 @@
 # Usage:
 #   pixi run -e gpu python simulate.py -cn sweep_scaling
 #
-# All four variants share material=sand_jacobi (Jacobi SVD in JAX).
+# All four variants share material=jelly (StVK elasticity in JAX, no plasticity).
 
 defaults:
   - config
-  - override /material: sand_jacobi
+  - override /material: jelly
   - _self_
 
 hydra:

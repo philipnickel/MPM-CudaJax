@@ -4,7 +4,7 @@
 # MLS-MPM 8 ppc setup: dx ~= 8.06e-3, particles in [0.1, 0.9]^3, 8M particles.
 #
 #   pixi run -e gpu python simulate.py -cn config sim=benchmark \
-#       backend=cuda_v3_inline material=sand_jacobi benchmark=true
+#       backend=cuda_v3_inline material=jelly benchmark=true
 num_frames: 1
 steps_per_frame: 10
 n_particles: 8000000

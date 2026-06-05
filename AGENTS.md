@@ -25,7 +25,7 @@ The main entry points are:
 - `src/mpm_jax/backends.py` - shared backend interface and JAX-owned frame
   loop.
 - `src/mpm_jax/blocks/` - pure math blocks for weights, P2G, G2P, grid update,
-  SVD, sorting, and initialization.
+  sorting, and initialization.
 - `src/mpm_jax/warp_p2g.py` - Warp tiled kernel bridge helpers.
 - `src/mpm_jax/cuda/` - JAX FFI CUDA loading plus CUDA kernel sources.
 - `conf/` - Hydra config groups for simulation, materials, kernels, profiling,
@@ -58,7 +58,7 @@ pixi run lint
 pixi run python simulate.py sim.num_frames=5
 pixi run -e gpu python simulate.py benchmark=true
 pixi run -e gpu python simulate.py backend=jax_baseline
-pixi run -e gpu python simulate.py backend=cuda_v3_inline material=sand_jacobi
+pixi run -e gpu python simulate.py backend=cuda_v3_inline material=jelly
 pixi run -e gpu python simulate.py -cn sweep_quick
 ```
 

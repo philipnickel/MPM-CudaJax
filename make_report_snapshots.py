@@ -1,4 +1,4 @@
-"""Produce report snapshots of the MLS-MPM sand drop.
+"""Produce report snapshots of the MLS-MPM jelly drop.
 
 Runs the *standard benchmark physics* (``sim=benchmark``: 8M particles,
 num_grids=124, CFL-safe dt=5e-5, sticky floor) with the fast Morton-sorted
@@ -78,7 +78,7 @@ def build_cfg(args):
             overrides=[
                 "sim=benchmark",
                 "backend=cuda_v3_inline",
-                "material=sand_jacobi",
+                "material=jelly",
             ],
         )
     # Override the run length / scale on the resolved benchmark preset.

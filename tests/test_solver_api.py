@@ -24,13 +24,6 @@ def _make_solver(steps_per_frame=2, n=64, G=16):
     material = OmegaConf.create(
         {
             "elasticity": {"name": "StVKElasticityJacobi"},
-            "plasticity": {
-                "name": "DruckerPragerPlasticityJacobi",
-                "E": 2e6,
-                "nu": 0.4,
-                "friction_angle": 25.0,
-                "cohesion": 0.0,
-            },
         }
     )
     return MPMSolver(

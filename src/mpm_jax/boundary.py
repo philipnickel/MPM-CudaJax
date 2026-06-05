@@ -17,7 +17,7 @@ def _sticky_surface(point, normal, grid_x, dx, start_time, end_time):
 
 
 def build_boundary_fns(bc_configs, grid_x, dx):
-    """Build boundary callbacks for the sand benchmark.
+    """Build boundary callbacks for the benchmark.
 
     The supported boundary is a sticky `surface_collider`, used as the floor in
     the default and benchmark configs.

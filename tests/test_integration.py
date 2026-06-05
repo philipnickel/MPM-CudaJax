@@ -31,7 +31,7 @@ def _runtime_params(n_particles, num_grids, dt=3e-4):
     )
 
 
-def test_sand_simulation_10_frames():
+def test_elastic_simulation_10_frames():
     N = 100
     num_grids = 15
     x0 = jnp.ones((N, 3)) * 0.5
@@ -51,17 +51,7 @@ def test_sand_simulation_10_frames():
     elasticity_fn = get_constitutive(
         OmegaConf.create({"name": "StVKElasticityJacobi", "E": 2e6, "nu": 0.4})
     )
-    plasticity_fn = get_constitutive(
-        OmegaConf.create(
-            {
-                "name": "DruckerPragerPlasticityJacobi",
-                "E": 2e6,
-                "nu": 0.4,
-                "friction_angle": 25.0,
-                "cohesion": 0.0,
-            }
-        )
-    )
+    plasticity_fn = None  # jelly: elastic, no plasticity
     state = MPMState(
         x=x0,
         v=jnp.broadcast_to(jnp.array([0.0, 0.0, -0.5]), (N, 3)).copy(),
@@ -106,17 +96,7 @@ def test_outer_frame_jit_runs_multiple_frames():
     elasticity_fn = get_constitutive(
         OmegaConf.create({"name": "StVKElasticityJacobi", "E": 2e6, "nu": 0.4})
     )
-    plasticity_fn = get_constitutive(
-        OmegaConf.create(
-            {
-                "name": "DruckerPragerPlasticityJacobi",
-                "E": 2e6,
-                "nu": 0.4,
-                "friction_angle": 25.0,
-                "cohesion": 0.0,
-            }
-        )
-    )
+    plasticity_fn = None  # jelly: elastic, no plasticity
 
     state = MPMState(
         x=x0,

@@ -134,8 +134,8 @@ def is_available(kernel="inline"):
 def cuda_p2g_inline(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
     """Inline-scatter CUDA P2G via JAX FFI (cuda_v1_inline).
 
-    Takes per-particle state including precomputed stress (from JAX-side
-    Jacobi SVD). One CUDA kernel launch, one thread per particle, with a
+    Takes per-particle state including precomputed stress (from the JAX-side
+    StVK elasticity). One CUDA kernel launch, one thread per particle, with a
     register-resident 27-stencil loop. No (N, 27, *) tensor materialised.
 
     Stress is computed by the JAX elasticity model; weights and scatter happen

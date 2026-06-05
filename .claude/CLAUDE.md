@@ -8,7 +8,7 @@ This is a benchmarking/investigation project; the code is shaped by the followin
 
 **The story (why the code is the way it is):**
 
-1. **Start in JAX.** Implement the full MLS-MPM timestep in pure JAX/XLA (`backend=jax_baseline`) — the baseline. It scans over the 27 stencil offsets for **both** P2G and G2P (so neither `(N, 27, *)` intermediate materialises), uses the unified MLS-MPM G2P (the APIC affine `C` doubles as ∇v), and a scatter-free Jacobi SVD for stress + plasticity. **Every other variant reuses this exact JAX G2P (`_make_jax_scan_g2p_mls`), so across the backend set only the P2G implementation varies.**
+1. **Start in JAX.** Implement the full MLS-MPM timestep in pure JAX/XLA (`backend=jax_baseline`) — the baseline. It scans over the 27 stencil offsets for **both** P2G and G2P (so neither `(N, 27, *)` intermediate materialises), uses the unified MLS-MPM G2P (the APIC affine `C` doubles as ∇v), and a closed-form StVK elastic stress (SVD-free, no plasticity). **Every other variant reuses this exact JAX G2P (`_make_jax_scan_g2p_mls`), so across the backend set only the P2G implementation varies.**
 2. **Profile to find the bottlenecks.** Use the JAX profiler trace (`profile=jax`) to locate the *canonical MPM bottlenecks* — chiefly the P2G scatter and the `(N, 27, *)` stencil materialisation.
 3. **Optimise the P2G with custom CUDA.** JAX FFI lets us drop hand-written CUDA **P2G** kernels in (`cuda_v1..v4_inline`) while the rest of the timestep — G2P, grid, constitutive — stays the JAX baseline. Holding G2P fixed isolates the P2G question: "where is XLA's scatter enough vs. where does a custom kernel win?"
 4. **Try a different programming model — tiled (cuTile).** Finally, investigate whether the **tiled programming model** (NVIDIA cuTile) can reach similar or better P2G performance while keeping the same JAX-owned frame loop. The cuTile path is `cutile_v6_atomic_tile`: JAX computes stress, sorts particles by super-cell, updates the grid, and runs the **same JAX baseline G2P**; cuTile owns only the tiled P2G kernel (an SPGrid-style arena scatter — reduce each SC=2 super-cell into a 4³ L1 arena, then one tile-coalesced `atomic_store_add` per arena) via the cuTile/JAX bridge. At the standard 8M-particle benchmark it is the fastest P2G backend, ahead of the hand-written CUDA kernels. (An NVIDIA Warp tiled path was also explored and then dropped — it was slower than both cuTile and the CUDA kernels at this resolution.)
@@ -26,9 +26,9 @@ All performance comparisons use one fixed, well-resolved configuration (adapted 
 - **8 particles per cell** — the MLS-MPM resolution sweet spot (2³ per cell). Do not benchmark below this.
 - **∆x = 8×10⁻³** → `sim.num_grids = 125` (the solver uses `dx = 1/num_grids`). The particle-filled region then spans **100³ active cells**. (The committed `sim=benchmark` preset uses `num_grids = 124`, an even grid required by the super-cell-tiled cuTile/CUDA kernels.)
 - **Particles uniformly sampled in [0.1, 0.9]³** → `sim.center = [0.5, 0.5, 0.5]`, region side 0.8. 100³ active cells × 8 ppc = **8 M particles** → `sim.n_particles = 8_000_000`.
-- **APIC transfer** (codebase default) + **StVK/Drucker-Prager sand** (`material=sand_jacobi`).
+- **APIC transfer** (codebase default) + **StVK elastic jelly** (`material=jelly`).
 - Per-particle volume follows the region: `vol = 0.8³ / N` (`MPMParams` derives `vol = prod(sim.size)/n`, so set `sim.size=[0.8,0.8,0.8]`).
-- **∆t = 5×10⁻⁵** (CFL). Sand's elastic wave speed `c = √(E/ρ) ≈ 45 m/s` with `∆x ≈ 8×10⁻³` gives `∆t_max ≈ 9×10⁻⁵`, so the `sim=default` `∆t = 3×10⁻⁴` **explodes** at this resolution — vmax → 10⁶ within ~30 substeps for *every* kernel, including the `jax_baseline`. **Always run the standard benchmark via `sim=benchmark`** (below), which bakes in all of these settings at a CFL-safe `∆t`; do not hand-override `sim.num_grids`/`sim.n_particles` on top of `sim=default`.
+- **∆t = 5×10⁻⁵**. Jelly is soft (`E = 10⁴`, wave speed `c = √(E/ρ) ≈ 3.2 m/s`), so with `∆x ≈ 8×10⁻³` the CFL ceiling `∆t_max ≈ ∆x/c ≈ 2.5×10⁻³` sits far above this — `∆t = 5×10⁻⁵` is deliberately conservative for stable, comparable timings (the value is inherited from the original sand benchmark, whose stiffer material needed it). **Run the standard benchmark via `sim=benchmark`** (below), which bakes in all of these settings; do not hand-override `sim.num_grids`/`sim.n_particles` on top of `sim=default`.
 
 **Phase definitions** (kept broad so timing reflects real work, and to attribute the grid step):
 - **P2G**: compute force from the deformation gradient F; scatter mass + elastic force + APIC affine momentum to grid nodes; normalize grid velocity and apply gravity. *(The grid normalize+gravity step is grouped under P2G for timing.)*
@@ -38,7 +38,7 @@ All performance comparisons use one fixed, well-resolved configuration (adapted 
 ```bash
 # sim=benchmark encodes 8M particles, num_grids=124, ∆t=5e-5, center/size, sticky floor
 pixi run -e gpu python simulate.py -cn config sim=benchmark \
-    backend=<k> material=sand_jacobi benchmark=true
+    backend=<k> material=jelly benchmark=true
 ```
 
 ## Package manager: pixi
@@ -92,7 +92,7 @@ ruff.toml              lint config
 conf/                  Hydra config groups
   config.yaml          top-level defaults (material/sim/backend/profile)
   nsight_profile.yaml  top-level defaults for profile_nsight.py
-  material/            sand_jacobi.yaml  (constitutive model)
+  material/            jelly.yaml  (constitutive model)
   sim/default.yaml     n_particles, num_grids, dt, BCs, ...
   backend/          jax_baseline.yaml, cuda_v*.yaml, cutile_v6_atomic_tile.yaml (P2G impl)
   profile/             none.yaml, jax.yaml
@@ -100,7 +100,7 @@ conf/                  Hydra config groups
 src/mpm_jax/
   types.py             MPMState, MPMParams
   solver.py            RuntimeConfig + MPMSolver + build_backend_frame (the compiled per-frame loop)
-  constitutive.py      sand Jacobi elasticity + plasticity
+  constitutive.py      StVK elastic stress (the jelly material), SVD-free
   boundary.py          sticky surface collider
   backends.py          Backend class hierarchy + build_backend
   p2g_scan.py          JAX baseline P2G: lax.scan over 27 offsets
@@ -108,7 +108,6 @@ src/mpm_jax/
   blocks/              Pure-math building blocks (no JIT, no closures)
     weights.py         OFFSET_27: the 27 quadratic B-spline stencil offsets (shared by p2g_scan/g2p_scan)
     grid.py            grid_update: momentum normalise + gravity + damping; build_grid_x
-    svd.py             3x3 Jacobi SVD, scatter-free (no .at[].set() -> XLA fuses it; used by StVK elasticity + Drucker-Prager plasticity)
     sort.py            morton_argsort, home_super_cell_id
     init.py            get_particles: uniform particle initialisation
   cutile_p2g.py        cuTile arena-scatter P2G kernel + cutile_call bridge
@@ -127,7 +126,7 @@ tests/                 pytest suite
 
 Three embarrassingly parallel phases per substep:
 
-1. **P2G** — per-particle: stress (SVD) + B-spline weights + APIC momentum → scatter to grid
+1. **P2G** — per-particle: stress (StVK, closed-form) + B-spline weights + APIC momentum → scatter to grid
 2. **Grid update** — per-node: normalize momentum, gravity, boundary conditions
 3. **G2P** — per-particle: gather grid velocities, update position/velocity/F
 
@@ -148,7 +147,7 @@ Current kernel names:
 
 | `backend=` | Class | What it does |
 |---|---|---|
-| `jax_baseline` | MPMSolver | The JAX/XLA baseline. `lax.scan` over the 27 offsets for **both** P2G and G2P, unified MLS-MPM G2P (APIC affine `C` reused as ∇v), scatter-free Jacobi SVD. The shared G2P every other kernel reuses — so only P2G varies |
+| `jax_baseline` | MPMSolver | The JAX/XLA baseline. `lax.scan` over the 27 offsets for **both** P2G and G2P, unified MLS-MPM G2P (APIC affine `C` reused as ∇v), closed-form StVK stress (SVD-free). The shared G2P every other kernel reuses — so only P2G varies |
 | `cuda_v1_inline` | MPMSolver | CUDA inline-weight P2G (one thread/particle, global atomicAdd) + JAX baseline G2P |
 | `cuda_v2_inline` | MPMSolver | CUDA warp-shuffle coalesced inline P2G + JAX baseline G2P |
 | `cuda_v3_inline` | MPMSolver | CUDA Morton-sorted inline P2G + JAX baseline G2P (XLA command-buffer / CUDA-Graph capture is on for all kernels via the gpu env's `XLA_FLAGS`) |
@@ -156,7 +155,7 @@ Current kernel names:
 | `cutile_v6_atomic_tile` | MPMSolver | NVIDIA cuTile (tiled programming model) P2G + JAX baseline G2P: SPGrid-style arena scatter (SC=2 super-cell → 4³ L1 arena → one tile-coalesced `atomic_store_add`, no coloring). Fastest P2G backend. Requires `cuda-tile` |
 
 Material baseline:
-- `material=sand_jacobi` is the default JAX/CUDA material path: StVK elasticity + Drucker-Prager plasticity, both using the in-repo Jacobi SVD.
+- `material=jelly` is the only material: StVK elastic stress (closed-form, SVD-free), no plasticity. (The earlier StVK/Drucker-Prager *sand* path and its in-repo Jacobi SVD were removed — jelly never needed them, and the SVD's only consumer was sand's plasticity.)
 - The cuTile backend is part of the same JAX loop as the CUDA/JAX variants, so `profile=jax` and ordinary benchmark timing apply.
 
 ## Common commands
@@ -170,11 +169,11 @@ pixi run -e gpu python simulate.py benchmark=true
 
 # Switch kernel
 pixi run -e gpu python simulate.py backend=jax_baseline                                 # JAX/XLA baseline (scan P2G + MLS G2P)
-pixi run -e gpu python simulate.py backend=cuda_v1_inline material=sand_jacobi         # CUDA inline P2G + JAX G2P
-pixi run -e gpu python simulate.py backend=cuda_v2_inline material=sand_jacobi         # warp-shuffle CUDA (fori loop)
-pixi run -e gpu python simulate.py backend=cuda_v3_inline material=sand_jacobi         # Morton-sorted CUDA
-pixi run -e gpu python simulate.py backend=cuda_v4_inline material=sand_jacobi         # super-cell grid tile CUDA
-pixi run -e gpu python simulate.py backend=cutile_v6_atomic_tile material=sand_jacobi benchmark=true  # cuTile tiled P2G
+pixi run -e gpu python simulate.py backend=cuda_v1_inline material=jelly         # CUDA inline P2G + JAX G2P
+pixi run -e gpu python simulate.py backend=cuda_v2_inline material=jelly         # warp-shuffle CUDA (fori loop)
+pixi run -e gpu python simulate.py backend=cuda_v3_inline material=jelly         # Morton-sorted CUDA
+pixi run -e gpu python simulate.py backend=cuda_v4_inline material=jelly         # super-cell grid tile CUDA
+pixi run -e gpu python simulate.py backend=cutile_v6_atomic_tile material=jelly benchmark=true  # cuTile tiled P2G
 
 # Override sim params
 pixi run -e gpu python simulate.py sim.n_particles=50000 sim.num_grids=64
@@ -183,7 +182,7 @@ pixi run -e gpu python simulate.py sim.n_particles=50000 sim.num_grids=64
 pixi run -e gpu python simulate.py profile=jax  benchmark=true     # TensorBoard trace
 
 # Nsight Python profiler (per-stage kernel analysis)
-pixi run -e gpu python profile_nsight.py -cn nsight_profile backend=jax_baseline material=sand_jacobi nsight.phase=p2g sim.n_particles=4096
+pixi run -e gpu python profile_nsight.py -cn nsight_profile backend=jax_baseline material=jelly nsight.phase=p2g sim.n_particles=4096
 
 # Sweeps (Hydra multirun)
 pixi run -e gpu python simulate.py -cn sweep_baseline    # JAX-only scaling

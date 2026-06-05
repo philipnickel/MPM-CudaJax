@@ -14,7 +14,7 @@ phases), not the optimized frame's internal split.
 Run (8M standard benchmark config):
 
     pixi run -e gpu python profile_phases.py -cn config sim=benchmark \
-        backend=jax_baseline material=sand_jacobi
+        backend=jax_baseline material=jelly
 """
 
 import time
@@ -53,7 +53,7 @@ def main(cfg: DictConfig):
 
     # --- the 3 classical phases, each its own jitted module --------------------
     @jax.jit
-    def p2g_phase(state):  # pre-particle BC + stress/SVD + 27-offset scatter
+    def p2g_phase(state):  # pre-particle BC + stress (StVK) + 27-offset scatter
         x, v = pre_fn(state.x, state.v, 0.0)
         state = state._replace(x=x, v=v)
         stress = elasticity_fn(state.F)
@@ -98,7 +98,7 @@ def main(cfg: DictConfig):
         f"(jit each phase separately, {K} iters, ms/substep):\n"
     )
     rows = [
-        ("P2G  (BC + stress/SVD + scatter)", t_p2g),
+        ("P2G  (BC + stress (StVK) + scatter)", t_p2g),
         ("Grid (normalize + gravity + BC)", t_grid),
         ("G2P  (weights + gather + F + advect + plast)", t_g2p),
     ]
@@ -107,7 +107,7 @@ def main(cfg: DictConfig):
     print(f"  {'-' * 46} {'-' * 8}")
     print(f"  {'sum (unfused phases)':46} {total:8.3f} ms")
     print("\n  of which (isolated):")
-    print(f"    {'elasticity / stress (SVD)':44} {t_elast:8.3f} ms")
+    print(f"    {'elasticity / stress (StVK)':44} {t_elast:8.3f} ms")
     print(f"    {'plasticity / return-mapping':44} {t_plast:8.3f} ms")
 
 
