@@ -312,8 +312,7 @@ def jax_baseline_backend():
 
 
 def build_backend_frame(params, elasticity_fn, plasticity_fn,
-                        pre_fn, post_fn, backend, steps_per_frame,
-                        *, phase_barriers=False, **_ignored):
+                        pre_fn, post_fn, backend, steps_per_frame):
     """Build one JIT-compiled frame from a backend object.
 
     The frame owns the common MPM control flow (boundary conditions, elasticity,
@@ -346,32 +345,6 @@ def build_backend_frame(params, elasticity_fn, plasticity_fn,
                 new_F = plasticity_fn(new_F)
             return MPMState(x=new_x, v=new_v, C=new_C, F=new_F)
 
-        def step_body_phased(state):
-            # Profiling mode: split the substep into the 3 classical MPM phases
-            # (P2G / Grid / G2P) with an optimization_barrier at each boundary so
-            # XLA cannot fuse across them. The barrier is an identity, so results
-            # are bit-for-bit identical to step_body — it only forces 3 separately
-            # labelled kernels so a profiler can attribute device time per phase.
-            with jax.named_scope("P2G"):
-                x, v = pre_fn(state.x, state.v, 0.0)
-                state = state._replace(x=x, v=v)
-                stress = elasticity_fn(state.F)
-                prepared, grid_mv, grid_m = backend.step(params, state, stress)
-            grid_mv, grid_m, prepared = jax.lax.optimization_barrier(
-                (grid_mv, grid_m, prepared))
-
-            with jax.named_scope("Grid"):
-                grid_mv = grid_update(
-                    grid_mv, grid_m, params.gravity, params.dt, params.damping)
-                grid_v = post_fn(grid_mv, grid_m, 0.0)
-            (grid_v,) = jax.lax.optimization_barrier((grid_v,))
-
-            with jax.named_scope("G2P"):
-                new_x, new_v, new_C, new_F = backend.g2p(params, prepared, grid_v)
-                new_F = plasticity_fn(new_F)
-            return MPMState(x=new_x, v=new_v, C=new_C, F=new_F)
-
-        body = step_body_phased if phase_barriers else step_body
-        return jax.lax.fori_loop(0, steps_per_frame, lambda _, s: body(s), state)
+        return jax.lax.fori_loop(0, steps_per_frame, lambda _, s: step_body(s), state)
 
     return jit_frame

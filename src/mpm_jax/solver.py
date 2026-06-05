@@ -19,8 +19,7 @@ class MPMSolver:
     """
 
     def __init__(self, params, *, elasticity_fn, plasticity_fn,
-                 pre_fn, post_fn, backend, steps_per_frame, init_state,
-                 **frame_opts):
+                 pre_fn, post_fn, backend, steps_per_frame, init_state):
         self.params = params
         self.steps_per_frame = steps_per_frame
         self._init_state = init_state
@@ -32,7 +31,7 @@ class MPMSolver:
         self.backend = backend
         self._frame = build_backend_frame(
             params, elasticity_fn, plasticity_fn, pre_fn, post_fn,
-            backend, steps_per_frame, **frame_opts,
+            backend, steps_per_frame,
         )
 
     def stepped(self):

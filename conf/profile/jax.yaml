@@ -4,14 +4,6 @@
 # captured. Run a few frames of real substeps so the P2G/G2P kernels repeat.
 name: jax
 
-# Phase-barrier profiling mode (jax baseline). When true, the timestep is
-# regrouped into the 3 classical MPM phases (P2G / Grid / G2P) with a
-# jax.lax.optimization_barrier at each boundary, so XProf attributes device
-# time per phase instead of one fused kernel. Identity transform — results are
-# unchanged — but it prevents cross-phase fusion, so the per-phase times sum to
-# MORE than the real fused frame (a measurement mode, not the optimized frame).
-barriers: false
-
 # Tracer levels (jax.profiler.ProfileOptions):
 #   python_tracer_level=0 disables the Python call/import tracer, which would
 #   otherwise add ~1e6 events and bury the device timeline. Set to 1 to capture
