@@ -4,7 +4,9 @@ import pytest
 import jax
 import jax.numpy as jnp
 
-from mpm_jax.types import MPMState, make_params
+from omegaconf import OmegaConf
+
+from mpm_jax.types import MPMState, MPMParams
 
 
 def _has_cuda() -> bool:
@@ -43,13 +45,16 @@ def _inputs():
         F=jnp.tile(jnp.eye(3, dtype=jnp.float32), (n, 1, 1)),
     )
     stress = jnp.array(rng.randn(n, 3, 3).astype(np.float32) * 0.01)
-    params = make_params(
-        n_particles=n,
-        num_grids=num_grids,
-        dt=3e-4,
-        center=[0.5, 0.5, 0.5],
-        size=[0.4, 0.4, 0.4],
-    )
+    params = MPMParams(OmegaConf.create({
+        "n_particles": n,
+        "num_grids": num_grids,
+        "dt": 3e-4,
+        "gravity": [0.0, 0.0, -9.8],
+        "rho": 1000.0,
+        "clip_bound": 0.5,
+        "damping": 1.0,
+        "size": [0.4, 0.4, 0.4],
+    }))
     return params, state, stress
 
 

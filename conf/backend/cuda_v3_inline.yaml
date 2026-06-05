@@ -4,4 +4,5 @@
 # same warp share more stencil-node targets, so the warp reduction folds
 # 4-8x of the global atomics into one. Pair with material=sand_jacobi for
 # the fast pure-JAX Jacobi SVD material path upstream. Wired into the per-frame path.
-name: cuda_v3_inline
+_target_: mpm_jax.backends.CudaV3
+num_grids: ${sim.num_grids}

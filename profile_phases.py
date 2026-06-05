@@ -14,7 +14,7 @@ phases), not the optimized frame's internal split.
 Run (8M standard benchmark config):
 
     pixi run -e gpu python profile_phases.py -cn config sim=benchmark \
-        p2g=jax_baseline material=sand_jacobi
+        backend=jax_baseline material=sand_jacobi
 """
 
 import time
@@ -25,7 +25,7 @@ from omegaconf import DictConfig
 
 from mpm_jax.backends import PreparedSubstep
 from mpm_jax.blocks.grid import grid_update
-from mpm_jax.registry import build_solver
+from mpm_jax.solver import MPMSolver
 
 
 def _ms_per_call(fn, args, k=50):
@@ -40,7 +40,7 @@ def _ms_per_call(fn, args, k=50):
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig):
-    solver = build_solver(cfg)
+    solver = MPMSolver(hydra.utils.instantiate(cfg))
     p, be = solver.params, solver.backend
     pre_fn, post_fn = solver.pre_fn, solver.post_fn
     elasticity_fn, plasticity_fn = solver.elasticity_fn, solver.plasticity_fn
@@ -90,7 +90,7 @@ def main(cfg: DictConfig):
     t_plast = _ms_per_call(plast, (state2.F,), K)
     total = t_p2g + t_grid + t_g2p
 
-    print(f"\nPer-phase timing — {cfg.p2g.name}, {int(cfg.sim.n_particles):,} particles "
+    print(f"\nPer-phase timing — {solver.backend.name}, {int(cfg.sim.n_particles):,} particles "
           f"(jit each phase separately, {K} iters, ms/substep):\n")
     rows = [("P2G  (BC + stress/SVD + scatter)", t_p2g),
             ("Grid (normalize + gravity + BC)", t_grid),

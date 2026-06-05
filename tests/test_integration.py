@@ -1,6 +1,7 @@
 import jax.numpy as jnp
 import jax
-from mpm_jax.types import MPMState, make_params
+from omegaconf import OmegaConf
+from mpm_jax.types import MPMState, MPMParams
 from mpm_jax.backends import build_backend_frame, jax_baseline_backend
 from mpm_jax.constitutive import get_constitutive
 from mpm_jax.boundary import build_boundary_fns
@@ -10,12 +11,24 @@ def _make_grid_x(num_grids):
     gx, gy, gz = jnp.meshgrid(g, g, g, indexing='ij')
     return jnp.stack([gx, gy, gz], axis=-1).reshape(-1, 3)
 
+
+def _runtime_params(n_particles, num_grids, dt=3e-4):
+    return MPMParams(OmegaConf.create({
+        "n_particles": n_particles,
+        "num_grids": num_grids,
+        "dt": dt,
+        "gravity": [0.0, 0.0, -9.8],
+        "rho": 1000.0,
+        "clip_bound": 0.5,
+        "damping": 1.0,
+        "size": [1.0, 1.0, 1.0],
+    }))
+
 def test_sand_simulation_10_frames():
-    from omegaconf import OmegaConf
     N = 100
     num_grids = 15
     x0 = jnp.ones((N, 3)) * 0.5
-    params = make_params(n_particles=N, num_grids=num_grids, dt=3e-4)
+    params = _runtime_params(n_particles=N, num_grids=num_grids, dt=3e-4)
     grid_x = _make_grid_x(num_grids)
     bc_configs = [
         {"type": "surface_collider", "point": [1.0, 1.0, 0.02],
@@ -49,13 +62,12 @@ def test_sand_simulation_10_frames():
 
 
 def test_outer_frame_jit_runs_multiple_frames():
-    from omegaconf import OmegaConf
     N = 200
     num_grids = 16
     steps_per_frame = 4
     x0 = jnp.ones((N, 3), dtype=jnp.float32) * 0.5
 
-    params = make_params(n_particles=N, num_grids=num_grids, dt=3e-4)
+    params = _runtime_params(n_particles=N, num_grids=num_grids, dt=3e-4)
     grid_x = _make_grid_x(num_grids)
     bc_configs = [
         {"type": "surface_collider", "point": [1.0, 1.0, 0.02],

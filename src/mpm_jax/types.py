@@ -11,40 +11,30 @@ class MPMState(NamedTuple):
     F: jax.Array      # (N, 3, 3) deformation gradient
 
 
-class MPMParams(NamedTuple):
-    num_grids: int
-    dt: float
-    gravity: jax.Array
-    dx: float
-    inv_dx: float
-    clip_bound: float
-    damping: float
-    vol: float
-    p_mass: float
-    n_particles: int
+class MPMParams:
+    """Derived runtime constants for the compiled MPM frame."""
 
-def make_params(
-    n_particles: int,
-    num_grids: int = 25,
-    dt: float = 3e-4,
-    gravity: list = [0.0, 0.0, -9.8],
-    rho: float = 1000.0,
-    clip_bound: float = 0.5,
-    damping: float = 1.0,
-    center: list = [0.5, 0.5, 0.5],
-    size: list = [1.0, 1.0, 1.0],
-) -> MPMParams:
-    dx = 1.0 / num_grids
-    vol = float(np.prod(size)) / n_particles
-    return MPMParams(
-        num_grids=num_grids,
-        dt=dt,
-        gravity=jnp.array(gravity, dtype=jnp.float32),
-        dx=dx,
-        inv_dx=float(num_grids),
-        clip_bound=clip_bound * dx,
-        damping=damping,
-        vol=vol,
-        p_mass=rho * vol,
-        n_particles=n_particles,
+    __slots__ = (
+        "num_grids",
+        "dt",
+        "gravity",
+        "dx",
+        "inv_dx",
+        "clip_bound",
+        "damping",
+        "vol",
+        "p_mass",
+        "n_particles",
     )
+
+    def __init__(self, sim):
+        self.num_grids = int(sim.num_grids)
+        self.dt = float(sim.dt)
+        self.gravity = jnp.asarray(list(sim.gravity), dtype=jnp.float32)
+        self.dx = 1.0 / self.num_grids
+        self.inv_dx = float(self.num_grids)
+        self.clip_bound = float(sim.clip_bound) * self.dx
+        self.damping = float(sim.damping)
+        self.vol = float(np.prod(list(sim.size))) / int(sim.n_particles)
+        self.p_mass = float(sim.rho) * self.vol
+        self.n_particles = int(sim.n_particles)

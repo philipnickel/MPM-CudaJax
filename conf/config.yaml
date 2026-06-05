@@ -1,7 +1,9 @@
+_target_: mpm_jax.solver.RuntimeConfig
+
 defaults:
   - material: sand_jacobi
   - sim: default
-  - p2g: jax_baseline
+  - backend: jax_baseline
   - profile: none
   - _self_
 

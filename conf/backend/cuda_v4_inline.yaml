@@ -5,4 +5,5 @@
 # 6^3 smem tile before flushing to HBM with one atomicAdd per node — testing
 # whether the coarser particle-block granularity amortises tile overhead while
 # preserving smem aggregation. Per-frame only.
-name: cuda_v4_inline
+_target_: mpm_jax.backends.CudaV4
+num_grids: ${sim.num_grids}

@@ -1,31 +1,35 @@
 import jax.numpy as jnp
 from omegaconf import OmegaConf
-from mpm_jax.types import MPMState, make_params
-from mpm_jax.solver import MPMSolver
+from mpm_jax.solver import MPMSolver, RuntimeConfig
 from mpm_jax.backends import jax_baseline_backend
-from mpm_jax.constitutive import get_constitutive
-from mpm_jax.boundary import build_boundary_fns
-from mpm_jax.blocks.grid import build_grid_x
 
 
 def _make_solver(steps_per_frame=2, n=64, G=16):
-    params = make_params(n_particles=n, num_grids=G, dt=3e-4)
-    grid_x = build_grid_x(G)
-    x = jnp.array([[0.5, 0.5, 0.5]] * n, dtype=jnp.float32)
-    pre_fn, post_fn = build_boundary_fns([], grid_x, params.dx, x, params.dt, params.p_mass)
-    elasticity = get_constitutive(OmegaConf.create({"name": "StVKElasticityJacobi"}))
-    plasticity = get_constitutive(OmegaConf.create({
-        "name": "DruckerPragerPlasticityJacobi",
-        "E": 2e6,
-        "nu": 0.4,
-        "friction_angle": 25.0,
-        "cohesion": 0.0,
-    }))
-    init = MPMState(x=x, v=jnp.zeros((n, 3)), C=jnp.zeros((n, 3, 3)),
-                    F=jnp.broadcast_to(jnp.eye(3), (n, 3, 3)).copy())
-    return MPMSolver(params, elasticity_fn=elasticity, plasticity_fn=plasticity,
-                     pre_fn=pre_fn, post_fn=post_fn, backend=jax_baseline_backend(),
-                     steps_per_frame=steps_per_frame, init_state=init)
+    sim = OmegaConf.create({
+        "n_particles": n,
+        "num_grids": G,
+        "dt": 3e-4,
+        "steps_per_frame": steps_per_frame,
+        "clip_bound": 0.5,
+        "damping": 1.0,
+        "gravity": [0.0, 0.0, -9.8],
+        "rho": 1000.0,
+        "size": [0.5, 0.5, 0.5],
+        "initial_velocity": [0.0, 0.0, 0.0],
+        "center": [0.5, 0.5, 0.5],
+        "boundary_conditions": [],
+    })
+    material = OmegaConf.create({
+        "elasticity": {"name": "StVKElasticityJacobi"},
+        "plasticity": {
+            "name": "DruckerPragerPlasticityJacobi",
+            "E": 2e6,
+            "nu": 0.4,
+            "friction_angle": 25.0,
+            "cohesion": 0.0,
+        },
+    })
+    return MPMSolver(RuntimeConfig(material=material, sim=sim, backend=jax_baseline_backend()))
 
 
 def test_step_returns_and_mutates_state():

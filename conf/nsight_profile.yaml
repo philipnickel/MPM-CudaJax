@@ -2,7 +2,7 @@
 #
 # Example:
 #   pixi run -e gpu python profile_nsight.py -cn nsight_profile \
-#     p2g=jax_baseline material=sand_jacobi nsight.phase=p2g sim.n_particles=65536
+#     backend=jax_baseline material=sand_jacobi nsight.phase=p2g sim.n_particles=65536
 defaults:
   - config
   - _self_
@@ -35,7 +35,7 @@ nsight:
   # annotation variants, matching the official framework-comparison examples.
   sweep:
     kernels:
-      - ${p2g.name}
+      - ${hydra:runtime.choices.backend}
     n_particles:
       - ${sim.n_particles}
     num_grids:

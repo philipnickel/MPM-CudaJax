@@ -6,8 +6,9 @@ defaults:
   - nsight_profile
   - _self_
 
-p2g:
-  name: jax_baseline
+backend:
+  _target_: mpm_jax.backends.Backend
+  num_grids: ${sim.num_grids}
 
 material:
   elasticity:

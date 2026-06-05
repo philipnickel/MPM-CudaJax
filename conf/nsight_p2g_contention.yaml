@@ -9,8 +9,9 @@ defaults:
   - nsight_profile
   - _self_
 
-p2g:
-  name: cuda_v1_inline
+backend:
+  _target_: mpm_jax.backends.CudaV1
+  num_grids: ${sim.num_grids}
 
 nsight:
   analyze:

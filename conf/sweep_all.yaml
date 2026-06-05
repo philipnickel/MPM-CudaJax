@@ -12,7 +12,7 @@ hydra:
   sweeper:
     params:
       sim.n_particles: 5000,10000,50000,100000
-      p2g: jax_baseline,cuda_v2_inline,cuda_v3_inline
+      backend: jax_baseline,cuda_v2_inline,cuda_v3_inline
 
 benchmark: true
 tag: sweep_all

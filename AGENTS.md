@@ -21,7 +21,6 @@ The main entry points are:
   rendering.
 - `profile_nsight.py` - Nsight Python profiling for per-stage and per-kernel
   analysis.
-- `src/mpm_jax/registry.py` - kernel registry and `build_solver(cfg)`.
 - `src/mpm_jax/solver.py` - Equinox-based `MPMSolver`.
 - `src/mpm_jax/backends.py` - shared backend interface and JAX-owned frame
   loop.
@@ -31,7 +30,7 @@ The main entry points are:
 - `src/mpm_jax/cuda/` - JAX FFI CUDA loading plus CUDA kernel sources.
 - `conf/` - Hydra config groups for simulation, materials, kernels, profiling,
   and sweeps.
-- `tests/` - pytest coverage for solver behavior, CUDA equivalence, registry,
+- `tests/` - pytest coverage for solver behavior, CUDA equivalence, backends,
   Warp paths, boundaries, and constitutive models.
 
 ## Working Rules
@@ -42,9 +41,9 @@ The main entry points are:
   GPU/CUDA/Warp runs.
 - CUDA kernels are built through scikit-build-core and CMake. CPU-only installs
   intentionally skip CUDA when `nvcc` is unavailable.
-- Kernel selection is registry-driven. Add or change kernel variants through
-  `src/mpm_jax/backends.py`, `src/mpm_jax/registry.py`, and the relevant
-  config files rather than adding dispatch logic to `simulate.py`.
+- Kernel selection is Hydra-target-driven. Add or change kernel variants through
+  `src/mpm_jax/backends.py` and the relevant `_target_` config files rather
+  than adding dispatch logic to `simulate.py`.
 - Preserve the benchmark methodology described in `.claude/CLAUDE.md`,
   especially the standard 8-particles-per-cell setup and the JAX trace -> Nsight
   Compute -> `nsight-python` profiling order.
@@ -58,8 +57,8 @@ pixi run test
 pixi run lint
 pixi run python simulate.py sim.num_frames=5
 pixi run -e gpu python simulate.py benchmark=true
-pixi run -e gpu python simulate.py p2g=jax_baseline
-pixi run -e gpu python simulate.py p2g=cuda_v3_inline material=sand_jacobi
+pixi run -e gpu python simulate.py backend=jax_baseline
+pixi run -e gpu python simulate.py backend=cuda_v3_inline material=sand_jacobi
 pixi run -e gpu python simulate.py -cn sweep_quick
 ```
 

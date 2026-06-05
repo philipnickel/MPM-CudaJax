@@ -3,7 +3,6 @@
 _SOLVER_EXPORTS = {
     "MPMState",
     "MPMParams",
-    "make_params",
 }
 _CONSTITUTIVE_EXPORTS = {"get_constitutive", "ELASTICITY", "PLASTICITY"}
 _BOUNDARY_EXPORTS = {"build_boundary_fns"}

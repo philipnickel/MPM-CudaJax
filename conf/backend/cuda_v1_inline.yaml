@@ -3,4 +3,5 @@
 # one launch (one thread per particle, register-resident state across the
 # stencil loop). Pair with material=sand_jacobi for the fast pure-JAX
 # Jacobi SVD material path upstream. Wired into the per-frame path.
-name: cuda_v1_inline
+_target_: mpm_jax.backends.CudaV1
+num_grids: ${sim.num_grids}

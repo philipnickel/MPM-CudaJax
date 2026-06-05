@@ -224,7 +224,7 @@ def _run_jax_solver(solver, cfg: DictConfig, trace_dir=None, profile_opts=None):
     import jax.numpy as jnp
 
     sim = cfg.sim
-    kernel_name = cfg.get('p2g', {}).get('name', 'jax_baseline')
+    kernel_name = solver.backend.name
     bench = cfg.get('benchmark', False)
 
     def _warmup_metrics(s):
@@ -296,13 +296,13 @@ def _run_jax_solver(solver, cfg: DictConfig, trace_dir=None, profile_opts=None):
 
 
 def run(cfg: DictConfig, trace_dir=None, profile_opts=None):
-    """Build the solver from the config (`build_solver`) and drive it.
+    """Instantiate the runtime config, build the solver, and drive it.
 
     Returns (frames, elapsed, total_steps, summary, frame_metrics).
     """
-    from mpm_jax.registry import build_solver  # pylint: disable=import-outside-toplevel
+    from mpm_jax.solver import MPMSolver  # pylint: disable=import-outside-toplevel
 
-    solver = build_solver(cfg)
+    solver = MPMSolver(hydra.utils.instantiate(cfg))
     return _run_jax_solver(solver, cfg, trace_dir=trace_dir, profile_opts=profile_opts)
 
 
@@ -346,7 +346,6 @@ def _build_profile_options(profile_cfg):
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig):
     profile_name = cfg.get('profile', {}).get('name', 'none')
-    kernel_name = cfg.get('p2g', {}).get('name', 'jax_baseline')
 
     if profile_name not in ('none', 'jax'):
         raise RuntimeError(
@@ -366,11 +365,12 @@ def main(cfg: DictConfig):
         jax_trace_dir = os.path.join(run_dir, "jax_trace")
         profile_opts = _build_profile_options(cfg.get('profile', {}))
 
-    # Run simulation (construction routed through build_solver). When profiling,
-    # the driver wraps only the steady-state loop.
+    # Run simulation. When profiling, the driver wraps only the steady-state loop.
     frames, elapsed, total_steps, summary, _frame_metrics = run(
         cfg, trace_dir=jax_trace_dir, profile_opts=profile_opts
     )
+    from hydra.core.hydra_config import HydraConfig
+    kernel_name = HydraConfig.get().runtime.choices.get("backend", "jax_baseline")
 
     # Print timing summary
     steps_per_sec = total_steps / elapsed
@@ -434,7 +434,6 @@ def main(cfg: DictConfig):
     # and post-hoc aggregation can pick up the per-run numbers. One file per
     # run, fixed shape.
     import json
-    from hydra.core.hydra_config import HydraConfig
     run_dir = os.path.abspath(HydraConfig.get().runtime.output_dir)
     mat_name = cfg.get('material', {}).get('elasticity', {}).get('name', None) \
         or cfg.get('material', {}).get('name', 'unknown')

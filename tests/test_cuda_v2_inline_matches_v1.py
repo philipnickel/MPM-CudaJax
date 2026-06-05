@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 from omegaconf import OmegaConf
 
-from mpm_jax.types import MPMState, make_params
+from mpm_jax.types import MPMState, MPMParams
 from mpm_jax.constitutive import get_constitutive
 from mpm_jax.boundary import build_boundary_fns
 
@@ -46,7 +46,16 @@ def test_cuda_v2_inline_matches_v1_inline():
     num_grids = 16
     rng = np.random.RandomState(0)
     x0 = jnp.array(rng.rand(n, 3).astype(np.float32) * 0.4 + 0.3)
-    params = make_params(n_particles=n, num_grids=num_grids, dt=3e-4)
+    params = MPMParams(OmegaConf.create({
+        "n_particles": n,
+        "num_grids": num_grids,
+        "dt": 3e-4,
+        "gravity": [0.0, 0.0, -9.8],
+        "rho": 1000.0,
+        "clip_bound": 0.5,
+        "damping": 1.0,
+        "size": [1.0, 1.0, 1.0],
+    }))
 
     g = jnp.arange(num_grids, dtype=jnp.float32)
     gx, gy, gz = jnp.meshgrid(g, g, g, indexing="ij")

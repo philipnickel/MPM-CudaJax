@@ -3,4 +3,5 @@
 # velocity gradient for the F-update), and the scatter-free Jacobi SVD for
 # stress + plasticity. Every other kernel reuses this exact G2P, so across the
 # registry only the P2G implementation varies.
-name: jax_baseline
+_target_: mpm_jax.backends.Backend
+num_grids: ${sim.num_grids}

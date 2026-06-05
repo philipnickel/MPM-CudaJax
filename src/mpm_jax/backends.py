@@ -158,6 +158,17 @@ class Backend:
 
     name = "jax_baseline"
 
+    def __init__(self, num_grids=None, autotune=None):
+        self.validate_num_grids(num_grids)
+
+    def validate_num_grids(self, num_grids):
+        divisor = self.grid_divisor()
+        if divisor is not None and num_grids is not None and num_grids % divisor != 0:
+            raise RuntimeError(
+                f"{self.name} requires num_grids ({num_grids}) divisible by "
+                f"super-cell width ({divisor})."
+            )
+
     def prepare(self, params, state, stress):
         """Particle ordering hook ("sort"); default is identity (no reorder)."""
         return _identity_order(state, stress)
@@ -204,8 +215,9 @@ class CudaInline(Backend):
 
     kind = "inline"
 
-    def __init__(self):
+    def __init__(self, num_grids=None, autotune=None):
         _register_cuda_kernel(self.kind)
+        super().__init__(num_grids=num_grids, autotune=autotune)
 
     def p2g(self, params, prepared):
         return _cuda_inline_p2g(self.kind, params, prepared)
@@ -232,8 +244,9 @@ class CudaV3(CudaInline):
 class CudaV4(Backend):
     name = "cuda_v4_inline"
 
-    def __init__(self):
+    def __init__(self, num_grids=None, autotune=None):
         _register_cuda_kernel("v4_inline")
+        super().__init__(num_grids=num_grids, autotune=autotune)
 
     def prepare(self, params, state, stress):
         return _supercell_order(params, state, stress, _v4_super_cell())
@@ -250,8 +263,9 @@ class CutileV6(Backend):
 
     name = "cutile_v6_atomic_tile"
 
-    def __init__(self, autotune=True):
+    def __init__(self, num_grids=None, autotune=True):
         _load_cutile_kernels()
+        super().__init__(num_grids=num_grids, autotune=autotune)
         kernel = None
         if autotune:
             from mpm_jax.cutile_autotune import tuned_atomic_tile_kernel  # pylint: disable=import-outside-toplevel
@@ -268,16 +282,20 @@ class CutileV6(Backend):
         return _arena_super_cell()
 
 
-_BACKENDS = {
-    "jax_baseline": lambda num_grids, autotune: Backend(),
-    "cuda_v1_inline": lambda num_grids, autotune: CudaV1(),
-    "cuda_v2_inline": lambda num_grids, autotune: CudaV2(),
-    "cuda_v3_inline": lambda num_grids, autotune: CudaV3(),
-    "cuda_v4_inline": lambda num_grids, autotune: CudaV4(),
-    "cutile_v6_atomic_tile": lambda num_grids, autotune: CutileV6(autotune=autotune),
+_BACKEND_CLASSES = {
+    "jax_baseline": Backend,
+    "cuda_v1_inline": CudaV1,
+    "cuda_v2_inline": CudaV2,
+    "cuda_v3_inline": CudaV3,
+    "cuda_v4_inline": CudaV4,
+    "cutile_v6_atomic_tile": CutileV6,
 }
 
-KERNEL_NAMES = tuple(_BACKENDS)
+KERNEL_NAMES = tuple(_BACKEND_CLASSES)
+BACKEND_TARGETS = {
+    name: f"{cls.__module__}.{cls.__qualname__}"
+    for name, cls in _BACKEND_CLASSES.items()
+}
 
 
 def build_backend(name, num_grids, *, autotune=True):
@@ -288,17 +306,11 @@ def build_backend(name, num_grids, *, autotune=True):
     ``gpu`` pixi env guarantees the CUDA ``.so`` kernels and cuTile runtime.
     """
     try:
-        backend = _BACKENDS[name](num_grids, autotune)
+        backend = _BACKEND_CLASSES[name](num_grids=num_grids, autotune=autotune)
     except KeyError:
         raise KeyError(
-            f"Unknown P2G kernel {name!r}. Available: {', '.join(_BACKENDS)}."
+            f"Unknown P2G kernel {name!r}. Available: {', '.join(_BACKEND_CLASSES)}."
         ) from None
-    divisor = backend.grid_divisor()
-    if divisor is not None and num_grids is not None and num_grids % divisor != 0:
-        raise RuntimeError(
-            f"{name} requires num_grids ({num_grids}) divisible by "
-            f"super-cell width ({divisor})."
-        )
     return backend
 
 

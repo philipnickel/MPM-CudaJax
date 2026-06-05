@@ -2,7 +2,7 @@
 
 Runs the *standard benchmark physics* (``sim=benchmark``: 8M particles,
 num_grids=124, CFL-safe dt=5e-5, sticky floor) with the fast Morton-sorted
-CUDA P2G (``p2g=cuda_v3_inline``) and captures still PNGs at five
+CUDA P2G (``backend=cuda_v3_inline``) and captures still PNGs at five
 physically-meaningful moments of the fall -> impact -> settle arc:
 
     initial -> impact-onset -> impact-peak -> impact-spread -> settled
@@ -47,7 +47,7 @@ def build_cfg(args):
             config_name="config",
             overrides=[
                 "sim=benchmark",
-                "p2g=cuda_v3_inline",
+                "backend=cuda_v3_inline",
                 "material=sand_jacobi",
             ],
         )
@@ -75,9 +75,10 @@ def build_cfg(args):
 # Simulation pass: step the arc, record metrics + a subsampled cloud per frame
 # --------------------------------------------------------------------------- #
 def run_arc(cfg, args, target_frames=None):
+    import hydra
     import jax
     import jax.numpy as jnp
-    from mpm_jax.registry import build_solver
+    from mpm_jax.solver import MPMSolver
 
     n = int(cfg.sim.n_particles)
     dt = float(cfg.sim.dt)
@@ -86,12 +87,12 @@ def run_arc(cfg, args, target_frames=None):
 
     ctr, sz = list(cfg.sim.center), list(cfg.sim.size)
     margin = (1.0 - float(sz[0])) / 2.0  # lateral gap to the (wall-free) grid edge
-    print(f"Building solver: p2g={cfg.p2g.name} n_particles={n:,} "
+    solver = MPMSolver(hydra.utils.instantiate(cfg))
+    print(f"Building solver: backend={solver.backend.name} n_particles={n:,} "
           f"num_grids={cfg.sim.num_grids} dx={1.0/float(cfg.sim.num_grids):.5f} dt={dt:g} "
           f"steps/frame={spf} frames={cfg.sim.num_frames}")
     print(f"  block center={ctr} size={sz} -> lateral margin to edge ~{margin:.3f} "
           f"({margin * float(cfg.sim.num_grids):.0f} cells)")
-    solver = build_solver(cfg)
 
     # Deterministic spatial subsample used for *every* snapshot (positions are
     # gathered on-device then copied, so per-frame host transfer stays small).
