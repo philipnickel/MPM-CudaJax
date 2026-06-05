@@ -15,3 +15,12 @@ outputs/
 
 multirun/
 outputs/
+
+# Large regenerable snapshot/profiling artifacts. Keep make_report_snapshots.py
+# and the small timeline CSVs; the rendered PNGs and traces are regenerable.
+report_snapshots/*.npz
+report_snapshots/*.usd
+report_snapshots/*.png
+traces/
+*.nsys-rep
+*.sqlite
