@@ -13,37 +13,28 @@ def _lame_params(E, nu):
 
 
 def _det3x3(F):
-    # this function is just ugly
-    """Closed-form determinant of batched 3x3 matrices.
-
-    Fully fusable (~9 mul + adds, pointwise per matrix) -- unlike
-    ``jnp.linalg.det``, which lowers to a cuSOLVER LU custom-call (host-
-    dispatched, fusion-breaking).
+    """Determinant of a single 3x3 (``vmap`` for batches): the scalar triple
+    product ``c0 . (c1 x c2)`` of its columns. Closed-form and fusable, unlike
+    ``jnp.linalg.det`` which lowers to a fusion-breaking cuSOLVER LU custom-call.
     """
-    a, b, c = F[..., 0, 0], F[..., 0, 1], F[..., 0, 2]
-    d, e, f = F[..., 1, 0], F[..., 1, 1], F[..., 1, 2]
-    g, h, i = F[..., 2, 0], F[..., 2, 1], F[..., 2, 2]
-    return a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g)
+    return F[:, 0] @ jnp.cross(F[:, 1], F[:, 2])
 
 
 def stvk_elasticity_jacobi(E=2e6, nu=0.4):
     mu, la = _lame_params(E, nu)
 
-    def compute_stress(F):
-        Ft = jnp.swapaxes(F, -2, -1)
-        FtF = Ft @ F
+    def stress_single(F):
+        """StVK first Piola-Kirchhoff stress for one 3x3 deformation gradient."""
         I = jnp.eye(3, dtype=F.dtype)
-        E_strain = 0.5 * (FtF - I)
-        stvk = 2.0 * mu * (F @ E_strain)
-        # J = det(F), the StVK Jacobian. The old code took prod(singular values)
-        # = |det(F)| from a full SVD whose U, Vh were thrown away -- a whole SVD
-        # per substep for one scalar. For non-inverted F (det>0, the physical
-        # regime) the closed-form determinant is identical, and it fuses.
-        J = _det3x3(F).reshape(-1, 1, 1)
-        volume = la * J * (J - 1.0) * I
-        return stvk + volume
+        E_strain = 0.5 * (F.T @ F - I)
+        # J = det(F) via the closed-form det: no cuSOLVER, and it fuses. (The old
+        # code took prod(singular values) = |det(F)| from a full SVD whose U, Vh
+        # were discarded -- a whole SVD per substep for one scalar. Identical for
+        # the physical non-inverted regime, det>0.)
+        J = _det3x3(F)
+        return 2.0 * mu * (F @ E_strain) + la * J * (J - 1.0) * I
 
-    return compute_stress
+    return jax.vmap(stress_single)
 
 
 def drucker_prager_plasticity_jacobi(E=2e6, nu=0.4, friction_angle=25.0, cohesion=0.0):
