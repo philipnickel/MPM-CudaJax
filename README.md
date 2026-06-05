@@ -121,8 +121,7 @@ pixi run -e gpu python simulate.py benchmark=true
 # Pick a kernel
 pixi run -e gpu python simulate.py p2g=jax_baseline                                 # JAX/XLA baseline (scan P2G + MLS G2P)
 pixi run -e gpu python simulate.py p2g=cuda_v1_inline material=sand_jacobi
-pixi run -e gpu python simulate.py p2g=cuda_v2_inline material=sand_jacobi         # warp-shuffle (default: fori loop)
-pixi run -e gpu python simulate.py p2g=cuda_v2_inline p2g.loop_kind=python material=sand_jacobi
+pixi run -e gpu python simulate.py p2g=cuda_v2_inline material=sand_jacobi         # warp-shuffle coalescing
 pixi run -e gpu python simulate.py p2g=cuda_v3_inline material=sand_jacobi         # Morton sort
 pixi run -e gpu python simulate.py p2g=cuda_v4_inline material=sand_jacobi         # super-cell grid tile
 pixi run -e gpu python simulate.py p2g=cutile_v6_atomic_tile material=sand_jacobi benchmark=true  # cuTile (tiled model)
@@ -137,7 +136,7 @@ pixi run -e gpu python simulate.py sim.n_particles=1000000 sim.num_grids=64
 |---|---|
 | `jax_baseline` | The JAX/XLA baseline: `lax.scan` over the 27 offsets for **both** P2G and G2P, unified MLS-MPM G2P (APIC affine `C` reused as ∇v), scatter-free Jacobi SVD. Every other kernel reuses this G2P, so only the P2G varies. |
 | `cuda_v1_inline` | CUDA inline-weight P2G (one thread/particle, global `atomicAdd`) + JAX baseline G2P. |
-| `cuda_v2_inline` | CUDA warp-shuffle coalesced inline P2G + JAX baseline G2P. Default `loop_kind=fori`. Override with `p2g.loop_kind=python`. |
+| `cuda_v2_inline` | CUDA warp-shuffle coalesced inline P2G + JAX baseline G2P. |
 | `cuda_v3_inline` | CUDA Morton-sorted inline P2G + JAX baseline G2P. (XLA command-buffer / CUDA-Graph capture is on for every kernel via the gpu env's `XLA_FLAGS`.) |
 | `cuda_v4_inline` | CUDA super-cell-owned grid tile inline P2G + JAX baseline G2P. |
 | `cutile_v6_atomic_tile` | NVIDIA cuTile (tiled programming model) P2G + JAX baseline G2P: SPGrid-style arena scatter — sort by SC=2 home super-cell, reduce each super-cell into a 4³ L1 arena, write back with one tile-coalesced `atomic_store_add` (no coloring). Occupancy autotuned per-GPU. Requires `cuda-tile`. |
@@ -152,7 +151,7 @@ Three embarrassingly parallel phases per timestep:
 
 The solver is class-based:
 
-- **`MPMSolver`** is an Equinox module. Particle/grid state is stored as dynamic JAX leaves, while backend choices, constitutive functions, boundary functions, and the compiled `_frame` are static fields. `stepped()` returns a new solver with updated state; `step()` keeps the driver-friendly mutating API and advances one frame by running `_frame(self.state)`. The frame contains `steps_per_frame` substeps as a single XLA program (via `lax.fori_loop` by default, or unrolled with `loop_kind="python"`).
+- **`MPMSolver`** is a plain Python class. Particle/grid state is mutated in place by the driver API; the backend, constitutive/boundary closures, and the compiled `_frame` are fixed for the solver's lifetime. `stepped()` returns a new solver with advanced state (shallow copy + new state); `step()` is the mutating driver and advances one frame by running `_frame(self.state)`. The frame runs `steps_per_frame` substeps as a single XLA program via `lax.fori_loop`.
 
 Construction is declarative (`src/mpm_jax/zen_build.py`):
 - The MPMSolver build graph is a hydra-zen `builds()` tree — particles, params, boundary, constitutive, backend, initial state — wired by `${sim.*}`/`${p2g.*}`/`${material.*}` interpolations and registered as the `solver` config group. `simulate.py` / `profile_nsight.py` just call `instantiate(cfg.solver)`; `build_solver(cfg)` is the equivalent programmatic entry.
@@ -260,9 +259,6 @@ pixi run -e gpu python simulate.py sim.n_particles=100000 p2g=cuda_v3_inline ben
 Kernel-specific knobs passed as top-level CLI overrides (merged into `cfg.p2g`):
 
 ```bash
-# loop_kind: fori (default) | python (unrolled)
-pixi run -e gpu python simulate.py p2g=cuda_v2_inline p2g.loop_kind=python
-
 # autotune: cutile_v6 occupancy is tuned per-GPU and cached; disable with autotune=false
 pixi run -e gpu python simulate.py p2g=cutile_v6_atomic_tile p2g.autotune=false
 ```

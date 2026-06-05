@@ -135,12 +135,12 @@ Three embarrassingly parallel phases per substep:
 
 ### Class-based API
 
-`MPMSolver` (in `src/mpm_jax/solver.py`) is an Equinox module over the functional JAX core:
+`MPMSolver` (in `src/mpm_jax/solver.py`) is a plain Python class wrapping the functional JAX core:
 
-- Built once from `params`, an `elasticity_fn`, `plasticity_fn`, boundary functions `pre_fn`/`post_fn`, a `Backend`, and `steps_per_frame`. State arrays are dynamic JAX leaves; backend callables and the compiled `_frame` are static Equinox fields.
+- Built once from `params`, an `elasticity_fn`, `plasticity_fn`, boundary functions `pre_fn`/`post_fn`, a `Backend`, and `steps_per_frame`. Array state is mutated in place by the driver API; the backend, closures, and the compiled `_frame` are fixed for the solver's lifetime. The solver is never a JAX argument — only `state` (an `MPMState` pytree) is traced — so it needs no pytree machinery.
 - `stepped()` returns a new solver with advanced state. `step()` keeps the existing mutating driver API and advances one frame (= `steps_per_frame` substeps) by calling `_frame(self.state)`.
 - `solve(num_frames, on_frame=None)` loops `step()` with an optional IO callback.
-- Default loop inside `build_backend_frame` is `lax.fori_loop`; pass `loop_kind="python"` to unroll instead.
+- The `steps_per_frame` substeps run inside `build_backend_frame` as a single `lax.fori_loop`.
 
 ### Kernel registry
 
@@ -152,7 +152,7 @@ Current kernel names:
 |---|---|---|
 | `jax_baseline` | MPMSolver | The JAX/XLA baseline. `lax.scan` over the 27 offsets for **both** P2G and G2P, unified MLS-MPM G2P (APIC affine `C` reused as ∇v), scatter-free Jacobi SVD. The shared G2P every other kernel reuses — so only P2G varies |
 | `cuda_v1_inline` | MPMSolver | CUDA inline-weight P2G (one thread/particle, global atomicAdd) + JAX baseline G2P |
-| `cuda_v2_inline` | MPMSolver | CUDA warp-shuffle coalesced inline P2G + JAX baseline G2P; default `loop_kind=fori` |
+| `cuda_v2_inline` | MPMSolver | CUDA warp-shuffle coalesced inline P2G + JAX baseline G2P |
 | `cuda_v3_inline` | MPMSolver | CUDA Morton-sorted inline P2G + JAX baseline G2P (XLA command-buffer / CUDA-Graph capture is on for all kernels via the gpu env's `XLA_FLAGS`) |
 | `cuda_v4_inline` | MPMSolver | CUDA super-cell-owned grid tile inline P2G + JAX baseline G2P |
 | `cutile_v6_atomic_tile` | MPMSolver | NVIDIA cuTile (tiled programming model) P2G + JAX baseline G2P: SPGrid-style arena scatter (SC=2 super-cell → 4³ L1 arena → one tile-coalesced `atomic_store_add`, no coloring), occupancy autotuned per-GPU. Fastest P2G in the registry. Requires `cuda-tile` |
@@ -177,9 +177,6 @@ pixi run -e gpu python simulate.py p2g=cuda_v2_inline material=sand_jacobi      
 pixi run -e gpu python simulate.py p2g=cuda_v3_inline material=sand_jacobi         # Morton-sorted CUDA
 pixi run -e gpu python simulate.py p2g=cuda_v4_inline material=sand_jacobi         # super-cell grid tile CUDA
 pixi run -e gpu python simulate.py p2g=cutile_v6_atomic_tile material=sand_jacobi benchmark=true  # cuTile tiled P2G
-
-# loop_kind override (python = unrolled, fori = lax.fori_loop; fori is the default)
-pixi run -e gpu python simulate.py p2g=cuda_v2_inline p2g.loop_kind=python
 
 # Override sim params
 pixi run -e gpu python simulate.py sim.n_particles=50000 sim.num_grids=64

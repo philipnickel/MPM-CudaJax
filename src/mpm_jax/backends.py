@@ -157,7 +157,6 @@ class Backend:
     """
 
     name = "jax_baseline"
-    loop_kind = "fori"
 
     def prepare(self, params, state, stress):
         """Particle ordering hook ("sort"); default is identity (no reorder)."""
@@ -314,15 +313,14 @@ def jax_baseline_backend():
 
 def build_backend_frame(params, elasticity_fn, plasticity_fn,
                         pre_fn, post_fn, backend, steps_per_frame,
-                        *, loop_kind=None, phase_barriers=False, **_ignored):
+                        *, phase_barriers=False, **_ignored):
     """Build one JIT-compiled frame from a backend object.
 
     The frame owns the common MPM control flow (boundary conditions, elasticity,
     grid update, plasticity, the substep loop). The backend owns only the
     P2G — ``backend.step`` orders the particles and scatters — and ``g2p``.
+    The ``steps_per_frame`` substeps run as a single ``lax.fori_loop``.
     """
-    loop_kind = loop_kind or backend.loop_kind
-
     @jax.jit
     def jit_frame(state):
         def step_body(state):
@@ -374,10 +372,6 @@ def build_backend_frame(params, elasticity_fn, plasticity_fn,
             return MPMState(x=new_x, v=new_v, C=new_C, F=new_F)
 
         body = step_body_phased if phase_barriers else step_body
-        if loop_kind == "fori":
-            return jax.lax.fori_loop(0, steps_per_frame, lambda _, s: body(s), state)
-        for _ in range(steps_per_frame):
-            state = body(state)
-        return state
+        return jax.lax.fori_loop(0, steps_per_frame, lambda _, s: body(s), state)
 
     return jit_frame
