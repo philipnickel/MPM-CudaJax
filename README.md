@@ -155,7 +155,7 @@ The solver is class-based:
 - **`MPMSolver`** is an Equinox module. Particle/grid state is stored as dynamic JAX leaves, while backend choices, constitutive functions, boundary functions, and the compiled `_frame` are static fields. `stepped()` returns a new solver with updated state; `step()` keeps the driver-friendly mutating API and advances one frame by running `_frame(self.state)`. The frame contains `steps_per_frame` substeps as a single XLA program (via `lax.fori_loop` by default, or unrolled with `loop_kind="python"`).
 
 Kernel selection is driven by `src/mpm_jax/registry.py`:
-- `backends._P2G` maps each `kernel=<name>` to a `_P2GVariant`, and `build_backend(name, num_grids)` constructs + validates the `Backend` at init (availability + super-cell divisibility). `KERNEL_NAMES` lists the valid names.
+- `backends.py` is a small `Backend` class hierarchy (base = jax_baseline; one subclass per variant overriding `prepare()`/`p2g()`, with `g2p()` shared on the base). `build_backend(name, num_grids)` maps the name to a constructed backend and validates the super-cell grid-divisibility at init. `KERNEL_NAMES` lists the valid names. The frame loop calls `backend.step()` (order + scatter) and `backend.g2p()`.
 - `build_solver(cfg)` reads the registry, builds all closures (particles, params, BCs, constitutive fns), and returns the fully initialised solver.
 - No if/elif dispatch in `simulate.py`; the routing is entirely in the registry.
 
