@@ -229,7 +229,7 @@ def _run_jax_solver(solver, cfg: DictConfig, trace_dir=None, profile_opts=None):
     import jax.numpy as jnp
 
     sim = cfg.sim
-    kernel_name = cfg.get('kernel', {}).get('name', 'jax_baseline')
+    kernel_name = cfg.get('p2g', {}).get('name', 'jax_baseline')
     bench = cfg.get('benchmark', False)
 
     def _warmup_metrics(s):
@@ -351,7 +351,7 @@ def _build_profile_options(profile_cfg):
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig):
     profile_name = cfg.get('profile', {}).get('name', 'none')
-    kernel_name = cfg.get('kernel', {}).get('name', 'jax_baseline')
+    kernel_name = cfg.get('p2g', {}).get('name', 'jax_baseline')
 
     if profile_name not in ('none', 'jax'):
         raise RuntimeError(

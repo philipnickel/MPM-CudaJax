@@ -36,13 +36,13 @@ the custom CUDA kernels via CMake — `nvcc` and `gxx` ship from
 conda-forge inside the env, no system module load needed):
 ```bash
 pixi install -e gpu
-pixi run -e gpu python simulate.py kernel=cuda_v3_inline material=sand_jacobi
+pixi run -e gpu python simulate.py p2g=cuda_v3_inline material=sand_jacobi
 ```
 
 To benchmark instead of rendering:
 ```bash
 pixi run -e gpu python simulate.py \
-    kernel=cuda_v3_inline material=sand_jacobi \
+    p2g=cuda_v3_inline material=sand_jacobi \
     sim.n_particles=500000 sim.num_grids=64 sim.num_frames=15 \
     benchmark=true
 ```
@@ -119,13 +119,13 @@ pixi run -e gpu python simulate.py
 pixi run -e gpu python simulate.py benchmark=true
 
 # Pick a kernel
-pixi run -e gpu python simulate.py kernel=jax_baseline                                 # JAX/XLA baseline (scan P2G + MLS G2P)
-pixi run -e gpu python simulate.py kernel=cuda_v1_inline material=sand_jacobi
-pixi run -e gpu python simulate.py kernel=cuda_v2_inline material=sand_jacobi         # warp-shuffle (default: fori loop)
-pixi run -e gpu python simulate.py kernel=cuda_v2_inline kernel.loop_kind=python material=sand_jacobi
-pixi run -e gpu python simulate.py kernel=cuda_v3_inline material=sand_jacobi         # Morton sort
-pixi run -e gpu python simulate.py kernel=cuda_v4_inline material=sand_jacobi         # super-cell grid tile
-pixi run -e gpu python simulate.py kernel=cutile_v6_atomic_tile material=sand_jacobi benchmark=true  # cuTile (tiled model)
+pixi run -e gpu python simulate.py p2g=jax_baseline                                 # JAX/XLA baseline (scan P2G + MLS G2P)
+pixi run -e gpu python simulate.py p2g=cuda_v1_inline material=sand_jacobi
+pixi run -e gpu python simulate.py p2g=cuda_v2_inline material=sand_jacobi         # warp-shuffle (default: fori loop)
+pixi run -e gpu python simulate.py p2g=cuda_v2_inline p2g.loop_kind=python material=sand_jacobi
+pixi run -e gpu python simulate.py p2g=cuda_v3_inline material=sand_jacobi         # Morton sort
+pixi run -e gpu python simulate.py p2g=cuda_v4_inline material=sand_jacobi         # super-cell grid tile
+pixi run -e gpu python simulate.py p2g=cutile_v6_atomic_tile material=sand_jacobi benchmark=true  # cuTile (tiled model)
 
 # Override sim params
 pixi run -e gpu python simulate.py sim.n_particles=1000000 sim.num_grids=64
@@ -133,11 +133,11 @@ pixi run -e gpu python simulate.py sim.n_particles=1000000 sim.num_grids=64
 
 ## Kernel variants
 
-| `kernel=` | What it does |
+| `p2g=` | What it does |
 |---|---|
 | `jax_baseline` | The JAX/XLA baseline: `lax.scan` over the 27 offsets for **both** P2G and G2P, unified MLS-MPM G2P (APIC affine `C` reused as ∇v), scatter-free Jacobi SVD. Every other kernel reuses this G2P, so only the P2G varies. |
 | `cuda_v1_inline` | CUDA inline-weight P2G (one thread/particle, global `atomicAdd`) + JAX baseline G2P. |
-| `cuda_v2_inline` | CUDA warp-shuffle coalesced inline P2G + JAX baseline G2P. Default `loop_kind=fori`. Override with `kernel.loop_kind=python`. |
+| `cuda_v2_inline` | CUDA warp-shuffle coalesced inline P2G + JAX baseline G2P. Default `loop_kind=fori`. Override with `p2g.loop_kind=python`. |
 | `cuda_v3_inline` | CUDA Morton-sorted inline P2G + JAX baseline G2P. (XLA command-buffer / CUDA-Graph capture is on for every kernel via the gpu env's `XLA_FLAGS`.) |
 | `cuda_v4_inline` | CUDA super-cell-owned grid tile inline P2G + JAX baseline G2P. |
 | `cutile_v6_atomic_tile` | NVIDIA cuTile (tiled programming model) P2G + JAX baseline G2P: SPGrid-style arena scatter — sort by SC=2 home super-cell, reduce each super-cell into a 4³ L1 arena, write back with one tile-coalesced `atomic_store_add` (no coloring). Occupancy autotuned per-GPU. Requires `cuda-tile`. |
@@ -155,9 +155,9 @@ The solver is class-based:
 - **`MPMSolver`** is an Equinox module. Particle/grid state is stored as dynamic JAX leaves, while backend choices, constitutive functions, boundary functions, and the compiled `_frame` are static fields. `stepped()` returns a new solver with updated state; `step()` keeps the driver-friendly mutating API and advances one frame by running `_frame(self.state)`. The frame contains `steps_per_frame` substeps as a single XLA program (via `lax.fori_loop` by default, or unrolled with `loop_kind="python"`).
 
 Construction is declarative (`src/mpm_jax/zen_build.py`):
-- The MPMSolver build graph is a hydra-zen `builds()` tree — particles, params, boundary, constitutive, backend, initial state — wired by `${sim.*}`/`${kernel.*}`/`${material.*}` interpolations and registered as the `solver` config group. `simulate.py` / `profile_nsight.py` just call `instantiate(cfg.solver)`; `build_solver(cfg)` is the equivalent programmatic entry.
+- The MPMSolver build graph is a hydra-zen `builds()` tree — particles, params, boundary, constitutive, backend, initial state — wired by `${sim.*}`/`${p2g.*}`/`${material.*}` interpolations and registered as the `solver` config group. `simulate.py` / `profile_nsight.py` just call `instantiate(cfg.solver)`; `build_solver(cfg)` is the equivalent programmatic entry.
 - `backends.py` is a small `Backend` class hierarchy (base = jax_baseline; one subclass per variant overriding `prepare()`/`p2g()`, with `g2p()` shared on the base). `build_backend(name, num_grids)` maps the name to a constructed backend and validates the super-cell grid-divisibility at init. `KERNEL_NAMES` lists the valid names. The frame loop calls `backend.step()` (order + scatter) and `backend.g2p()`.
-- No if/elif dispatch anywhere; routing is the `kernel=` config selecting `${kernel.name}` inside the graph.
+- No if/elif dispatch anywhere; routing is the `p2g=` config selecting `${p2g.name}` inside the graph.
 
 All solver variants now run through the same JAX-owned frame loop. The pure-JAX path compiles the entire frame (multiple substeps) as one XLA program. The inline CUDA variants (`cuda_v*_inline`) move per-particle stencil work into CUDA kernels so the `(N, 27, *)` intermediate tensors never materialize in HBM. The cuTile variant (`cutile_v6_atomic_tile`) launches a tiled-programming-model P2G kernel from inside that same JAX frame via the cuTile/JAX bridge.
 
@@ -176,7 +176,7 @@ pixi run -e gpu python simulate.py -cn sweep_profile
 Each combination gets its own `multirun/<date>/<run>/` subdir with a `results.json`. Sweeps
 should use Hydra multirun so log parsers see the expected directory structure.
 
-For an ad-hoc sweep: `pixi run -e gpu python simulate.py -m sim.n_particles=5000,50000,200000 kernel=jax_baseline,cuda_v2_inline benchmark=true`.
+For an ad-hoc sweep: `pixi run -e gpu python simulate.py -m sim.n_particles=5000,50000,200000 p2g=jax_baseline,cuda_v2_inline benchmark=true`.
 
 ## Profiling
 
@@ -184,7 +184,7 @@ For an ad-hoc sweep: `pixi run -e gpu python simulate.py -m sim.n_particles=5000
 
 ```bash
 pixi run -e gpu python simulate.py profile=jax benchmark=true \
-    kernel=cuda_v3_inline material=sand_jacobi
+    p2g=cuda_v3_inline material=sand_jacobi
 ```
 
 The trace is written to `outputs/<YYYY-MM-DD>/<HH-MM-SS>/jax_trace/` and includes
@@ -237,7 +237,7 @@ JAX/XLA custom calls plus their GPU kernels.
 
 ```bash
 pixi run -e gpu python profile_nsight.py -cn nsight_profile \
-    kernel=jax_baseline material=sand_jacobi nsight.phase=p2g sim.n_particles=4096
+    p2g=jax_baseline material=sand_jacobi nsight.phase=p2g sim.n_particles=4096
 ```
 
 ## Config
@@ -248,23 +248,23 @@ Hydra config groups in `conf/`:
 |---|---|---|
 | `material` | `sand_jacobi` (default) | Constitutive model |
 | `sim` | `default` | n_particles, num_grids, dt, BCs, ... |
-| `kernel` | `jax_baseline` (default), `cuda_v*_inline`, `cutile_v6_atomic_tile` | P2G implementation (G2P shared) |
+| `p2g` | `jax_baseline` (default), `cuda_v*_inline`, `cutile_v6_atomic_tile` | P2G implementation (G2P shared) |
 | `profile` | `none` (default), `jax` | Profiling backend |
 
 Top-level fields: `benchmark`, `tag`, `output_dir`. All overridable from CLI:
 
 ```bash
-pixi run -e gpu python simulate.py sim.n_particles=100000 kernel=cuda_v3_inline benchmark=true
+pixi run -e gpu python simulate.py sim.n_particles=100000 p2g=cuda_v3_inline benchmark=true
 ```
 
-Kernel-specific knobs passed as top-level CLI overrides (merged into `cfg.kernel`):
+Kernel-specific knobs passed as top-level CLI overrides (merged into `cfg.p2g`):
 
 ```bash
 # loop_kind: fori (default) | python (unrolled)
-pixi run -e gpu python simulate.py kernel=cuda_v2_inline kernel.loop_kind=python
+pixi run -e gpu python simulate.py p2g=cuda_v2_inline p2g.loop_kind=python
 
 # autotune: cutile_v6 occupancy is tuned per-GPU and cached; disable with autotune=false
-pixi run -e gpu python simulate.py kernel=cutile_v6_atomic_tile kernel.autotune=false
+pixi run -e gpu python simulate.py p2g=cutile_v6_atomic_tile p2g.autotune=false
 ```
 
 (XLA command-buffer / CUDA-Graph capture is always on via `XLA_FLAGS` in the gpu env — no per-kernel flag.)
@@ -297,7 +297,7 @@ MPM-CudaJax/
 │   ├── nsight_profile.yaml
 │   ├── material/            # sand_jacobi.yaml
 │   ├── sim/default.yaml
-│   ├── kernel/              # jax_baseline.yaml, cuda_v*.yaml, cutile_v6_atomic_tile.yaml
+│   ├── p2g/              # jax_baseline.yaml, cuda_v*.yaml, cutile_v6_atomic_tile.yaml
 │   ├── profile/             # none.yaml, jax.yaml
 │   └── sweep_*.yaml
 └── src/

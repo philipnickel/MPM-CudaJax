@@ -6,7 +6,7 @@ defaults:
   - nsight_profile
   - _self_
 
-kernel:
+p2g:
   name: jax_baseline
 
 material:

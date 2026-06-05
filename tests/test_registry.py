@@ -29,7 +29,7 @@ def test_build_solver_dispatches_jax_baseline_kernel():
     from mpm_jax.registry import build_solver
     from mpm_jax.solver import MPMSolver
     cfg = OmegaConf.create({
-        "kernel": {"name": "jax_baseline"},
+        "p2g": {"name": "jax_baseline"},
         "sim": {"n_particles": 64, "num_grids": 16, "dt": 3e-4, "steps_per_frame": 2,
                 "clip_bound": 0.5, "damping": 1.0, "gravity": [0, 0, -9.8], "rho": 1000.0,
                 "size": [0.5, 0.5, 0.5], "initial_velocity": [0, 0, 0],
@@ -55,7 +55,7 @@ def test_build_solver_rejects_unknown_kernel():
     from omegaconf import OmegaConf
     from mpm_jax.registry import build_solver
     cfg = OmegaConf.create({
-        "kernel": {"name": "unknown_kernel"},
+        "p2g": {"name": "unknown_kernel"},
         "sim": {"n_particles": 64, "num_grids": 16, "dt": 3e-4, "steps_per_frame": 1,
                 "clip_bound": 0.5, "damping": 1.0, "gravity": [0, 0, -9.8], "rho": 1000.0,
                 "size": [0.5, 0.5, 0.5], "initial_velocity": [0, 0, 0],
@@ -75,7 +75,7 @@ def test_build_solver_dispatches_sand_jacobi_on_jax_baseline():
     from mpm_jax.registry import build_solver
     from mpm_jax.solver import MPMSolver
     cfg = OmegaConf.create({
-        "kernel": {"name": "jax_baseline"},
+        "p2g": {"name": "jax_baseline"},
         "sim": {"n_particles": 64, "num_grids": 16, "dt": 3e-4, "steps_per_frame": 1,
                 "clip_bound": 0.5, "damping": 1.0, "gravity": [0, 0, -9.8], "rho": 1000.0,
                 "size": [0.5, 0.5, 0.5], "initial_velocity": [0, 0, 0],

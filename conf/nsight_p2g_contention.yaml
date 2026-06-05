@@ -9,7 +9,7 @@ defaults:
   - nsight_profile
   - _self_
 
-kernel:
+p2g:
   name: cuda_v1_inline
 
 nsight:

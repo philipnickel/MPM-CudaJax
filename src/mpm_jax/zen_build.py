@@ -2,7 +2,7 @@
 
 This is the declarative alternative to the imperative `registry.build_solver`:
 the construction graph is expressed as a tree of `hydra_zen.builds(...)` configs
-whose interpolations (`${sim.*}`, `${material.*}`, `${kernel.name}`) resolve
+whose interpolations (`${sim.*}`, `${material.*}`, `${p2g.name}`) resolve
 against the composed Hydra config. `instantiate(cfg.solver)` then builds it.
 
 Two tiny adapters bridge the parts plain `instantiate` can't express:
@@ -67,8 +67,8 @@ Params = _b(make_params, n_particles="${sim.n_particles}", num_grids="${sim.num_
             dt="${sim.dt}", gravity="${sim.gravity}", rho="${sim.rho}",
             clip_bound="${sim.clip_bound}", damping="${sim.damping}",
             center="${sim.center}", size="${sim.size}")
-Backend = _b(build_backend, name="${kernel.name}", num_grids="${sim.num_grids}",
-             autotune="${oc.select:kernel.autotune,true}")
+Backend = _b(build_backend, name="${p2g.name}", num_grids="${sim.num_grids}",
+             autotune="${oc.select:p2g.autotune,true}")
 # constitutive expects a DictConfig (uses cfg.name) -> keep OmegaConf (no convert)
 Elasticity = builds(get_constitutive, cfg="${material.elasticity}")
 Plasticity = builds(get_constitutive, cfg="${material.plasticity}")
@@ -97,6 +97,6 @@ def build_solver(cfg):
     if "solver" in cfg:
         return instantiate(cfg.solver)
     root = OmegaConf.create({
-        "sim": cfg.sim, "material": cfg.material, "kernel": cfg.kernel, "solver": Solver,
+        "sim": cfg.sim, "material": cfg.material, "p2g": cfg.p2g, "solver": Solver,
     })
     return instantiate(root.solver)

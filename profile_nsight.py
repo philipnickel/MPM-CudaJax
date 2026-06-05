@@ -112,7 +112,7 @@ def _build_p2g_stage(cfg: DictConfig):
 
     from mpm_jax.backends import KERNEL_NAMES
 
-    kernel_name = str(cfg.kernel.name)
+    kernel_name = str(cfg.p2g.name)
     if kernel_name not in KERNEL_NAMES:
         raise RuntimeError(f"Unsupported P2G kernel={kernel_name!r}.")
 
@@ -138,7 +138,7 @@ def _p2g_runner(cfg: DictConfig, nsight):
     import jax
 
     jit_p2g_stage, state = _build_p2g_stage(cfg)
-    annotation_name = f"{cfg.kernel.name}_p2g"
+    annotation_name = f"{cfg.p2g.name}_p2g"
 
     def run_p2g_once():
         with nsight.annotate(annotation_name):
@@ -173,7 +173,7 @@ def _merge_variant_cfg(
     steps_per_frame: int,
 ):
     variant_cfg = OmegaConf.create(deepcopy(OmegaConf.to_container(base_cfg, resolve=True)))
-    variant_cfg.kernel.name = str(kernel_name)
+    variant_cfg.p2g.name = str(kernel_name)
     variant_cfg.sim.n_particles = int(n_particles)
     variant_cfg.sim.num_grids = int(num_grids)
     variant_cfg.sim.steps_per_frame = int(steps_per_frame)
@@ -181,7 +181,7 @@ def _merge_variant_cfg(
 
 
 def _sweep_kernel_names(cfg: DictConfig):
-    base_kernel = cfg.get("kernel", {}).get("name", "jax_baseline")
+    base_kernel = cfg.get("p2g", {}).get("name", "jax_baseline")
     sweep = cfg.nsight.get("sweep", None)
     if sweep is not None:
         sweep_dict = OmegaConf.to_container(sweep, resolve=True)
@@ -195,7 +195,7 @@ def _sweep_kernel_names(cfg: DictConfig):
         for variant in OmegaConf.to_container(configs, resolve=True):
             if not isinstance(variant, Mapping):
                 raise RuntimeError("Each nsight.configs entry must be a mapping of Hydra overrides.")
-            kernel_name = str(_variant_value(variant, "kernel.name", base_kernel))
+            kernel_name = str(_variant_value(variant, "p2g.name", base_kernel))
             if kernel_name not in kernels:
                 kernels.append(kernel_name)
         return kernels or [base_kernel]
@@ -650,7 +650,7 @@ def _disable_editable_pth_for_nsight():
 @hydra.main(version_base=None, config_path="conf", config_name="nsight_profile")
 def main(cfg: DictConfig):
     nsight = _require_nsight()
-    kernel_name = str(cfg.get("kernel", {}).get("name", "jax_baseline"))
+    kernel_name = str(cfg.get("p2g", {}).get("name", "jax_baseline"))
     phase = str(cfg.nsight.get("phase", "p2g"))
     if phase != "p2g":
         raise RuntimeError("profile_nsight.py now supports only nsight.phase=p2g.")
