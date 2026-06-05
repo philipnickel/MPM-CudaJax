@@ -5,10 +5,10 @@ with hand-written **CUDA** kernels and an **NVIDIA cuTile** (tiled
 programming model) kernel. Investigates where JAX/XLA's automatic GPU
 compilation is sufficient and where custom kernels win.
 
-The solver is **constructed declaratively from config**: the whole build graph
-is a hydra-zen `builds()` tree (`mpm_jax.zen_build`) registered as the `solver`
-config group, so `instantiate(cfg.solver)` (or `build_solver(cfg)`) returns a
-ready `MPMSolver`. `solver.step()` advances one frame;
+The solver is **constructed from config** by the config-aware constructor
+`MPMSolver.from_cfg(cfg)` (aliased as `build_solver(cfg)`): it reads the
+`sim`/`material`/`p2g` sections, builds the pieces (params, particles, backend,
+boundary, initial state), and returns a ready `MPMSolver`. `solver.step()` advances one frame;
 `solver.solve(num_frames, on_frame=...)` runs the full simulation with an
 optional IO callback.
 
@@ -153,10 +153,10 @@ The solver is class-based:
 
 - **`MPMSolver`** is a plain Python class. Particle/grid state is mutated in place by the driver API; the backend, constitutive/boundary closures, and the compiled `_frame` are fixed for the solver's lifetime. `stepped()` returns a new solver with advanced state (shallow copy + new state); `step()` is the mutating driver and advances one frame by running `_frame(self.state)`. The frame runs `steps_per_frame` substeps as a single XLA program via `lax.fori_loop`.
 
-Construction is declarative (`src/mpm_jax/zen_build.py`):
-- The MPMSolver build graph is a hydra-zen `builds()` tree — particles, params, boundary, constitutive, backend, initial state — wired by `${sim.*}`/`${p2g.*}`/`${material.*}` interpolations and registered as the `solver` config group. `simulate.py` / `profile_nsight.py` just call `instantiate(cfg.solver)`; `build_solver(cfg)` is the equivalent programmatic entry.
+Construction (`MPMSolver.from_cfg(cfg)` in `src/mpm_jax/solver.py`):
+- The config-aware constructor reads the `sim`/`material`/`p2g` config sections and builds the pieces — params (with derived dx/vol/p_mass), particles, the name-selected backend, boundary closures, initial state — threading the shared scalars (`n_particles`/`num_grids`) as locals. `simulate.py` / `profile_nsight.py` call `build_solver(cfg)` (an alias). `MPMSolver.__init__` itself takes the built pieces (config-agnostic, so it's directly unit-testable).
 - `backends.py` is a small `Backend` class hierarchy (base = jax_baseline; one subclass per variant overriding `prepare()`/`p2g()`, with `g2p()` shared on the base). `build_backend(name, num_grids)` maps the name to a constructed backend and validates the super-cell grid-divisibility at init. `KERNEL_NAMES` lists the valid names. The frame loop calls `backend.step()` (order + scatter) and `backend.g2p()`.
-- No if/elif dispatch anywhere; routing is the `p2g=` config selecting `${p2g.name}` inside the graph.
+- No if/elif dispatch anywhere; routing is the `p2g=` config selecting the backend by name.
 
 All solver variants now run through the same JAX-owned frame loop. The pure-JAX path compiles the entire frame (multiple substeps) as one XLA program. The inline CUDA variants (`cuda_v*_inline`) move per-particle stencil work into CUDA kernels so the `(N, 27, *)` intermediate tensors never materialize in HBM. The cuTile variant (`cutile_v6_atomic_tile`) launches a tiled-programming-model P2G kernel from inside that same JAX frame via the cuTile/JAX bridge.
 
@@ -228,7 +228,7 @@ jax.profiler.stop_trace()
 ```
 
 This workflow works for all registered kernels because they all enter the same
-JAX-owned frame loop through `instantiate(cfg.solver)`. Pure JAX variants are shown as
+JAX-owned frame loop through `build_solver(cfg)`. Pure JAX variants are shown as
 XLA-generated operations and fusion kernels. CUDA and cuTile variants appear as
 JAX/XLA custom calls plus their GPU kernels.
 
@@ -300,8 +300,7 @@ MPM-CudaJax/
     └── mpm_jax/
         ├── types.py         # MPMState, MPMParams, make_params
         ├── solver.py        # MPMSolver
-        ├── zen_build.py     # hydra-zen builds() graph -> instantiate(cfg.solver)
-        ├── registry.py      # re-exports build_solver / build_backend / KERNEL_NAMES
+        ├── registry.py      # build_solver(cfg) alias + build_backend / KERNEL_NAMES re-exports
         ├── constitutive.py  # sand Jacobi elasticity + plasticity
         ├── boundary.py      # sticky surface collider
         ├── blocks/          # Pure math: weights, g2p, grid, svd, sort, init

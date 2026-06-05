@@ -17,9 +17,6 @@ import hydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
-# Side-effect import: registers the `solver` ConfigStore group so the inherited
-# `- solver: default` default resolves at compose time (before @hydra.main runs).
-import mpm_jax.zen_build  # noqa: F401, E402
 from mpm_jax.backends import KERNEL_NAMES  # noqa: E402
 
 _UNSUPPORTED_ANALYZE_CONFIG_KEYS = {"configs"}
@@ -93,23 +90,23 @@ def _require_nsight():
 
 
 def _build_p2g_stage(cfg: DictConfig):
-    """Isolate the P2G as a profiled callable, reusing the instantiated solver.
+    """Isolate the P2G as a profiled callable, reusing the constructed solver.
 
-    Builds the solver from `cfg.solver` (the same hydra-zen graph the run path
-    uses), then runs just pre -> elasticity -> backend.prepare (sort) ->
+    Builds the solver with `build_solver(cfg)` (the same path the run uses), then
+    runs just pre -> elasticity -> backend.prepare (sort) ->
     backend.p2g (scatter) on the solver's own params/state/fns — no duplicated
     construction.
     """
     import jax
-    from hydra_zen import instantiate
 
     from mpm_jax.backends import KERNEL_NAMES
+    from mpm_jax.registry import build_solver
 
     kernel_name = str(cfg.p2g.name)
     if kernel_name not in KERNEL_NAMES:
         raise RuntimeError(f"Unsupported P2G kernel={kernel_name!r}.")
 
-    solver = instantiate(cfg.solver)
+    solver = build_solver(cfg)
     params, backend = solver.params, solver.backend
     pre_fn, elasticity_fn = solver.pre_fn, solver.elasticity_fn
     state = solver.state

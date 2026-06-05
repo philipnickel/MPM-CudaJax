@@ -39,7 +39,6 @@ REPO = os.path.dirname(os.path.abspath(__file__))
 def build_cfg(args):
     from hydra import compose, initialize_config_dir
     from hydra.core.global_hydra import GlobalHydra
-    import mpm_jax.zen_build  # noqa: F401  # registers the `solver` ConfigStore group before compose
 
     if GlobalHydra().is_initialized():
         GlobalHydra.instance().clear()

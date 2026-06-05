@@ -6,11 +6,6 @@ from tqdm import tqdm
 import hydra
 from omegaconf import DictConfig
 
-# Import for its side effect: registers the `solver` group in Hydra's
-# ConfigStore so config.yaml's `- solver: default` resolves and `cfg.solver`
-# exists. Must happen before @hydra.main composes the config (i.e. at import).
-import mpm_jax.zen_build  # noqa: F401, E402
-
 
 def visualize_frames(frames, export_path, center=[0.5, 0.5, 0.5],
                      size=[2.0, 2.0, 2.0], c='blue', s=20, fps=30):
@@ -301,13 +296,13 @@ def _run_jax_solver(solver, cfg: DictConfig, trace_dir=None, profile_opts=None):
 
 
 def run(cfg: DictConfig, trace_dir=None, profile_opts=None):
-    """Build the solver from the config (hydra-zen `instantiate`) and drive it.
+    """Build the solver from the config (`build_solver`) and drive it.
 
     Returns (frames, elapsed, total_steps, summary, frame_metrics).
     """
-    from hydra_zen import instantiate  # pylint: disable=import-outside-toplevel
+    from mpm_jax.registry import build_solver  # pylint: disable=import-outside-toplevel
 
-    solver = instantiate(cfg.solver)
+    solver = build_solver(cfg)
     return _run_jax_solver(solver, cfg, trace_dir=trace_dir, profile_opts=profile_opts)
 
 
