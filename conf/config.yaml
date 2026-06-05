@@ -1,11 +1,15 @@
-_target_: mpm_jax.solver.RuntimeConfig
-
 defaults:
   - material: sand_jacobi
   - sim: default
   - backend: jax_baseline
   - profile: none
   - _self_
+
+solver:
+  _target_: mpm_jax.solver.RuntimeConfig
+  material: ${material}
+  sim: ${sim}
+  backend: ${backend}
 
 output_dir: ./output
 tag: sand_jacobi

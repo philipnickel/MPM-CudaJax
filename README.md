@@ -5,10 +5,10 @@ with hand-written **CUDA** kernels and an **NVIDIA cuTile** (tiled
 programming model) kernel. Investigates where JAX/XLA's automatic GPU
 compilation is sufficient and where custom kernels win.
 
-The solver is **constructed from config** by Hydra-instantiating a
-`RuntimeConfig` and passing it to `MPMSolver`: the `backend` config targets the
-backend class directly, and `MPMSolver` builds params, particles, boundaries,
-and initial state. `solver.step()` advances one frame;
+The solver is **constructed from config** by Hydra-instantiating `cfg.solver`
+into a `RuntimeConfig` and passing it to `MPMSolver`: the `backend` config
+targets the backend class directly, and `MPMSolver` builds params, particles,
+boundaries, and initial state. `solver.step()` advances one frame;
 `solver.solve(num_frames, on_frame=...)` runs the full simulation with an
 optional IO callback.
 
@@ -154,7 +154,7 @@ The solver is class-based:
 - **`MPMSolver`** is a plain Python class. Particle/grid state is mutated in place by the driver API; the backend, constitutive/boundary closures, and the compiled `_frame` are fixed for the solver's lifetime. `stepped()` returns a new solver with advanced state (shallow copy + new state); `step()` is the mutating driver and advances one frame by running `_frame(self.state)`. The frame runs `steps_per_frame` substeps as a single XLA program via `lax.fori_loop`.
 
 Construction (`RuntimeConfig` + `MPMSolver` in `src/mpm_jax/solver.py`):
-- Hydra instantiates the top-level config into `RuntimeConfig`; each `backend` config has a `_target_` for its backend class and passes `num_grids` for validation. `simulate.py` / `profile_nsight.py` call `MPMSolver(hydra.utils.instantiate(cfg))`.
+- Hydra instantiates `cfg.solver` into `RuntimeConfig`; each `backend` config has a `_target_` for its backend class and passes `num_grids` for validation. `simulate.py` / `profile_nsight.py` call `MPMSolver(hydra.utils.instantiate(cfg.solver))`.
 - `MPMSolver` reads the runtime config and builds params (with derived dx/vol/p_mass), particles, boundary closures, and initial state. The backend object is already instantiated by Hydra and owns CUDA/cuTile registration, grid-divisibility validation, and autotune setup.
 - `backends.py` is a small `Backend` class hierarchy (base = jax_baseline; one subclass per variant overriding `prepare()`/`p2g()`, with `g2p()` shared on the base). `KERNEL_NAMES` lists the valid names. The frame loop calls `backend.step()` (order + scatter) and `backend.g2p()`.
 
@@ -228,7 +228,7 @@ jax.profiler.stop_trace()
 ```
 
 This workflow works for all registered kernels because they all enter the same
-JAX-owned frame loop through `MPMSolver(hydra.utils.instantiate(cfg))`. Pure JAX variants are shown as
+JAX-owned frame loop through `MPMSolver(hydra.utils.instantiate(cfg.solver))`. Pure JAX variants are shown as
 XLA-generated operations and fusion kernels. CUDA and cuTile variants appear as
 JAX/XLA custom calls plus their GPU kernels.
 

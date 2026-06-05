@@ -118,7 +118,7 @@ def _build_p2g_stage(cfg: DictConfig):
     if kernel_name not in KERNEL_NAMES:
         raise RuntimeError(f"Unsupported P2G kernel={kernel_name!r}.")
 
-    solver = MPMSolver(hydra.utils.instantiate(cfg))
+    solver = MPMSolver(hydra.utils.instantiate(cfg.solver))
     params, backend = solver.params, solver.backend
     pre_fn, elasticity_fn = solver.pre_fn, solver.elasticity_fn
     state = solver.state

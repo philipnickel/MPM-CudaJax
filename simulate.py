@@ -302,7 +302,7 @@ def run(cfg: DictConfig, trace_dir=None, profile_opts=None):
     """
     from mpm_jax.solver import MPMSolver  # pylint: disable=import-outside-toplevel
 
-    solver = MPMSolver(hydra.utils.instantiate(cfg))
+    solver = MPMSolver(hydra.utils.instantiate(cfg.solver))
     return _run_jax_solver(solver, cfg, trace_dir=trace_dir, profile_opts=profile_opts)
 
 

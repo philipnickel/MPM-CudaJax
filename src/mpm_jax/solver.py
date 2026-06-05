@@ -16,11 +16,6 @@ class RuntimeConfig:
     material: Any
     sim: Any
     backend: Any
-    profile: Any = None
-    output_dir: str = "./output"
-    tag: str = "sand_jacobi"
-    benchmark: bool = False
-    render: Any = None
 
 
 class MPMSolver:

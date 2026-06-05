@@ -87,7 +87,7 @@ def run_arc(cfg, args, target_frames=None):
 
     ctr, sz = list(cfg.sim.center), list(cfg.sim.size)
     margin = (1.0 - float(sz[0])) / 2.0  # lateral gap to the (wall-free) grid edge
-    solver = MPMSolver(hydra.utils.instantiate(cfg))
+    solver = MPMSolver(hydra.utils.instantiate(cfg.solver))
     print(f"Building solver: backend={solver.backend.name} n_particles={n:,} "
           f"num_grids={cfg.sim.num_grids} dx={1.0/float(cfg.sim.num_grids):.5f} dt={dt:g} "
           f"steps/frame={spf} frames={cfg.sim.num_frames}")

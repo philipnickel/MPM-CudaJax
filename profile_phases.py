@@ -40,7 +40,7 @@ def _ms_per_call(fn, args, k=50):
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig):
-    solver = MPMSolver(hydra.utils.instantiate(cfg))
+    solver = MPMSolver(hydra.utils.instantiate(cfg.solver))
     p, be = solver.params, solver.backend
     pre_fn, post_fn = solver.pre_fn, solver.post_fn
     elasticity_fn, plasticity_fn = solver.elasticity_fn, solver.plasticity_fn

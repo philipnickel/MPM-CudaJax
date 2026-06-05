@@ -30,7 +30,6 @@ def test_hydra_instantiates_runtime_config_and_solver():
     from mpm_jax.solver import MPMSolver
 
     cfg = OmegaConf.create({
-        "_target_": "mpm_jax.solver.RuntimeConfig",
         "backend": {
             "_target_": "mpm_jax.backends.Backend",
             "num_grids": 16,
@@ -50,7 +49,13 @@ def test_hydra_instantiates_runtime_config_and_solver():
             },
         },
     })
-    solver = MPMSolver(hydra.utils.instantiate(cfg))
+    cfg.solver = {
+        "_target_": "mpm_jax.solver.RuntimeConfig",
+        "material": cfg.material,
+        "sim": cfg.sim,
+        "backend": cfg.backend,
+    }
+    solver = MPMSolver(hydra.utils.instantiate(cfg.solver))
     assert isinstance(solver, MPMSolver)
     assert solver.backend.name == "jax_baseline"
     solver.step()
