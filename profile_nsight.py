@@ -17,6 +17,10 @@ import hydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
+# Side-effect import: registers the `solver` ConfigStore group so the inherited
+# `- solver: default` default resolves at compose time (before @hydra.main runs).
+import mpm_jax.zen_build  # noqa: F401, E402
+
 _UNSUPPORTED_ANALYZE_CONFIG_KEYS = {"configs"}
 _SCRIPT_NSIGHT_KEYS = {"phase", "write_json", "plot", "sweep", "configs", "analyze"}
 _P2G_KERNELS = {
@@ -96,52 +100,26 @@ def _require_nsight():
 
 
 def _build_p2g_stage(cfg: DictConfig):
-    import jax
-    import jax.numpy as jnp
+    """Isolate the P2G as a profiled callable, reusing the instantiated solver.
 
-    from mpm_jax.blocks.grid import build_grid_x
-    from mpm_jax.blocks.init import get_particles
-    from mpm_jax.boundary import build_boundary_fns
-    from mpm_jax.constitutive import get_constitutive
-    from mpm_jax.registry import KERNEL_NAMES, build_backend
-    from mpm_jax.types import MPMState, make_params
+    Builds the solver from `cfg.solver` (the same hydra-zen graph the run path
+    uses), then runs just pre -> elasticity -> backend.prepare (sort) ->
+    backend.p2g (scatter) on the solver's own params/state/fns — no duplicated
+    construction.
+    """
+    import jax
+    from hydra_zen import instantiate
+
+    from mpm_jax.backends import KERNEL_NAMES
 
     kernel_name = str(cfg.kernel.name)
     if kernel_name not in KERNEL_NAMES:
         raise RuntimeError(f"Unsupported P2G kernel={kernel_name!r}.")
 
-    sim = cfg.sim
-    mat = cfg.material
-    n = int(sim.n_particles)
-    params = make_params(
-        n_particles=n,
-        num_grids=int(sim.num_grids),
-        dt=float(sim.dt),
-        gravity=list(sim.gravity),
-        rho=float(sim.rho),
-        clip_bound=float(sim.clip_bound),
-        damping=float(sim.damping),
-        center=list(sim.center),
-        size=list(sim.size),
-    )
-    particles = jnp.array(
-        get_particles(n, center=list(sim.center), size=list(sim.size)),
-        dtype=jnp.float32,
-    )
-    grid_x = build_grid_x(params.num_grids)
-    pre_fn, _ = build_boundary_fns(
-        list(sim.boundary_conditions), grid_x, params.dx, particles, params.dt, params.p_mass)
-    elasticity_fn = get_constitutive(mat.elasticity)
-    state = MPMState(
-        x=particles,
-        v=jnp.broadcast_to(jnp.array(list(sim.initial_velocity), dtype=jnp.float32), (n, 3)).copy(),
-        C=jnp.zeros((n, 3, 3)),
-        F=jnp.tile(jnp.eye(3), (n, 1, 1)),
-    )
-
-    backend = build_backend(
-        kernel_name, int(params.num_grids),
-        autotune=bool(cfg.kernel.get("autotune", True)))
+    solver = instantiate(cfg.solver)
+    params, backend = solver.params, solver.backend
+    pre_fn, elasticity_fn = solver.pre_fn, solver.elasticity_fn
+    state = solver.state
 
     @jax.jit
     def jit_p2g_stage(state):

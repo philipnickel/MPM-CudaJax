@@ -5,3 +5,4 @@
 # atomics). No coloring, no parity, one launch. Requires num_grids divisible by 2.
 # Occupancy is autotuned per-GPU and cached; disable with kernel.autotune=false.
 name: cutile_v6_atomic_tile
+autotune: true

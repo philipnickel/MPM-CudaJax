@@ -2,6 +2,7 @@ defaults:
   - material: sand_jacobi
   - sim: default
   - kernel: jax_baseline
+  - solver: default      # hydra-zen Solver graph (registered in mpm_jax.zen_build)
   - profile: none
   - _self_
 

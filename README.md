@@ -5,10 +5,10 @@ with hand-written **CUDA** kernels and an **NVIDIA cuTile** (tiled
 programming model) kernel. Investigates where JAX/XLA's automatic GPU
 compilation is sufficient and where custom kernels win.
 
-The solver uses a **config-driven class API**: `build_solver(cfg)` calls
-`build_backend(cfg.kernel.name, num_grids)` (which validates the choice at init),
-constructs an `MPMSolver`, and returns it ready to call.
-`solver.step()` advances one frame;
+The solver is **constructed declaratively from config**: the whole build graph
+is a hydra-zen `builds()` tree (`mpm_jax.zen_build`) registered as the `solver`
+config group, so `instantiate(cfg.solver)` (or `build_solver(cfg)`) returns a
+ready `MPMSolver`. `solver.step()` advances one frame;
 `solver.solve(num_frames, on_frame=...)` runs the full simulation with an
 optional IO callback.
 
@@ -154,10 +154,10 @@ The solver is class-based:
 
 - **`MPMSolver`** is an Equinox module. Particle/grid state is stored as dynamic JAX leaves, while backend choices, constitutive functions, boundary functions, and the compiled `_frame` are static fields. `stepped()` returns a new solver with updated state; `step()` keeps the driver-friendly mutating API and advances one frame by running `_frame(self.state)`. The frame contains `steps_per_frame` substeps as a single XLA program (via `lax.fori_loop` by default, or unrolled with `loop_kind="python"`).
 
-Kernel selection is driven by `src/mpm_jax/registry.py`:
+Construction is declarative (`src/mpm_jax/zen_build.py`):
+- The MPMSolver build graph is a hydra-zen `builds()` tree — particles, params, boundary, constitutive, backend, initial state — wired by `${sim.*}`/`${kernel.*}`/`${material.*}` interpolations and registered as the `solver` config group. `simulate.py` / `profile_nsight.py` just call `instantiate(cfg.solver)`; `build_solver(cfg)` is the equivalent programmatic entry.
 - `backends.py` is a small `Backend` class hierarchy (base = jax_baseline; one subclass per variant overriding `prepare()`/`p2g()`, with `g2p()` shared on the base). `build_backend(name, num_grids)` maps the name to a constructed backend and validates the super-cell grid-divisibility at init. `KERNEL_NAMES` lists the valid names. The frame loop calls `backend.step()` (order + scatter) and `backend.g2p()`.
-- `build_solver(cfg)` reads the registry, builds all closures (particles, params, BCs, constitutive fns), and returns the fully initialised solver.
-- No if/elif dispatch in `simulate.py`; the routing is entirely in the registry.
+- No if/elif dispatch anywhere; routing is the `kernel=` config selecting `${kernel.name}` inside the graph.
 
 All solver variants now run through the same JAX-owned frame loop. The pure-JAX path compiles the entire frame (multiple substeps) as one XLA program. The inline CUDA variants (`cuda_v*_inline`) move per-particle stencil work into CUDA kernels so the `(N, 27, *)` intermediate tensors never materialize in HBM. The cuTile variant (`cutile_v6_atomic_tile`) launches a tiled-programming-model P2G kernel from inside that same JAX frame via the cuTile/JAX bridge.
 
@@ -229,7 +229,7 @@ jax.profiler.stop_trace()
 ```
 
 This workflow works for all registered kernels because they all enter the same
-JAX-owned frame loop through `build_solver(cfg)`. Pure JAX variants are shown as
+JAX-owned frame loop through `instantiate(cfg.solver)`. Pure JAX variants are shown as
 XLA-generated operations and fusion kernels. CUDA and cuTile variants appear as
 JAX/XLA custom calls plus their GPU kernels.
 
@@ -304,7 +304,8 @@ MPM-CudaJax/
     └── mpm_jax/
         ├── types.py         # MPMState, MPMParams, make_params
         ├── solver.py        # MPMSolver
-        ├── registry.py      # build_solver(cfg): config -> MPMSolver
+        ├── zen_build.py     # hydra-zen builds() graph -> instantiate(cfg.solver)
+        ├── registry.py      # re-exports build_solver / build_backend / KERNEL_NAMES
         ├── constitutive.py  # sand Jacobi elasticity + plasticity
         ├── boundary.py      # sticky surface collider
         ├── blocks/          # Pure math: weights, g2p, grid, svd, sort, init

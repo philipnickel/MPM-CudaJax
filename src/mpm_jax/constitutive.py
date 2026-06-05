@@ -87,5 +87,6 @@ REGISTRY = {**ELASTICITY, **PLASTICITY}
 
 
 def get_constitutive(cfg):
+    # subscript access works for both a plain dict and an OmegaConf DictConfig
     params = {k: v for k, v in cfg.items() if k != "name"}
-    return REGISTRY[cfg.name](**params)
+    return REGISTRY[cfg["name"]](**params)

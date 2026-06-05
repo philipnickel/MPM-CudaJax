@@ -97,7 +97,8 @@ conf/                  Hydra config groups
 src/mpm_jax/
   types.py             MPMState, MPMParams, make_params
   solver.py            MPMSolver
-  registry.py          build_solver(cfg): resolved Hydra config -> MPMSolver
+  zen_build.py         hydra-zen builds() graph; instantiate(cfg.solver) -> MPMSolver
+  registry.py          thin re-export of build_solver / build_backend / KERNEL_NAMES
   constitutive.py      sand Jacobi elasticity + plasticity
   boundary.py          sticky surface collider
   callbacks.py         on_frame callback helpers
@@ -143,7 +144,7 @@ Three embarrassingly parallel phases per substep:
 
 ### Kernel registry
 
-Kernel selection is a small class hierarchy, not an if/elif chain. Because only the P2G varies, `src/mpm_jax/backends.py` defines a `Backend` base (jax_baseline: identity order + scan P2G + shared MLS-MPM G2P) and one subclass per variant (`CudaInline`→`CudaV1/V2/V3`, `CudaV4`, `CutileV6`). A variant overrides `prepare()` (the "sort") and `p2g()` (the scatter); `g2p()` lives on the base and is shared by all. The frame loop calls `backend.step()` (which orders the particles then scatters) and `backend.g2p()` — it never sees the sort. `build_backend(name, num_grids)` maps the name (via the `_BACKENDS` dict) to a constructed backend and **validates at init** (super-cell grid-divisibility; the CUDA/cuTile kernel handlers are also registered here, at build time, so a persistent compile-cache hit still finds them). `KERNEL_NAMES` exposes the valid names. There is no availability check — the `gpu` pixi env guarantees the kernels exist. `build_solver(cfg)` in `registry.py` builds particles/params/BCs/constitutive functions, calls `build_backend`, and passes the result to `MPMSolver`. The `conf/kernel/<name>.yaml` files are thin — just `name:` (the filename is the identifier; G2P/grid/loop are fixed in code).
+Kernel selection is a small class hierarchy, not an if/elif chain. Because only the P2G varies, `src/mpm_jax/backends.py` defines a `Backend` base (jax_baseline: identity order + scan P2G + shared MLS-MPM G2P) and one subclass per variant (`CudaInline`→`CudaV1/V2/V3`, `CudaV4`, `CutileV6`). A variant overrides `prepare()` (the "sort") and `p2g()` (the scatter); `g2p()` lives on the base and is shared by all. The frame loop calls `backend.step()` (which orders the particles then scatters) and `backend.g2p()` — it never sees the sort. `build_backend(name, num_grids)` maps the name (via the `_BACKENDS` dict) to a constructed backend and **validates at init** (super-cell grid-divisibility; the CUDA/cuTile kernel handlers are also registered here, at build time, so a persistent compile-cache hit still finds them). `KERNEL_NAMES` exposes the valid names. There is no availability check — the `gpu` pixi env guarantees the kernels exist. Solver construction is **declarative**: `src/mpm_jax/zen_build.py` expresses the whole build (particles, params, boundary, constitutive, backend, initial state) as a hydra-zen `builds()` graph wired by `${sim.*}`/`${kernel.*}`/`${material.*}` interpolations, registered as the `solver` config group (`- solver: default` in `config.yaml`). `simulate.py` / `profile_nsight.py` call `instantiate(cfg.solver)`; `build_solver(cfg)` (re-exported from `registry.py`) is the programmatic equivalent. The `conf/kernel/<name>.yaml` files are thin — just `name:` (the filename is the identifier; G2P/grid/loop are fixed in code); `cutile_v6` also carries `autotune: true`.
 
 Current kernel names:
 

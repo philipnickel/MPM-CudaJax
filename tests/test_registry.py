@@ -54,8 +54,19 @@ def test_build_solver_rejects_unknown_kernel():
     import pytest
     from omegaconf import OmegaConf
     from mpm_jax.registry import build_solver
-    cfg = OmegaConf.create({"kernel": {"name": "unknown_kernel"}, "sim": {}, "material": {}})
-    with pytest.raises(KeyError):
+    cfg = OmegaConf.create({
+        "kernel": {"name": "unknown_kernel"},
+        "sim": {"n_particles": 64, "num_grids": 16, "dt": 3e-4, "steps_per_frame": 1,
+                "clip_bound": 0.5, "damping": 1.0, "gravity": [0, 0, -9.8], "rho": 1000.0,
+                "size": [0.5, 0.5, 0.5], "initial_velocity": [0, 0, 0],
+                "center": [0.5, 0.5, 0.5], "boundary_conditions": []},
+        "material": {
+            "elasticity": {"name": "StVKElasticityJacobi", "E": 2e6, "nu": 0.4},
+            "plasticity": {"name": "DruckerPragerPlasticityJacobi", "E": 2e6, "nu": 0.4,
+                           "friction_angle": 25.0, "cohesion": 0.0}},
+    })
+    # build_backend raises KeyError for the unknown name; instantiate wraps it.
+    with pytest.raises(Exception, match="[Uu]nknown"):
         build_solver(cfg)
 
 
