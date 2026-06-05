@@ -83,6 +83,8 @@ Key knobs:
 ```
 simulate.py            Hydra entry point + timing + GIF rendering
 profile_nsight.py      Nsight Python profiler for per-stage and per-kernel analysis
+postprocessing/        Analysis tooling (top-level, NOT in the installed mpm_jax package; plotting deps only)
+  callbacks.py         ScalingPlotCallback: aggregate sweep results.json -> CSV + scaling plots
 pyproject.toml         deps + scikit-build-core build + pixi cpu / gpu / hpc envs + tasks
 pixi.lock              locked deps for all envs (committed)
 CMakeLists.txt         CUDA kernel build (called by scikit-build-core)
@@ -97,11 +99,10 @@ conf/                  Hydra config groups
   sweep_*.yaml         pre-baked Hydra multirun sweeps
 src/mpm_jax/
   types.py             MPMState, MPMParams
-  solver.py            RuntimeConfig + MPMSolver runtime construction
+  solver.py            RuntimeConfig + MPMSolver + build_backend_frame (the compiled per-frame loop)
   constitutive.py      sand Jacobi elasticity + plasticity
   boundary.py          sticky surface collider
-  callbacks.py         on_frame callback helpers
-  backends.py          Backend class hierarchy + shared frame loop + build_backend
+  backends.py          Backend class hierarchy + build_backend
   p2g_scan.py          JAX baseline P2G: lax.scan over 27 offsets
   g2p_scan.py          JAX baseline G2P: lax.scan over 27 offsets + MLS C=∇v (shared by ALL kernels)
   blocks/              Pure-math building blocks (no JIT, no closures)
@@ -111,7 +112,6 @@ src/mpm_jax/
     sort.py            morton_argsort, home_super_cell_id
     init.py            get_particles: uniform particle initialisation
   cutile_p2g.py        cuTile arena-scatter P2G kernel + cutile_call bridge
-  cutile_autotune.py   per-GPU occupancy autotune for the cuTile P2G kernel
   cuda/
     p2g_cuda.py        loads prebuilt .so + jax.ffi.register_ffi_target
     _lib/              prebuilt .so files (gitignored, populated by CMake)
@@ -142,7 +142,7 @@ Three embarrassingly parallel phases per substep:
 
 ### Backend Variants
 
-Kernel selection is a small class hierarchy, not an if/elif chain. Because only the P2G varies, `src/mpm_jax/backends.py` defines a `Backend` base (jax_baseline: identity order + scan P2G + shared MLS-MPM G2P) and one subclass per variant (`CudaInline`→`CudaV1/V2/V3`, `CudaV4`, `CutileV6`). A variant overrides `prepare()` (the "sort") and `p2g()` (the scatter); `g2p()` lives on the base and is shared by all. The frame loop calls `backend.step()` (which orders the particles then scatters) and `backend.g2p()` — it never sees the sort. Each `conf/backend/<name>.yaml` uses a Hydra `_target_` to instantiate the backend class directly, passing `num_grids` for validation and `autotune` where needed. Backend constructors own super-cell grid-divisibility checks, CUDA/cuTile registration, and cuTile autotune setup. `KERNEL_NAMES` exposes the valid names; `build_backend(name, num_grids)` remains a direct Python convenience for tests and non-Hydra callers. Solver construction is `MPMSolver(hydra.utils.instantiate(cfg.solver))`: the `solver` config node targets `RuntimeConfig`, whose `backend` field is already the instantiated backend object. `MPMSolver` derives params, particles, boundary closures, and initial state from that runtime config. There is no availability check — the `gpu` pixi env guarantees the kernels exist.
+Kernel selection is a small class hierarchy, not an if/elif chain. Because only the P2G varies, `src/mpm_jax/backends.py` defines a `Backend` base (jax_baseline: identity order + scan P2G + shared MLS-MPM G2P) and one subclass per variant (`CudaInline`→`CudaV1/V2/V3`, `CudaV4`, `CutileV6`). A variant overrides `prepare()` (the "sort") and `p2g()` (the scatter); `g2p()` lives on the base and is shared by all. The frame loop calls `backend.step()` (which orders the particles then scatters) and `backend.g2p()` — it never sees the sort. Each `conf/backend/<name>.yaml` uses a Hydra `_target_` to instantiate the backend class directly, passing `num_grids` for validation. Backend constructors own super-cell grid-divisibility checks and CUDA/cuTile registration. `KERNEL_NAMES` exposes the valid names; `build_backend(name, num_grids)` remains a direct Python convenience for tests and non-Hydra callers. Solver construction is `MPMSolver(hydra.utils.instantiate(cfg.solver))`: the `solver` config node targets `RuntimeConfig`, whose `backend` field is already the instantiated backend object. `MPMSolver` derives params, particles, boundary closures, and initial state from that runtime config. There is no availability check — the `gpu` pixi env guarantees the kernels exist.
 
 Current kernel names:
 
@@ -153,7 +153,7 @@ Current kernel names:
 | `cuda_v2_inline` | MPMSolver | CUDA warp-shuffle coalesced inline P2G + JAX baseline G2P |
 | `cuda_v3_inline` | MPMSolver | CUDA Morton-sorted inline P2G + JAX baseline G2P (XLA command-buffer / CUDA-Graph capture is on for all kernels via the gpu env's `XLA_FLAGS`) |
 | `cuda_v4_inline` | MPMSolver | CUDA super-cell-owned grid tile inline P2G + JAX baseline G2P |
-| `cutile_v6_atomic_tile` | MPMSolver | NVIDIA cuTile (tiled programming model) P2G + JAX baseline G2P: SPGrid-style arena scatter (SC=2 super-cell → 4³ L1 arena → one tile-coalesced `atomic_store_add`, no coloring), occupancy autotuned per-GPU. Fastest P2G backend. Requires `cuda-tile` |
+| `cutile_v6_atomic_tile` | MPMSolver | NVIDIA cuTile (tiled programming model) P2G + JAX baseline G2P: SPGrid-style arena scatter (SC=2 super-cell → 4³ L1 arena → one tile-coalesced `atomic_store_add`, no coloring). Fastest P2G backend. Requires `cuda-tile` |
 
 Material baseline:
 - `material=sand_jacobi` is the default JAX/CUDA material path: StVK elasticity + Drucker-Prager plasticity, both using the in-repo Jacobi SVD.

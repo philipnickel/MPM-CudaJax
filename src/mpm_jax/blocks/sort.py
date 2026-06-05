@@ -21,11 +21,11 @@ def _spread_bits(x):
     Magic-Number Method (cf. graphics gems / Hu 2018) — five mask-and-shift
     rounds map each bit ``i`` to position ``3*i``.
     """
-    x = x & jnp.uint32(0x000003FF)              # keep 10 bits
+    x = x & jnp.uint32(0x000003FF)  # keep 10 bits
     x = (x | (x << jnp.uint32(16))) & jnp.uint32(0x030000FF)
-    x = (x | (x << jnp.uint32(8)))  & jnp.uint32(0x0300F00F)
-    x = (x | (x << jnp.uint32(4)))  & jnp.uint32(0x030C30C3)
-    x = (x | (x << jnp.uint32(2)))  & jnp.uint32(0x09249249)
+    x = (x | (x << jnp.uint32(8))) & jnp.uint32(0x0300F00F)
+    x = (x | (x << jnp.uint32(4))) & jnp.uint32(0x030C30C3)
+    x = (x | (x << jnp.uint32(2))) & jnp.uint32(0x09249249)
     return x
 
 
@@ -35,9 +35,14 @@ def morton_code_3d(cx, cy, cz):
     Each input must be uint32 in [0, 1023]. Output is a uint32 where bits
     are interleaved as ``... z2 y2 x2 z1 y1 x1 z0 y0 x0`` from MSB to LSB.
     """
-    return _spread_bits(cz) | (_spread_bits(cy) << jnp.uint32(1)) | (_spread_bits(cx) << jnp.uint32(2))
+    return (
+        _spread_bits(cz)
+        | (_spread_bits(cy) << jnp.uint32(1))
+        | (_spread_bits(cx) << jnp.uint32(2))
+    )
 
 
+# can this be done in a more native way?
 def morton_argsort(x, inv_dx, num_grids):
     """Argsort particle indices by 3D Morton code of their cell.
 

@@ -18,7 +18,7 @@ Usage in a Hydra sweep config:
     hydra:
       callbacks:
         scaling_plot:
-          _target_: mpm_jax.callbacks.ScalingPlotCallback
+          _target_: postprocessing.callbacks.ScalingPlotCallback
           baseline_kernel: jax_baseline  # which kernel's ms/step is the denominator
 """
 
@@ -29,10 +29,14 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import matplotlib.pyplot as plt
+import pandas as pd
+import seaborn as sns
 from hydra.experimental.callback import Callback
 from omegaconf import DictConfig
 
 logger = logging.getLogger(__name__)
+plt.switch_backend("Agg")
 
 
 class ScalingPlotCallback(Callback):
@@ -47,7 +51,8 @@ class ScalingPlotCallback(Callback):
         except Exception as exc:
             logger.warning(
                 "ScalingPlotCallback failed (this never blocks the sweep): %s",
-                exc, exc_info=True,
+                exc,
+                exc_info=True,
             )
 
     def _render(self, config: DictConfig) -> None:
@@ -60,18 +65,10 @@ class ScalingPlotCallback(Callback):
 
         result_files = sorted(sweep_root.rglob("results.json"))
         if not result_files:
-            logger.warning("No results.json files under %s — nothing to plot.",
-                           sweep_root)
+            logger.warning(
+                "No results.json files under %s — nothing to plot.", sweep_root
+            )
             return
-
-        # Lazy imports — keep the module importable in environments without
-        # pandas/seaborn (e.g. CPU-only smoke imports).
-        import pandas as pd
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        import seaborn as sns
 
         rows = []
         for path in result_files:
@@ -119,16 +116,17 @@ class ScalingPlotCallback(Callback):
             logger.warning(
                 "Baseline kernel '%s' not in sweep results; skipping speedup plot. "
                 "Available kernels: %s",
-                self.baseline_kernel, sorted(df["kernel"].unique()),
+                self.baseline_kernel,
+                sorted(df["kernel"].unique()),
             )
             return
 
-        baseline_map = (baseline.groupby("n_particles")["ms_per_step"]
-                        .mean().to_dict())
+        baseline_map = baseline.groupby("n_particles")["ms_per_step"].mean().to_dict()
         df = df.copy()
         df["speedup_vs_baseline"] = df.apply(
-            lambda r: baseline_map.get(r["n_particles"], float("nan"))
-                      / r["ms_per_step"],
+            lambda r: (
+                baseline_map.get(r["n_particles"], float("nan")) / r["ms_per_step"]
+            ),
             axis=1,
         )
 
@@ -142,8 +140,13 @@ class ScalingPlotCallback(Callback):
             ax=ax,
         )
         ax.set_xscale("log")
-        ax.axhline(1.0, ls="--", color="gray", alpha=0.6,
-                   label=f"{self.baseline_kernel} baseline")
+        ax.axhline(
+            1.0,
+            ls="--",
+            color="gray",
+            alpha=0.6,
+            label=f"{self.baseline_kernel} baseline",
+        )
         ax.set_xlabel("Particles (N)")
         ax.set_ylabel(f"Speedup vs {self.baseline_kernel}")
         ax.set_title(f"MPM P2G speedup vs {self.baseline_kernel} — A10, G=64")

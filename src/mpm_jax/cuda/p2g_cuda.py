@@ -118,15 +118,15 @@ def _register_v4_inline():
     return _register("p2g_v4_inline_cuda", "libp2g_v4_inline.so", "P2GV4Inline")
 
 
-def is_available(kernel='inline'):
+def is_available(kernel="inline"):
     """Check if a prebuilt CUDA kernel can be loaded and registered."""
-    if kernel == 'inline':
+    if kernel == "inline":
         return _register_inline()
-    elif kernel == 'v2_inline':
+    elif kernel == "v2_inline":
         return _register_v2_inline()
-    elif kernel == 'v3_inline':
+    elif kernel == "v3_inline":
         return _register_v3_inline()
-    elif kernel == 'v4_inline':
+    elif kernel == "v4_inline":
         return _register_v4_inline()
     return False
 
@@ -143,7 +143,7 @@ def cuda_p2g_inline(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
     """
     N = x.shape[0]
     G = num_grids
-    G3 = G ** 3
+    G3 = G**3
     C_flat = C.reshape(N, 9)
     stress_flat = stress.reshape(N, 9)
 
@@ -155,7 +155,10 @@ def cuda_p2g_inline(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
         ),
         vmap_method="broadcast_all",
     )(
-        x, v, C_flat, stress_flat,
+        x,
+        v,
+        C_flat,
+        stress_flat,
         N=np.int32(N),
         G=np.int32(G),
         dt=np.float32(dt),
@@ -179,7 +182,7 @@ def cuda_p2g_v2_inline(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
     """
     N = x.shape[0]
     G = num_grids
-    G3 = G ** 3
+    G3 = G**3
     C_flat = C.reshape(N, 9)
     stress_flat = stress.reshape(N, 9)
 
@@ -191,7 +194,10 @@ def cuda_p2g_v2_inline(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
         ),
         vmap_method="broadcast_all",
     )(
-        x, v, C_flat, stress_flat,
+        x,
+        v,
+        C_flat,
+        stress_flat,
         N=np.int32(N),
         G=np.int32(G),
         dt=np.float32(dt),
@@ -214,7 +220,7 @@ def cuda_p2g_v3_inline(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
     """
     N = x.shape[0]
     G = num_grids
-    G3 = G ** 3
+    G3 = G**3
     C_flat = C.reshape(N, 9)
     stress_flat = stress.reshape(N, 9)
 
@@ -224,9 +230,12 @@ def cuda_p2g_v3_inline(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
             jax.ShapeDtypeStruct((G3, 3), jnp.float32),
             jax.ShapeDtypeStruct((G3,), jnp.float32),
         ),
-        vmap_method="broadcast_all",
+        vmap_method="broadcast_all",  # should we do it like this?
     )(
-        x, v, C_flat, stress_flat,
+        x,
+        v,
+        C_flat,
+        stress_flat,
         N=np.int32(N),
         G=np.int32(G),
         dt=np.float32(dt),
@@ -239,31 +248,45 @@ def cuda_p2g_v3_inline(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
     return grid_mv, grid_m
 
 
-# Super-cell width used by cuda_v4_inline. Must match the SC #define in
-# mpm_jax/cuda/kernels/p2g_v4_inline.cu. With SC=k the kernel launches
-# (G/SC)^3 blocks instead of G^3 and each block aggregates particles from
-# SC^3 cells into a (SC+2)^3 shared-memory tile. SC=4 matches the common
-# GPU-MPM particle-block granularity: 4^3 cells, about 512 particles/block
-# at the standard 8 particles/cell benchmark, and a 6^3 grid scratchpad.
-V4_SUPER_CELL_WIDTH = 4
+# Super-cell width for cuda_v4_inline. With SC=k the kernel launches (G/SC)^3
+# blocks (vs G^3) and each block aggregates particles from SC^3 cells into a
+# (SC+2)^3 shared-memory tile. The kernel is a template on SC; the FFI handler
+# dispatches to the instantiated values in SUPPORTED_SC by a runtime switch, so
+# SC is config-selectable (backend.super_cell_width) without recompiling — but
+# only among the instantiated widths. SC=4 is the default: 4^3 cells, ~512
+# particles/block at the 8-particles/cell benchmark, and a 6^3 grid scratchpad.
+SUPPORTED_SC = (2, 4, 8)  # template instantiations compiled into the .so
+V4_SUPER_CELL_WIDTH = 4  # default super-cell width
 
 
-def cuda_p2g_v4_inline(x_sorted, v_sorted, C_sorted, stress_sorted, cell_start,
-                       num_grids, dt, vol, p_mass, inv_dx, dx):
+def cuda_p2g_v4_inline(
+    x_sorted,
+    v_sorted,
+    C_sorted,
+    stress_sorted,
+    cell_start,
+    num_grids,
+    dt,
+    vol,
+    p_mass,
+    inv_dx,
+    dx,
+    super_cell=V4_SUPER_CELL_WIDTH,
+):
     """Cell-major inline P2G via JAX FFI (cuda_v4_inline).
 
     The Python wrapper assumes the inputs are already sorted by home
     *super*-cell and that ``cell_start`` is the CSR boundary array of length
-    (G/SC)^3 + 1, where SC is :data:`V4_SUPER_CELL_WIDTH`.
+    (G/SC)^3 + 1, where SC is ``super_cell`` (one of :data:`SUPPORTED_SC`).
 
     The kernel uses one CUDA block per super-cell and aggregates each
-    super-cell's contributions into a 6x6x6 shared-memory tile before
+    super-cell's contributions into a (SC+2)^3 shared-memory tile before
     flushing to HBM. With SC=4, the standard 8 particles/cell benchmark gives
     each non-empty block enough particles to amortize the tile overhead.
     """
     N = x_sorted.shape[0]
     G = num_grids
-    G3 = G ** 3
+    G3 = G**3
     C_flat = C_sorted.reshape(N, 9)
     stress_flat = stress_sorted.reshape(N, 9)
 
@@ -275,8 +298,13 @@ def cuda_p2g_v4_inline(x_sorted, v_sorted, C_sorted, stress_sorted, cell_start,
         ),
         vmap_method="broadcast_all",
     )(
-        x_sorted, v_sorted, C_flat, stress_flat, cell_start,
+        x_sorted,
+        v_sorted,
+        C_flat,
+        stress_flat,
+        cell_start,
         G=np.int32(G),
+        SC=np.int32(super_cell),
         dt=np.float32(dt),
         vol=np.float32(vol),
         p_mass=np.float32(p_mass),
@@ -297,4 +325,5 @@ __all__ = [
     "cuda_p2g_v4_inline",
     # Super-cell helpers
     "V4_SUPER_CELL_WIDTH",
+    "SUPPORTED_SC",
 ]

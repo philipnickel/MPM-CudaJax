@@ -51,6 +51,12 @@ foreach(name ${KERNELS})
     target_compile_options(${name} PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:-O3>
         $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>
+        # -lineinfo: source-level attribution for ncu/Nsight (no codegen change,
+        # unlike -G); this project's analysis method leans on per-kernel ncu.
+        $<$<COMPILE_LANGUAGE:CUDA>:-lineinfo>
+        # -Xptxas -v: print per-kernel registers / spills / shared-mem usage at
+        # build time, feeding the occupancy/roofline narrative.
+        $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-v>
         $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-fPIC>
         $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wno-return-type>
         $<$<COMPILE_LANGUAGE:CUDA>:-diag-suppress=940,2473>

@@ -7,3 +7,6 @@
 # preserving smem aggregation. Per-frame only.
 _target_: mpm_jax.backends.CudaV4
 num_grids: ${sim.num_grids}
+# Super-cell width SC. The kernel is templated + dispatched over {2, 4, 8}, so
+# this is selectable without a recompile; num_grids must be divisible by it.
+super_cell_width: 4

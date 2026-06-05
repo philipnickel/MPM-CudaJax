@@ -8,7 +8,7 @@ backends form a small template-method class hierarchy:
     │   ├─ CudaV1/V2   no reordering
     │   └─ CudaV3      + Morton sort (overrides prepare)
     ├─ CudaV4          super-cell sort + super-cell-tiled CUDA scatter
-    └─ CutileV6        super-cell sort + cuTile arena scatter (per-GPU autotuned)
+    └─ CutileV6        super-cell sort + cuTile arena scatter
 
 A variant overrides ``prepare()`` (the "sort") and ``p2g()`` (the scatter after
 sorting); ``g2p()`` lives on the base and is shared by all. The frame loop calls
@@ -21,20 +21,24 @@ state. Availability is not checked — the ``gpu`` pixi env guarantees the CUDA
 
 from typing import Any, NamedTuple
 
-import jax
 import jax.numpy as jnp
 
-from mpm_jax.blocks.grid import grid_update
 from mpm_jax.blocks.sort import home_super_cell_id, morton_argsort
+from mpm_jax.cuda import p2g_cuda
+from mpm_jax.cuda.p2g_cuda import (
+    SUPPORTED_SC,
+    V4_SUPER_CELL_WIDTH,
+    cuda_p2g_v4_inline,
+    is_available,
+)
+from mpm_jax.cutile_p2g import ARENA_SC, cutile_p2g_atomic_tile
 from mpm_jax.g2p_scan import _g2p_scan_mls
 from mpm_jax.p2g_scan import _p2g_scan
-from mpm_jax.types import MPMState
 
 # NOTE: the pure-JAX p2g/g2p/sort modules are imported eagerly (at import time,
 # outside any trace). They build module-level stencil constants (e.g.
-# g2p_scan.OFFSET_27_INT); importing them lazily inside a Backend method would
+# weights.OFFSET_27); importing them lazily inside a Backend method would
 # run that module body *during* a jit trace and leak the constant as a tracer.
-# CUDA/cuTile imports stay lazy (below) so the CPU env can import this module.
 
 
 class PreparedSubstep(NamedTuple):
@@ -43,7 +47,7 @@ class PreparedSubstep(NamedTuple):
     C: Any
     F: Any
     stress: Any
-    cell_start: Any = None   # set by the sorted variants (CSR start offsets)
+    cell_start: Any = None  # set by the sorted variants (CSR start offsets)
 
 
 # ============================================================================
@@ -51,54 +55,80 @@ class PreparedSubstep(NamedTuple):
 # ============================================================================
 def _jax_scan_p2g(params, prepared):
     return _p2g_scan(
-        prepared.x, prepared.v, prepared.C, prepared.stress,
-        params.dt, params.vol, params.p_mass,
-        params.dx, params.inv_dx, params.num_grids,
+        prepared.x,
+        prepared.v,
+        prepared.C,
+        prepared.stress,
+        params.dt,
+        params.vol,
+        params.p_mass,
+        params.dx,
+        params.inv_dx,
+        params.num_grids,
     )
 
 
 def _jax_scan_g2p_mls(params, prepared, grid_v):
     return _g2p_scan_mls(
-        grid_v, prepared.x, prepared.F,
-        params.dt, params.inv_dx, params.dx, params.num_grids, params.clip_bound,
+        grid_v,
+        prepared.x,
+        prepared.F,
+        params.dt,
+        params.inv_dx,
+        params.dx,
+        params.num_grids,
+        params.clip_bound,
     )
-
-
-_CUDA_INLINE_FNS = {
-    "inline": "cuda_p2g_inline",
-    "v2_inline": "cuda_p2g_v2_inline",
-    "v3_inline": "cuda_p2g_v3_inline",
-}
 
 
 def _cuda_inline_p2g(kind, params, prepared):
-    from mpm_jax.cuda import p2g_cuda  # pylint: disable=import-outside-toplevel
-
-    fn = getattr(p2g_cuda, _CUDA_INLINE_FNS[kind])
+    # CudaV1/V2/V3 set ``kind`` to inline / v2_inline / v3_inline; the matching
+    # FFI wrapper is cuda_p2g_<kind>.
+    fn = getattr(p2g_cuda, f"cuda_p2g_{kind}")
     return fn(
-        prepared.x, prepared.v, prepared.C, prepared.stress,
-        params.num_grids, params.dt, params.vol, params.p_mass,
-        params.inv_dx, params.dx,
+        prepared.x,
+        prepared.v,
+        prepared.C,
+        prepared.stress,
+        params.num_grids,
+        params.dt,
+        params.vol,
+        params.p_mass,
+        params.inv_dx,
+        params.dx,
     )
 
 
-def _cuda_v4_p2g(params, prepared):
-    from mpm_jax.cuda.p2g_cuda import cuda_p2g_v4_inline  # pylint: disable=import-outside-toplevel
-
+def _cuda_v4_p2g(params, prepared, super_cell):
     return cuda_p2g_v4_inline(
-        prepared.x, prepared.v, prepared.C, prepared.stress, prepared.cell_start,
-        params.num_grids, params.dt, params.vol, params.p_mass,
-        params.inv_dx, params.dx,
+        prepared.x,
+        prepared.v,
+        prepared.C,
+        prepared.stress,
+        prepared.cell_start,
+        params.num_grids,
+        params.dt,
+        params.vol,
+        params.p_mass,
+        params.inv_dx,
+        params.dx,
+        super_cell=super_cell,
     )
 
 
-def _cutile_atomic_tile_p2g(params, prepared, kernel):
-    from mpm_jax.cutile_p2g import cutile_p2g_atomic_tile  # pylint: disable=import-outside-toplevel
-
+def _cutile_atomic_tile_p2g(params, prepared):
     return cutile_p2g_atomic_tile(
-        prepared.x, prepared.v, prepared.C, prepared.stress,
-        prepared.cell_start, params.num_grids, params.dt, params.vol, params.p_mass,
-        params.inv_dx, params.dx, kernel=kernel,
+        prepared.x,
+        prepared.v,
+        prepared.C,
+        prepared.stress,
+        prepared.cell_start,
+        params.num_grids,
+        params.dt,
+        params.vol,
+        params.p_mass,
+        params.inv_dx,
+        params.dx,
     )
 
 
@@ -118,7 +148,7 @@ def _morton_order(params, state, stress):
 
 def _supercell_boundaries(params, super_cell_width):
     Gs = params.num_grids // super_cell_width
-    return jnp.arange(Gs ** 3 + 1, dtype=jnp.int32)
+    return jnp.arange(Gs**3 + 1, dtype=jnp.int32)
 
 
 def _supercell_order(params, state, stress, super_cell):
@@ -130,18 +160,16 @@ def _supercell_order(params, state, stress, super_cell):
         super_id[order], _supercell_boundaries(params, super_cell)
     ).astype(jnp.int32)
     return PreparedSubstep(
-        state.x[order], state.v[order], state.C[order], state.F[order],
-        stress[order], cell_start=cell_start,
+        state.x[order],
+        state.v[order],
+        state.C[order],
+        state.F[order],
+        stress[order],
+        cell_start=cell_start,
     )
 
 
-def _v4_super_cell():
-    from mpm_jax.cuda.p2g_cuda import V4_SUPER_CELL_WIDTH  # pylint: disable=import-outside-toplevel
-    return V4_SUPER_CELL_WIDTH
-
-
 def _arena_super_cell():
-    from mpm_jax.cutile_p2g import ARENA_SC  # pylint: disable=import-outside-toplevel
     return ARENA_SC
 
 
@@ -158,7 +186,7 @@ class Backend:
 
     name = "jax_baseline"
 
-    def __init__(self, num_grids=None, autotune=None):
+    def __init__(self, num_grids=None):
         self.validate_num_grids(num_grids)
 
     def validate_num_grids(self, num_grids):
@@ -202,12 +230,11 @@ class Backend:
 # wrapper would be too late -- execution would fail with "No FFI handler
 # registered". ``is_available(kind)`` is what performs the FFI registration.
 def _register_cuda_kernel(kind):
-    from mpm_jax.cuda.p2g_cuda import is_available  # pylint: disable=import-outside-toplevel
     is_available(kind)
 
 
 def _load_cutile_kernels():
-    import mpm_jax.cutile_p2g  # noqa: F401  # pylint: disable=import-outside-toplevel,unused-import
+    return None
 
 
 class CudaInline(Backend):
@@ -215,9 +242,9 @@ class CudaInline(Backend):
 
     kind = "inline"
 
-    def __init__(self, num_grids=None, autotune=None):
+    def __init__(self, num_grids=None):
         _register_cuda_kernel(self.kind)
-        super().__init__(num_grids=num_grids, autotune=autotune)
+        super().__init__(num_grids=num_grids)
 
     def p2g(self, params, prepared):
         return _cuda_inline_p2g(self.kind, params, prepared)
@@ -244,53 +271,52 @@ class CudaV3(CudaInline):
 class CudaV4(Backend):
     name = "cuda_v4_inline"
 
-    def __init__(self, num_grids=None, autotune=None):
+    def __init__(self, num_grids=None, super_cell_width=None):
         _register_cuda_kernel("v4_inline")
-        super().__init__(num_grids=num_grids, autotune=autotune)
+        sc = V4_SUPER_CELL_WIDTH if super_cell_width is None else int(super_cell_width)
+        if sc not in SUPPORTED_SC:
+            raise ValueError(
+                f"cuda_v4_inline super_cell_width={sc} is not a compiled "
+                f"instantiation; the kernel is built for {SUPPORTED_SC}."
+            )
+        self.super_cell = sc
+        # validate_num_grids() reads grid_divisor() -> self.super_cell, so set
+        # it before the base __init__ runs the divisibility check.
+        super().__init__(num_grids=num_grids)
 
     def prepare(self, params, state, stress):
-        return _supercell_order(params, state, stress, _v4_super_cell())
+        return _supercell_order(params, state, stress, self.super_cell)
 
     def p2g(self, params, prepared):
-        return _cuda_v4_p2g(params, prepared)
+        return _cuda_v4_p2g(params, prepared, self.super_cell)
 
     def grid_divisor(self):
-        return _v4_super_cell()
+        return self.super_cell
 
 
 class CutileV6(Backend):
-    """cuTile arena scatter; occupancy autotuned per-GPU and cached."""
+    """cuTile arena scatter; occupancy left to the cuTile compiler default."""
 
     name = "cutile_v6_atomic_tile"
 
-    def __init__(self, num_grids=None, autotune=True):
+    def __init__(self, num_grids=None):
         _load_cutile_kernels()
-        super().__init__(num_grids=num_grids, autotune=autotune)
-        kernel = None
-        if autotune:
-            from mpm_jax.cutile_autotune import tuned_atomic_tile_kernel  # pylint: disable=import-outside-toplevel
-            kernel = tuned_atomic_tile_kernel()
-        self.kernel = kernel
+        super().__init__(num_grids=num_grids)
 
     def prepare(self, params, state, stress):
         return _supercell_order(params, state, stress, _arena_super_cell())
 
     def p2g(self, params, prepared):
-        return _cutile_atomic_tile_p2g(params, prepared, self.kernel)
+        return _cutile_atomic_tile_p2g(params, prepared)
 
     def grid_divisor(self):
         return _arena_super_cell()
 
 
-_BACKEND_CLASSES = {
-    "jax_baseline": Backend,
-    "cuda_v1_inline": CudaV1,
-    "cuda_v2_inline": CudaV2,
-    "cuda_v3_inline": CudaV3,
-    "cuda_v4_inline": CudaV4,
-    "cutile_v6_atomic_tile": CutileV6,
-}
-
+# Every P2G backend; each class owns its ``name`` (and Hydra ``_target_``), so
+# this tuple is the single source of truth — add a variant by adding it here.
+_BACKENDS = (Backend, CudaV1, CudaV2, CudaV3, CudaV4, CutileV6)
+_BACKEND_CLASSES = {cls.name: cls for cls in _BACKENDS}
 KERNEL_NAMES = tuple(_BACKEND_CLASSES)
 BACKEND_TARGETS = {
     name: f"{cls.__module__}.{cls.__qualname__}"
@@ -298,7 +324,8 @@ BACKEND_TARGETS = {
 }
 
 
-def build_backend(name, num_grids, *, autotune=True):
+# this also seems hacky
+def build_backend(name, num_grids):
     """Construct and validate the backend for a P2G variant.
 
     The only check is the super-cell grid-divisibility rule (raised here, at
@@ -306,57 +333,9 @@ def build_backend(name, num_grids, *, autotune=True):
     ``gpu`` pixi env guarantees the CUDA ``.so`` kernels and cuTile runtime.
     """
     try:
-        backend = _BACKEND_CLASSES[name](num_grids=num_grids, autotune=autotune)
+        backend = _BACKEND_CLASSES[name](num_grids=num_grids)
     except KeyError:
         raise KeyError(
             f"Unknown P2G kernel {name!r}. Available: {', '.join(_BACKEND_CLASSES)}."
         ) from None
     return backend
-
-
-def jax_baseline_backend():
-    """The JAX/XLA baseline backend (identity order, scan P2G + shared MLS G2P).
-
-    A zero-arg convenience used as the reference in tests; equivalent to
-    ``build_backend("jax_baseline", num_grids)``.
-    """
-    return Backend()
-
-
-def build_backend_frame(params, elasticity_fn, plasticity_fn,
-                        pre_fn, post_fn, backend, steps_per_frame):
-    """Build one JIT-compiled frame from a backend object.
-
-    The frame owns the common MPM control flow (boundary conditions, elasticity,
-    grid update, plasticity, the substep loop). The backend owns only the
-    P2G — ``backend.step`` orders the particles and scatters — and ``g2p``.
-    The ``steps_per_frame`` substeps run as a single ``lax.fori_loop``.
-    """
-    @jax.jit
-    def jit_frame(state):
-        def step_body(state):
-            with jax.named_scope("pre_particle"):
-                x, v = pre_fn(state.x, state.v, 0.0)
-            state = state._replace(x=x, v=v)
-
-            with jax.named_scope("elasticity"):
-                stress = elasticity_fn(state.F)
-
-            with jax.named_scope(f"{backend.name}_p2g"):
-                prepared, grid_mv, grid_m = backend.step(params, state, stress)
-
-            with jax.named_scope("grid_update"):
-                grid_mv = grid_update(
-                    grid_mv, grid_m, params.gravity, params.dt, params.damping)
-                grid_v = post_fn(grid_mv, grid_m, 0.0)
-
-            with jax.named_scope(f"{backend.name}_g2p"):
-                new_x, new_v, new_C, new_F = backend.g2p(params, prepared, grid_v)
-
-            with jax.named_scope("plasticity"):
-                new_F = plasticity_fn(new_F)
-            return MPMState(x=new_x, v=new_v, C=new_C, F=new_F)
-
-        return jax.lax.fori_loop(0, steps_per_frame, lambda _, s: step_body(s), state)
-
-    return jit_frame

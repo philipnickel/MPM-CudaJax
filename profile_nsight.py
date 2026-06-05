@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import itertools
 import json
 import os
@@ -14,10 +15,22 @@ from copy import deepcopy
 from pathlib import Path
 
 import hydra
+import jax
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
-from mpm_jax.backends import BACKEND_TARGETS, KERNEL_NAMES  # noqa: E402
+from mpm_jax.backends import BACKEND_TARGETS, KERNEL_NAMES
+from mpm_jax.solver import MPMSolver
+
+
+def _optional_module(name):
+    try:
+        return importlib.import_module(name)
+    except ImportError:  # pragma: no cover - optional profiling package
+        return None
+
+
+nsight = _optional_module("nsight")
 
 _UNSUPPORTED_ANALYZE_CONFIG_KEYS = {"configs"}
 _SCRIPT_NSIGHT_KEYS = {"phase", "write_json", "plot", "sweep", "configs", "analyze"}
@@ -89,14 +102,12 @@ def _backend_name_from_cfg(cfg: DictConfig):
 
 
 def _require_nsight():
-    try:
-        import nsight
-    except ModuleNotFoundError as exc:
+    if nsight is None:
         raise RuntimeError(
             "nsight-python is not installed. Run `pixi install -e gpu`, or "
             "`pixi run -e gpu python -m pip install nsight-python` for a "
             "one-off local install."
-        ) from exc
+        )
     return nsight
 
 
@@ -108,12 +119,6 @@ def _build_p2g_stage(cfg: DictConfig):
     backend.p2g (scatter) on the solver's own params/state/fns — no duplicated
     construction.
     """
-    import jax
-    import hydra
-
-    from mpm_jax.backends import KERNEL_NAMES
-    from mpm_jax.solver import MPMSolver
-
     kernel_name = _backend_name_from_cfg(cfg)
     if kernel_name not in KERNEL_NAMES:
         raise RuntimeError(f"Unsupported P2G kernel={kernel_name!r}.")
@@ -137,8 +142,6 @@ def _build_p2g_stage(cfg: DictConfig):
 
 
 def _p2g_runner(cfg: DictConfig, nsight):
-    import jax
-
     jit_p2g_stage, state = _build_p2g_stage(cfg)
     annotation_name = f"{_backend_name_from_cfg(cfg)}_p2g"
 
@@ -174,7 +177,9 @@ def _merge_variant_cfg(
     num_grids: int,
     steps_per_frame: int,
 ):
-    variant_cfg = OmegaConf.create(deepcopy(OmegaConf.to_container(base_cfg, resolve=True)))
+    variant_cfg = OmegaConf.create(
+        deepcopy(OmegaConf.to_container(base_cfg, resolve=True))
+    )
     variant_cfg.backend._target_ = BACKEND_TARGETS[str(kernel_name)]
     variant_cfg.sim.n_particles = int(n_particles)
     variant_cfg.sim.num_grids = int(num_grids)
@@ -190,19 +195,25 @@ def _sweep_kernel_names(cfg: DictConfig):
         sweep_dict = OmegaConf.to_container(sweep, resolve=True)
         if not isinstance(sweep_dict, Mapping):
             raise RuntimeError("nsight.sweep must be a mapping of parameter lists.")
-        return [str(value) for value in _sweep_values(sweep_dict, "kernels", [base_kernel])]
+        return [
+            str(value) for value in _sweep_values(sweep_dict, "kernels", [base_kernel])
+        ]
 
     configs = cfg.nsight.get("configs", None)
     if configs is not None:
         kernels = []
         for variant in OmegaConf.to_container(configs, resolve=True):
             if not isinstance(variant, Mapping):
-                raise RuntimeError("Each nsight.configs entry must be a mapping of Hydra overrides.")
+                raise RuntimeError(
+                    "Each nsight.configs entry must be a mapping of Hydra overrides."
+                )
             kernel_name = _variant_value(variant, "backend", None)
             if kernel_name is None:
                 kernel_name = base_kernel
             if not isinstance(kernel_name, str):
-                raise RuntimeError("nsight.configs backend overrides must be config-group names.")
+                raise RuntimeError(
+                    "nsight.configs backend overrides must be config-group names."
+                )
             kernel_name = str(kernel_name)
             if kernel_name not in kernels:
                 kernels.append(kernel_name)
@@ -221,10 +232,15 @@ def _nsight_configs(cfg: DictConfig):
         sweep_dict = OmegaConf.to_container(sweep, resolve=True)
         if not isinstance(sweep_dict, Mapping):
             raise RuntimeError("nsight.sweep must be a mapping of parameter lists.")
-        n_particles = [int(value) for value in _sweep_values(sweep_dict, "n_particles", [base_n])]
-        num_grids = [int(value) for value in _sweep_values(sweep_dict, "num_grids", [base_g])]
+        n_particles = [
+            int(value) for value in _sweep_values(sweep_dict, "n_particles", [base_n])
+        ]
+        num_grids = [
+            int(value) for value in _sweep_values(sweep_dict, "num_grids", [base_g])
+        ]
         steps_per_frame = [
-            int(value) for value in _sweep_values(sweep_dict, "steps_per_frame", [base_steps])
+            int(value)
+            for value in _sweep_values(sweep_dict, "steps_per_frame", [base_steps])
         ]
         return list(itertools.product(n_particles, num_grids, steps_per_frame))
 
@@ -236,10 +252,14 @@ def _nsight_configs(cfg: DictConfig):
     nsight_configs = []
     for variant in OmegaConf.to_container(configs, resolve=True):
         if not isinstance(variant, Mapping):
-            raise RuntimeError("Each nsight.configs entry must be a mapping of Hydra overrides.")
+            raise RuntimeError(
+                "Each nsight.configs entry must be a mapping of Hydra overrides."
+            )
         n_particles = int(_variant_value(variant, "sim.n_particles", base_n))
         num_grids = int(_variant_value(variant, "sim.num_grids", base_g))
-        steps_per_frame = int(_variant_value(variant, "sim.steps_per_frame", base_steps))
+        steps_per_frame = int(
+            _variant_value(variant, "sim.steps_per_frame", base_steps)
+        )
         nsight_configs.append((n_particles, num_grids, steps_per_frame))
     return nsight_configs
 
@@ -264,7 +284,9 @@ def _n_particles_from_config(config_values):
         raise RuntimeError("Expected config values to include n_particles.")
     if isinstance(config_values[0], str):
         if len(config_values) < 2:
-            raise RuntimeError("Expected legacy config values to include kernel_name and n_particles.")
+            raise RuntimeError(
+                "Expected legacy config values to include kernel_name and n_particles."
+            )
         return int(config_values[1])
     return int(config_values[0])
 
@@ -272,7 +294,7 @@ def _n_particles_from_config(config_values):
 def _p2g_throughput_metric(metrics: list[str]):
     def derive_p2g_throughput(*args):
         metric_values = args[: len(metrics)]
-        config_values = args[len(metrics):]
+        config_values = args[len(metrics) :]
         n_particles = _n_particles_from_config(config_values)
         time_ns = _value_for_metric(metric_values, metrics, "gpu__time_duration.sum")
         seconds = time_ns / 1e9
@@ -287,7 +309,7 @@ def _p2g_throughput_metric(metrics: list[str]):
 def _speed_of_light_metric(metrics: list[str]):
     def derive_speed_of_light(*args):
         metric_values = args[: len(metrics)]
-        config_values = args[len(metrics):]
+        config_values = args[len(metrics) :]
         n_particles = _n_particles_from_config(config_values)
         time_ns = _value_for_metric(metric_values, metrics, "gpu__time_duration.sum")
         sm_pct = _value_for_metric(
@@ -321,11 +343,13 @@ def _speed_of_light_metric(metrics: list[str]):
 def _diagnostic_metric(metrics: list[str]):
     def derive_diagnostics(*args):
         metric_values = args[: len(metrics)]
-        config_values = args[len(metrics):]
+        config_values = args[len(metrics) :]
         n_particles = _n_particles_from_config(config_values)
         out = {}
 
-        time_ns = _optional_value_for_metric(metric_values, metrics, "gpu__time_duration.sum")
+        time_ns = _optional_value_for_metric(
+            metric_values, metrics, "gpu__time_duration.sum"
+        )
         if time_ns is not None:
             seconds = time_ns / 1e9
             out["time_ms"] = time_ns / 1e6
@@ -343,7 +367,9 @@ def _diagnostic_metric(metrics: list[str]):
         for op in ("ld", "st", "atom", "red"):
             request_metric = f"l1tex__t_requests_pipe_lsu_mem_global_op_{op}.sum"
             sector_metric = f"l1tex__t_sectors_pipe_lsu_mem_global_op_{op}.sum"
-            requests = _optional_value_for_metric(metric_values, metrics, request_metric)
+            requests = _optional_value_for_metric(
+                metric_values, metrics, request_metric
+            )
             sectors = _optional_value_for_metric(metric_values, metrics, sector_metric)
             if requests is not None:
                 out[f"global_{op}_requests_per_particle"] = requests / n_particles
@@ -421,7 +447,9 @@ def _derive_metric(name, metrics: list[str]):
     if callable(name):
         return name
     if not isinstance(name, str):
-        raise RuntimeError("nsight.analyze.derive_metric must be null or a supported preset name.")
+        raise RuntimeError(
+            "nsight.analyze.derive_metric must be null or a supported preset name."
+        )
     if name in {"throughput", "p2g_throughput"}:
         if "gpu__time_duration.sum" not in metrics:
             raise RuntimeError(
@@ -430,7 +458,9 @@ def _derive_metric(name, metrics: list[str]):
             )
         return _p2g_throughput_metric(metrics)
     if name in {"speed_of_light", "sol"}:
-        missing = [metric for metric in _SPEED_OF_LIGHT_METRICS if metric not in metrics]
+        missing = [
+            metric for metric in _SPEED_OF_LIGHT_METRICS if metric not in metrics
+        ]
         if missing:
             raise RuntimeError(
                 "derive_metric='speed_of_light' requires these nsight.analyze.metrics: "
@@ -490,7 +520,9 @@ def _expand_metric_presets(kwargs):
     )
     explicit_metrics = list(kwargs.get("metrics") or [])
     if not preset_names:
-        kwargs["metrics"] = _dedupe_metrics(explicit_metrics or ["gpu__time_duration.sum"])
+        kwargs["metrics"] = _dedupe_metrics(
+            explicit_metrics or ["gpu__time_duration.sum"]
+        )
         return
 
     metrics = []
@@ -512,7 +544,9 @@ def _combine_kernel_metrics(name):
     if callable(name):
         return name
     if not isinstance(name, str):
-        raise RuntimeError("nsight.analyze.combine_kernel_metrics must be null or a preset name.")
+        raise RuntimeError(
+            "nsight.analyze.combine_kernel_metrics must be null or a preset name."
+        )
     if name in {"sum", "add"}:
         return lambda x, y: x + y
     if name == "max":
@@ -530,7 +564,9 @@ def _nsight_analyze_kwargs(cfg: DictConfig, run_dir: Path, kernel_name: str):
     if kwargs is None:
         kwargs = {}
     if not isinstance(kwargs, Mapping):
-        raise RuntimeError("nsight.analyze must be a mapping of nsight.analyze.kernel options.")
+        raise RuntimeError(
+            "nsight.analyze must be a mapping of nsight.analyze.kernel options."
+        )
 
     unsupported = _UNSUPPORTED_ANALYZE_CONFIG_KEYS.intersection(kwargs)
     if unsupported:
@@ -543,7 +579,9 @@ def _nsight_analyze_kwargs(cfg: DictConfig, run_dir: Path, kernel_name: str):
     kwargs = dict(kwargs)
     kwargs.setdefault("runs", 1)
     _expand_metric_presets(kwargs)
-    kwargs["derive_metric"] = _derive_metric(kwargs.get("derive_metric"), kwargs["metrics"])
+    kwargs["derive_metric"] = _derive_metric(
+        kwargs.get("derive_metric"), kwargs["metrics"]
+    )
     kwargs["combine_kernel_metrics"] = _combine_kernel_metrics(
         kwargs.get("combine_kernel_metrics")
     )
@@ -583,7 +621,9 @@ def _write_results(results, run_dir: Path, write_json: bool):
 
     if write_json:
         out_json = run_dir / "nsight_results.json"
-        out_json.write_text(json.dumps(json.loads(df.to_json(orient="records")), indent=2))
+        out_json.write_text(
+            json.dumps(json.loads(df.to_json(orient="records")), indent=2)
+        )
         print(f"Wrote {out_json}")
 
 
@@ -609,8 +649,7 @@ def _prepare_nsight_child_python(run_dir: Path):
     original_python = sys.executable
     wrapper = run_dir / "nsight_python_no_site.sh"
     wrapper.write_text(
-        "#!/usr/bin/env bash\n"
-        f"exec {shlex.quote(original_python)} -S \"$@\"\n"
+        f'#!/usr/bin/env bash\nexec {shlex.quote(original_python)} -S "$@"\n'
     )
     wrapper.chmod(0o755)
 
@@ -701,7 +740,9 @@ def main(cfg: DictConfig):
         raise RuntimeError(f"Unknown nsight config keys: {keys}.")
     with _disable_editable_pth_for_nsight():
         results = _run_nsight_profile(profiled_variant)
-    _write_results(results, run_dir, write_json=bool(cfg.nsight.get("write_json", True)))
+    _write_results(
+        results, run_dir, write_json=bool(cfg.nsight.get("write_json", True))
+    )
     if plot_kwargs is not None:
         print(f"Wrote {plot_kwargs['filename']}")
 

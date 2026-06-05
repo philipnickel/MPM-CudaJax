@@ -17,36 +17,12 @@
 
 #include "xla/ffi/api/ffi.h"
 
+#include "p2g_common.cuh"
+
 #define BLOCK_SIZE 256
 #define FULL_MASK 0xFFFFFFFFu
 
 namespace ffi = xla::ffi;
-
-// ---------------------------------------------------------------------------
-// Warp-level reduction helper for coalescing matching stencil targets.
-// ---------------------------------------------------------------------------
-
-// Reduce `val` across all lanes in an arbitrary `__match_any_sync` mask.
-// Returns the sum in ALL lanes of the group (not just the leader).
-__device__ __forceinline__ float warp_reduce_masked(float val, unsigned mask) {
-    float sum = 0.0f;
-    for (unsigned remaining = mask; remaining; remaining &= (remaining - 1)) {
-        int src_lane = __ffs(remaining) - 1;
-        sum += __shfl_sync(mask, val, src_lane);
-    }
-    return sum;
-}
-
-// ---------------------------------------------------------------------------
-// Kernels
-// ---------------------------------------------------------------------------
-
-// Zero a float buffer (grid-stride loop).
-__global__ void zero_kernel(float* __restrict__ buf, int n) {
-    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n;
-         i += blockDim.x * gridDim.x)
-        buf[i] = 0.0f;
-}
 
 __global__ void p2g_v2_inline_kernel(
     const float* __restrict__ x,        // (N, 3)
@@ -66,102 +42,48 @@ __global__ void p2g_v2_inline_kernel(
     // skip the atomics in the leader check). Otherwise we deadlock the warp.
     bool active = pid < N;
 
-    float px[3], pv[3];
-    float pC[9], pS[9];
-
-    if (active) {
-        for (int d = 0; d < 3; d++) {
-            px[d] = x[pid * 3 + d];
-            pv[d] = v[pid * 3 + d];
-        }
-        for (int i = 0; i < 9; i++) {
-            pC[i] = C[pid * 9 + i];
-            pS[i] = stress[pid * 9 + i];
-        }
-    }
-
-    // Base node + fractional offset for quadratic B-spline.
-    float fpx[3], fx[3];
+    // Per-particle state + B-spline tables (only meaningful for active lanes;
+    // inactive lanes never read them — they carry grid_idx = -1 below).
+    float px[3], pv[3], pC[9], pS[9];
     int base[3];
+    float fx[3], w[3][3], dw[3][3];
     if (active) {
-        for (int d = 0; d < 3; d++) {
-            fpx[d] = px[d] * inv_dx;
-            base[d] = (int)floorf(fpx[d] - 0.5f);
-            fx[d] = fpx[d] - (float)base[d];
-        }
-    }
-
-    // Per-axis weight + weight-gradient tables (3 entries each).
-    float w[3][3], dw[3][3];
-    if (active) {
-        for (int d = 0; d < 3; d++) {
-            w[d][0] = 0.5f * (1.5f - fx[d]) * (1.5f - fx[d]);
-            w[d][1] = 0.75f - (fx[d] - 1.0f) * (fx[d] - 1.0f);
-            w[d][2] = 0.5f * (fx[d] - 0.5f) * (fx[d] - 0.5f);
-            dw[d][0] = fx[d] - 1.5f;
-            dw[d][1] = -2.0f * (fx[d] - 1.0f);
-            dw[d][2] = fx[d] - 0.5f;
-        }
+        p2g_load_particle(x, v, C, stress, pid, px, pv, pC, pS);
+        p2g_base_fx(px, inv_dx, base, fx);
+        p2g_bspline_tables(fx, w, dw);
     }
 
     // Scatter to 27 stencil nodes. All warp lanes must execute the loop
     // (they all participate in __match_any_sync); inactive lanes carry
     // grid_idx = -1 so they form their own match group and the atomic guard
-    // (active && lane == leader) keeps them from writing.
+    // (active && lane == leader) keeps them from writing. v2's scatter is the
+    // experiment: warp-shuffle reduce same-node lanes, one leader atomic each.
     for (int di = 0; di < 3; di++)
     for (int dj = 0; dj < 3; dj++)
     for (int dk = 0; dk < 3; dk++) {
-        float weight = 0.0f;
-        float dweight[3] = {0.0f, 0.0f, 0.0f};
-        float dpos[3] = {0.0f, 0.0f, 0.0f};
+        float mv0 = 0.0f, mv1 = 0.0f, mv2 = 0.0f, mass_contrib = 0.0f;
         int grid_idx = -1;
-
         if (active) {
-            weight = w[0][di] * w[1][dj] * w[2][dk];
-
-            dweight[0] = inv_dx * dw[0][di] * w[1][dj]  * w[2][dk];
-            dweight[1] = inv_dx * w[0][di]  * dw[1][dj] * w[2][dk];
-            dweight[2] = inv_dx * w[0][di]  * w[1][dj]  * dw[2][dk];
-
-            dpos[0] = ((float)di - fx[0]) * dx;
-            dpos[1] = ((float)dj - fx[1]) * dx;
-            dpos[2] = ((float)dk - fx[2]) * dx;
-
-            int gi = max(0, min(base[0] + di, G - 1));
-            int gj = max(0, min(base[1] + dj, G - 1));
-            int gk = max(0, min(base[2] + dk, G - 1));
+            int gi = p2g_clip_axis(base[0] + di, G);
+            int gj = p2g_clip_axis(base[1] + dj, G);
+            int gk = p2g_clip_axis(base[2] + dk, G);
             grid_idx = gi * G * G + gj * G + gk;
-        }
 
-        // mv = -dt*vol*stress @ dweight + p_mass*weight*(v + C @ dpos)
-        // Matches solver._single_particle_p2g exactly.
-        float mv0 = 0.0f, mv1 = 0.0f, mv2 = 0.0f;
-        if (active) {
-            float s_dw[3], c_dp[3];
-            for (int d = 0; d < 3; d++) {
-                float s = 0.0f, c = 0.0f;
-                for (int j = 0; j < 3; j++) {
-                    s += pS[d * 3 + j] * dweight[j];
-                    c += pC[d * 3 + j] * dpos[j];
-                }
-                s_dw[d] = s;
-                c_dp[d] = c;
-            }
-            mv0 = -dt * vol * s_dw[0] + p_mass * weight * (pv[0] + c_dp[0]);
-            mv1 = -dt * vol * s_dw[1] + p_mass * weight * (pv[1] + c_dp[1]);
-            mv2 = -dt * vol * s_dw[2] + p_mass * weight * (pv[2] + c_dp[2]);
+            float mv[3];
+            p2g_node_contribution(di, dj, dk, w, dw, fx, pC, pS, pv,
+                                  inv_dx, dx, dt, vol, p_mass, mv, &mass_contrib);
+            mv0 = mv[0]; mv1 = mv[1]; mv2 = mv[2];
         }
-        float mass_contrib = active ? (weight * p_mass) : 0.0f;
 
         // Warp coalescing: find lanes in this warp targeting the same grid_idx.
         // Inactive lanes (grid_idx = -1) form their own group and don't write.
         unsigned peers = __match_any_sync(FULL_MASK, grid_idx);
 
         // Sum contributions across matching lanes.
-        mv0 = warp_reduce_masked(mv0, peers);
-        mv1 = warp_reduce_masked(mv1, peers);
-        mv2 = warp_reduce_masked(mv2, peers);
-        mass_contrib = warp_reduce_masked(mass_contrib, peers);
+        mv0 = p2g_warp_reduce_masked(mv0, peers);
+        mv1 = p2g_warp_reduce_masked(mv1, peers);
+        mv2 = p2g_warp_reduce_masked(mv2, peers);
+        mass_contrib = p2g_warp_reduce_masked(mass_contrib, peers);
 
         // Only the leader (lowest lane in group) does the atomic.
         int leader = __ffs(peers) - 1;  // __ffs returns 1-indexed
@@ -193,11 +115,12 @@ ffi::Error P2GV2InlineImpl(
     int grid_mv_size = G * G * G * 3;
     int grid_m_size = G * G * G;
 
-    int zero_blocks = (grid_mv_size + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    zero_kernel<<<zero_blocks, BLOCK_SIZE, 0, stream>>>(
-        grid_mv->typed_data(), grid_mv_size);
-    zero_kernel<<<zero_blocks, BLOCK_SIZE, 0, stream>>>(
-        grid_m->typed_data(), grid_m_size);
+    // Zero the grid (the kernel only adds into it). f32 +0.0 is all-zero bits,
+    // so a byte memset is exactly correct and uses the driver's tuned fill path.
+    cudaMemsetAsync(grid_mv->typed_data(), 0,
+                    (size_t)grid_mv_size * sizeof(float), stream);
+    cudaMemsetAsync(grid_m->typed_data(), 0,
+                    (size_t)grid_m_size * sizeof(float), stream);
 
     int blocks = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
     p2g_v2_inline_kernel<<<blocks, BLOCK_SIZE, 0, stream>>>(

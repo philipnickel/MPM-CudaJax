@@ -21,7 +21,7 @@ hydra:
       backend: jax_baseline,cuda_v1_inline,cuda_v2_inline,cuda_v3_inline
   callbacks:
     scaling_plot:
-      _target_: mpm_jax.callbacks.ScalingPlotCallback
+      _target_: postprocessing.callbacks.ScalingPlotCallback
       baseline_kernel: jax_baseline
 
 benchmark: true

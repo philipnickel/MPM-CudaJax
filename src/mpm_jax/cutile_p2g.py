@@ -28,10 +28,10 @@ from cuda.tile.jax import InputOutput, cutile_call
 # Uses a SMALL super-cell (SC=2) so the arena is exactly 4**3 = 64 nodes -- a
 # clean power-of-two tile with great occupancy, where each particle is read only
 # ONCE (no gather redundancy) and evaluated against 64 nodes.
-ARENA_SC = 2                                 # arena super-cell width
-ARENA_DIM = ARENA_SC + 2                  # 4 nodes per axis (SC + 1 apron each side)
-ARENA_NODES = ARENA_DIM ** 3              # 64 arena nodes (power of two)
-ARENA_PARTICLE_TILE = 16                     # particles per chunk (occupancy sweet spot)
+ARENA_SC = 2  # arena super-cell width
+ARENA_DIM = ARENA_SC + 2  # 4 nodes per axis (SC + 1 apron each side)
+ARENA_NODES = ARENA_DIM**3  # 64 arena nodes (power of two)
+ARENA_PARTICLE_TILE = 16  # particles per chunk (occupancy sweet spot)
 
 
 # ============================================================================
@@ -75,9 +75,33 @@ def _gather_particle(x, v, C, stress, p, active, inv_dx):
     s21 = ct.gather(stress, p * 9 + 7, mask=active, padding_value=0.0)
     s22 = ct.gather(stress, p * 9 + 8, mask=active, padding_value=0.0)
     return (
-        b0, b1, b2, fx0, fx1, fx2, vp0, vp1, vp2,
-        C00, C01, C02, C10, C11, C12, C20, C21, C22,
-        s00, s01, s02, s10, s11, s12, s20, s21, s22,
+        b0,
+        b1,
+        b2,
+        fx0,
+        fx1,
+        fx2,
+        vp0,
+        vp1,
+        vp2,
+        C00,
+        C01,
+        C02,
+        C10,
+        C11,
+        C12,
+        C20,
+        C21,
+        C22,
+        s00,
+        s01,
+        s02,
+        s10,
+        s11,
+        s12,
+        s20,
+        s21,
+        s22,
     )
 
 
@@ -102,17 +126,41 @@ def _node_contribution(pcols, node_rows, dt, vol, p_mass, inv_dx, dx):
     base``; ``contributes`` masks the 3**3 stencil. Math is identical to the JAX
     baseline so the P2G matches it to fp32 round-off.
     """
-    (b0, b1, b2, fx0, fx1, fx2, vp0, vp1, vp2,
-     C00, C01, C02, C10, C11, C12, C20, C21, C22,
-     s00, s01, s02, s10, s11, s12, s20, s21, s22) = pcols
+    (
+        b0,
+        b1,
+        b2,
+        fx0,
+        fx1,
+        fx2,
+        vp0,
+        vp1,
+        vp2,
+        C00,
+        C01,
+        C02,
+        C10,
+        C11,
+        C12,
+        C20,
+        C21,
+        C22,
+        s00,
+        s01,
+        s02,
+        s10,
+        s11,
+        s12,
+        s20,
+        s21,
+        s22,
+    ) = pcols
     gi_row, gj_row, gk_row = node_rows
 
     ox = gi_row - b0
     oy = gj_row - b1
     oz = gk_row - b2
-    contributes = (
-        (ox >= 0) & (ox < 3) & (oy >= 0) & (oy < 3) & (oz >= 0) & (oz < 3)
-    )
+    contributes = (ox >= 0) & (ox < 3) & (oy >= 0) & (oy < 3) & (oz >= 0) & (oz < 3)
     ox_f = ct.astype(ox, ct.float32)
     oy_f = ct.astype(oy, ct.float32)
     oz_f = ct.astype(oz, ct.float32)
@@ -150,19 +198,63 @@ def _cols(particle, tile):
     Explicit (no comprehension/generator — cuTile compiles the kernel AST and
     rejects those).
     """
-    (b0, b1, b2, fx0, fx1, fx2, vp0, vp1, vp2,
-     C00, C01, C02, C10, C11, C12, C20, C21, C22,
-     s00, s01, s02, s10, s11, s12, s20, s21, s22) = particle
+    (
+        b0,
+        b1,
+        b2,
+        fx0,
+        fx1,
+        fx2,
+        vp0,
+        vp1,
+        vp2,
+        C00,
+        C01,
+        C02,
+        C10,
+        C11,
+        C12,
+        C20,
+        C21,
+        C22,
+        s00,
+        s01,
+        s02,
+        s10,
+        s11,
+        s12,
+        s20,
+        s21,
+        s22,
+    ) = particle
     return (
-        ct.reshape(b0, (tile, 1)), ct.reshape(b1, (tile, 1)), ct.reshape(b2, (tile, 1)),
-        ct.reshape(fx0, (tile, 1)), ct.reshape(fx1, (tile, 1)), ct.reshape(fx2, (tile, 1)),
-        ct.reshape(vp0, (tile, 1)), ct.reshape(vp1, (tile, 1)), ct.reshape(vp2, (tile, 1)),
-        ct.reshape(C00, (tile, 1)), ct.reshape(C01, (tile, 1)), ct.reshape(C02, (tile, 1)),
-        ct.reshape(C10, (tile, 1)), ct.reshape(C11, (tile, 1)), ct.reshape(C12, (tile, 1)),
-        ct.reshape(C20, (tile, 1)), ct.reshape(C21, (tile, 1)), ct.reshape(C22, (tile, 1)),
-        ct.reshape(s00, (tile, 1)), ct.reshape(s01, (tile, 1)), ct.reshape(s02, (tile, 1)),
-        ct.reshape(s10, (tile, 1)), ct.reshape(s11, (tile, 1)), ct.reshape(s12, (tile, 1)),
-        ct.reshape(s20, (tile, 1)), ct.reshape(s21, (tile, 1)), ct.reshape(s22, (tile, 1)),
+        ct.reshape(b0, (tile, 1)),
+        ct.reshape(b1, (tile, 1)),
+        ct.reshape(b2, (tile, 1)),
+        ct.reshape(fx0, (tile, 1)),
+        ct.reshape(fx1, (tile, 1)),
+        ct.reshape(fx2, (tile, 1)),
+        ct.reshape(vp0, (tile, 1)),
+        ct.reshape(vp1, (tile, 1)),
+        ct.reshape(vp2, (tile, 1)),
+        ct.reshape(C00, (tile, 1)),
+        ct.reshape(C01, (tile, 1)),
+        ct.reshape(C02, (tile, 1)),
+        ct.reshape(C10, (tile, 1)),
+        ct.reshape(C11, (tile, 1)),
+        ct.reshape(C12, (tile, 1)),
+        ct.reshape(C20, (tile, 1)),
+        ct.reshape(C21, (tile, 1)),
+        ct.reshape(C22, (tile, 1)),
+        ct.reshape(s00, (tile, 1)),
+        ct.reshape(s01, (tile, 1)),
+        ct.reshape(s02, (tile, 1)),
+        ct.reshape(s10, (tile, 1)),
+        ct.reshape(s11, (tile, 1)),
+        ct.reshape(s12, (tile, 1)),
+        ct.reshape(s20, (tile, 1)),
+        ct.reshape(s21, (tile, 1)),
+        ct.reshape(s22, (tile, 1)),
     )
 
 
@@ -175,16 +267,25 @@ def _cols(particle, tile):
 # TiledView (tile=(SC+2)**3, traversal_steps=SC), so each block does
 # view.atomic_store_add(super_cell_index, arena) and overlapping apron nodes are
 # reconciled by the per-element atomics. No coloring, no parity, one launch.
-# Occupancy is left to the compiler here; the best value is GPU-specific (ncu flags
-# this kernel register-limited), so it is chosen per-machine by cutile_autotune
-# (kernel.replace_hints(occupancy=...)) rather than hardcoded for one architecture.
+# Occupancy is left to the cuTile compiler default (ncu flags this kernel
+# register-limited, so the best value is GPU-specific; no hint is forced here).
 @ct.kernel
 def _p2g_atomic_tile_kernel(
-    x, v, C, stress, cell_start, grid_mv, grid_m,
+    x,
+    v,
+    C,
+    stress,
+    cell_start,
+    grid_mv,
+    grid_m,
     G: ct.Constant[int],
-    dt: ct.Constant[float], vol: ct.Constant[float], p_mass: ct.Constant[float],
-    inv_dx: ct.Constant[float], dx: ct.Constant[float],
-    particle_tile: ct.Constant[int], node_tile: ct.Constant[int],
+    dt: ct.Constant[float],
+    vol: ct.Constant[float],
+    p_mass: ct.Constant[float],
+    inv_dx: ct.Constant[float],
+    dx: ct.Constant[float],
+    particle_tile: ct.Constant[int],
+    node_tile: ct.Constant[int],
 ):
     SC = ARENA_SC
     DIM = ARENA_DIM
@@ -193,7 +294,7 @@ def _p2g_atomic_tile_kernel(
     sj = ct.bid(1)
     sk = ct.bid(2)
     super_id = si * (Gs * Gs) + sj * Gs + sk
-    tile_i = si * SC - 1            # real-grid arena origin (apron at -1)
+    tile_i = si * SC - 1  # real-grid arena origin (apron at -1)
     tile_j = sj * SC - 1
     tile_k = sk * SC - 1
 
@@ -219,10 +320,12 @@ def _p2g_atomic_tile_kernel(
         p = chunk_start + p_lane
         active = p < p_end
         pcols = _cols(
-            _gather_particle(x, v, C, stress, p, active, inv_dx), particle_tile)
+            _gather_particle(x, v, C, stress, p, active, inv_dx), particle_tile
+        )
         active_col = ct.reshape(active, (particle_tile, 1))
         mv0, mv1, mv2, mass, contributes = _node_contribution(
-            pcols, (gi_row, gj_row, gk_row), dt, vol, p_mass, inv_dx, dx)
+            pcols, (gi_row, gj_row, gk_row), dt, vol, p_mass, inv_dx, dx
+        )
         m = contributes & active_col
         acc0 = acc0 + ct.sum(ct.where(m, mv0, 0.0), axis=0)
         acc1 = acc1 + ct.sum(ct.where(m, mv1, 0.0), axis=0)
@@ -242,17 +345,14 @@ def _p2g_atomic_tile_kernel(
 
 
 def cutile_p2g_atomic_tile(
-    x, v, C, stress, cell_start, num_grids, dt, vol, p_mass, inv_dx, dx, kernel=None
+    x, v, C, stress, cell_start, num_grids, dt, vol, p_mass, inv_dx, dx
 ):
     """One-launch arena P2G: a single tile-coalesced atomic_store_add per block,
     no coloring. A 1-node halo pad aligns the apron to an overlapping tiled view.
-
-    ``kernel`` lets the autotuner pass an occupancy-tuned variant of
-    ``_p2g_atomic_tile_kernel``; defaults to the module kernel.
     """
     g = int(num_grids)
-    g3 = g ** 3
-    gp = g + 2                       # 1-node halo on each side
+    g3 = g**3
+    gp = g + 2  # 1-node halo on each side
     gs = g // ARENA_SC
     x_flat = x.reshape(-1)
     v_flat = v.reshape(-1)
@@ -264,15 +364,26 @@ def cutile_p2g_atomic_tile(
 
     grid_mv, grid_m = cutile_call(
         (gs, gs, gs),
-        kernel if kernel is not None else _p2g_atomic_tile_kernel,
+        _p2g_atomic_tile_kernel,
         (
-            x_flat, v_flat, C_flat, stress_flat, cell_start,
-            InputOutput(grid_mv), InputOutput(grid_m),
-            g, float(dt), float(vol), float(p_mass), float(inv_dx), float(dx),
-            ARENA_PARTICLE_TILE, ARENA_NODES,
+            x_flat,
+            v_flat,
+            C_flat,
+            stress_flat,
+            cell_start,
+            InputOutput(grid_mv),
+            InputOutput(grid_m),
+            g,
+            float(dt),
+            float(vol),
+            float(p_mass),
+            float(inv_dx),
+            float(dx),
+            ARENA_PARTICLE_TILE,
+            ARENA_NODES,
         ),
     )
     # Strip the halo -> real (G**3, 3) / (G**3,) grids.
-    grid_mv = grid_mv[1:g + 1, 1:g + 1, 1:g + 1, :].reshape((g3, 3))
-    grid_m = grid_m[1:g + 1, 1:g + 1, 1:g + 1].reshape((g3,))
+    grid_mv = grid_mv[1 : g + 1, 1 : g + 1, 1 : g + 1, :].reshape((g3, 3))
+    grid_m = grid_m[1 : g + 1, 1 : g + 1, 1 : g + 1].reshape((g3,))
     return grid_mv, grid_m

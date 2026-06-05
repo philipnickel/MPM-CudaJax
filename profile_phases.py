@@ -58,7 +58,8 @@ def main(cfg: DictConfig):
         state = state._replace(x=x, v=v)
         stress = elasticity_fn(state.F)
         grid_mv, grid_m = be.p2g(
-            p, PreparedSubstep(state.x, state.v, state.C, state.F, stress))
+            p, PreparedSubstep(state.x, state.v, state.C, state.F, stress)
+        )
         return grid_mv, grid_m, stress, state
 
     @jax.jit
@@ -67,7 +68,9 @@ def main(cfg: DictConfig):
         return post_fn(grid_mv, grid_m, 0.0)
 
     @jax.jit
-    def g2p_phase(state, stress, grid_v):  # weights + gather + F-update + advect + return-map
+    def g2p_phase(
+        state, stress, grid_v
+    ):  # weights + gather + F-update + advect + return-map
         prepared = be.prepare(p, state, stress)
         nx, nv, nC, nF = be.g2p(p, prepared, grid_v)
         return nx, nv, nC, nF, plasticity_fn(nF)
@@ -90,11 +93,15 @@ def main(cfg: DictConfig):
     t_plast = _ms_per_call(plast, (state2.F,), K)
     total = t_p2g + t_grid + t_g2p
 
-    print(f"\nPer-phase timing — {solver.backend.name}, {int(cfg.sim.n_particles):,} particles "
-          f"(jit each phase separately, {K} iters, ms/substep):\n")
-    rows = [("P2G  (BC + stress/SVD + scatter)", t_p2g),
-            ("Grid (normalize + gravity + BC)", t_grid),
-            ("G2P  (weights + gather + F + advect + plast)", t_g2p)]
+    print(
+        f"\nPer-phase timing — {solver.backend.name}, {int(cfg.sim.n_particles):,} particles "
+        f"(jit each phase separately, {K} iters, ms/substep):\n"
+    )
+    rows = [
+        ("P2G  (BC + stress/SVD + scatter)", t_p2g),
+        ("Grid (normalize + gravity + BC)", t_grid),
+        ("G2P  (weights + gather + F + advect + plast)", t_g2p),
+    ]
     for name, t in rows:
         print(f"  {name:46} {t:8.3f} ms   {t / total * 100:5.1f}%")
     print(f"  {'-' * 46} {'-' * 8}")

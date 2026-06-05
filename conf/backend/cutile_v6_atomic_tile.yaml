@@ -3,7 +3,6 @@
 # with a SINGLE TiledView.atomic_store_add (a 1-node halo pad aligns the arena's
 # apron to an overlapping tiled view, so shared apron nodes are reconciled by the
 # atomics). No coloring, no parity, one launch. Requires num_grids divisible by 2.
-# Occupancy is autotuned per-GPU and cached; disable with backend.autotune=false.
+# Occupancy is left to the cuTile compiler default.
 _target_: mpm_jax.backends.CutileV6
 num_grids: ${sim.num_grids}
-autotune: true

@@ -3,8 +3,7 @@ import pytest
 from omegaconf import OmegaConf
 
 from mpm_jax.constitutive import (
-    ELASTICITY,
-    PLASTICITY,
+    REGISTRY,
     drucker_prager_plasticity_jacobi,
     get_constitutive,
     stvk_elasticity_jacobi,
@@ -29,20 +28,21 @@ def test_stvk_jacobi_stretched_F_gives_nonzero_stress():
     assert not jnp.allclose(stress, 0.0)
 
 
-def test_elasticity_registry_is_sand_only():
-    assert ELASTICITY == {"StVKElasticityJacobi": stvk_elasticity_jacobi}
+def test_registry_is_sand_only():
+    assert REGISTRY == {
+        "StVKElasticityJacobi": stvk_elasticity_jacobi,
+        "DruckerPragerPlasticityJacobi": drucker_prager_plasticity_jacobi,
+    }
 
 
 def test_drucker_prager_jacobi_preserves_shape_near_identity():
-    fn = drucker_prager_plasticity_jacobi(E=2e6, nu=0.4, friction_angle=25.0, cohesion=0.0)
+    fn = drucker_prager_plasticity_jacobi(
+        E=2e6, nu=0.4, friction_angle=25.0, cohesion=0.0
+    )
     F = _make_F_batch(10)
     result = fn(F)
     assert result.shape == (10, 3, 3)
     assert jnp.allclose(result, F, atol=1e-2)
-
-
-def test_plasticity_registry_is_sand_only():
-    assert PLASTICITY == {"DruckerPragerPlasticityJacobi": drucker_prager_plasticity_jacobi}
 
 
 def test_get_constitutive_sand_elasticity():
@@ -53,13 +53,15 @@ def test_get_constitutive_sand_elasticity():
 
 
 def test_get_constitutive_sand_plasticity():
-    cfg = OmegaConf.create({
-        "name": "DruckerPragerPlasticityJacobi",
-        "E": 2e6,
-        "nu": 0.4,
-        "friction_angle": 25.0,
-        "cohesion": 0.0,
-    })
+    cfg = OmegaConf.create(
+        {
+            "name": "DruckerPragerPlasticityJacobi",
+            "E": 2e6,
+            "nu": 0.4,
+            "friction_angle": 25.0,
+            "cohesion": 0.0,
+        }
+    )
     fn = get_constitutive(cfg)
     F = _make_F_batch(5)
     assert jnp.allclose(fn(F), F, atol=1e-2)

@@ -10,9 +10,7 @@ def test_register_missing_so_returns_false(monkeypatch, tmp_path):
     p2g_cuda._REGISTERED.clear()
 
     assert (
-        p2g_cuda._register(
-            "unit_test_missing", "libdoes_not_exist.so", "MissingSymbol"
-        )
+        p2g_cuda._register("unit_test_missing", "libdoes_not_exist.so", "MissingSymbol")
         is False
     )
 

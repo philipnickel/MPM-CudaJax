@@ -113,6 +113,7 @@ def jacobi_svd_3x3(F, num_sweeps=4):
     one = jnp.ones(F.shape[:-2], dtype=F.dtype)
     V = [[one if i == j else zero for j in range(3)] for i in range(3)]
 
+    # should this be a for loop like this?
     for _ in range(num_sweeps):
         S, V = _rotate_sf(S, V, 0, 1, 2)
         S, V = _rotate_sf(S, V, 0, 2, 1)

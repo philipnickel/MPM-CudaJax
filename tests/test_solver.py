@@ -4,6 +4,7 @@ from omegaconf import OmegaConf
 from mpm_jax.types import MPMState, MPMParams
 from mpm_jax.blocks.grid import grid_update
 
+
 def test_mpm_state_is_namedtuple():
     N = 10
     state = MPMState(
@@ -15,18 +16,23 @@ def test_mpm_state_is_namedtuple():
     assert state.x.shape == (N, 3)
     assert state.F.shape == (N, 3, 3)
 
+
 def test_mpm_params_derives_runtime_constants():
     N = 1000
-    params = MPMParams(OmegaConf.create({
-        "n_particles": N,
-        "num_grids": 25,
-        "dt": 3e-4,
-        "gravity": [0.0, 0.0, -9.8],
-        "rho": 1000.0,
-        "clip_bound": 0.5,
-        "damping": 1.0,
-        "size": [1.0, 1.0, 1.0],
-    }))
+    params = MPMParams(
+        OmegaConf.create(
+            {
+                "n_particles": N,
+                "num_grids": 25,
+                "dt": 3e-4,
+                "gravity": [0.0, 0.0, -9.8],
+                "rho": 1000.0,
+                "clip_bound": 0.5,
+                "damping": 1.0,
+                "size": [1.0, 1.0, 1.0],
+            }
+        )
+    )
     assert params.num_grids == 25
     assert params.dx == 1.0 / 25
     assert params.inv_dx == 25.0
@@ -35,6 +41,7 @@ def test_mpm_params_derives_runtime_constants():
     assert np.isclose(params.vol, expected_vol)
     assert np.isclose(params.p_mass, 1000.0 * expected_vol)
     assert params.gravity.shape == (3,)
+
 
 def test_grid_update_divides_momentum_by_mass():
     grid_mv = jnp.array([[3.0, 6.0, 9.0], [0.0, 0.0, 0.0]])

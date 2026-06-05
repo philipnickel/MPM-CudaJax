@@ -2,11 +2,57 @@ import copy
 from dataclasses import dataclass
 from typing import Any
 
-# Re-exported through mpm_jax.__init__._SOLVER_EXPORTS (the lazy loader pulls
-# these off this module), so keep them importable here even though the solver
-# body no longer references them directly.
-from mpm_jax.types import MPMState, MPMParams  # noqa: F401
-from mpm_jax.backends import build_backend_frame
+import jax
+import jax.numpy as jnp
+
+from mpm_jax.blocks.grid import build_grid_x, grid_update
+from mpm_jax.blocks.init import get_particles
+from mpm_jax.boundary import build_boundary_fns
+from mpm_jax.constitutive import get_constitutive
+from mpm_jax.types import MPMParams, MPMState
+
+
+def build_backend_frame(
+    params, elasticity_fn, plasticity_fn, pre_fn, post_fn, backend, steps_per_frame
+):
+    """Build one JIT-compiled frame from a backend object.
+
+    The frame owns the common MPM control flow (boundary conditions, elasticity,
+    grid update, optional plasticity, the substep loop). The backend owns only the
+    P2G — ``backend.step`` orders the particles and scatters — and ``g2p``.
+    The ``steps_per_frame`` substeps run as a single ``lax.fori_loop``.
+    """
+
+    @jax.jit
+    def jit_frame(state):
+        def step_body(state):
+            with jax.named_scope("pre_particle"):
+                x, v = pre_fn(state.x, state.v, 0.0)
+            state = state._replace(x=x, v=v)
+
+            with jax.named_scope("elasticity"):
+                stress = elasticity_fn(state.F)
+
+            with jax.named_scope(f"{backend.name}_p2g"):
+                prepared, grid_mv, grid_m = backend.step(params, state, stress)
+
+            with jax.named_scope("grid_update"):
+                grid_mv = grid_update(
+                    grid_mv, grid_m, params.gravity, params.dt, params.damping
+                )
+                grid_v = post_fn(grid_mv, grid_m, 0.0)
+
+            with jax.named_scope(f"{backend.name}_g2p"):
+                new_x, new_v, new_C, new_F = backend.g2p(params, prepared, grid_v)
+
+            if plasticity_fn is not None:
+                with jax.named_scope("plasticity"):
+                    new_F = plasticity_fn(new_F)
+            return MPMState(x=new_x, v=new_v, C=new_C, F=new_F)
+
+        return jax.lax.fori_loop(0, steps_per_frame, lambda _, s: step_body(s), state)
+
+    return jit_frame
 
 
 @dataclass
@@ -38,26 +84,25 @@ class MPMSolver:
         the compiled frame. The shared scalars (``n_particles``/``num_grids``)
         are read once and threaded as locals (``n``/``g``).
         """
-        import jax.numpy as jnp  # noqa: E402  # pylint: disable=import-outside-toplevel
-        from mpm_jax.blocks.grid import build_grid_x  # pylint: disable=import-outside-toplevel
-        from mpm_jax.blocks.init import get_particles  # pylint: disable=import-outside-toplevel
-        from mpm_jax.boundary import build_boundary_fns  # pylint: disable=import-outside-toplevel
-        from mpm_jax.constitutive import get_constitutive  # pylint: disable=import-outside-toplevel
-
         sim, mat = config.sim, config.material
         n, g = int(sim.n_particles), int(sim.num_grids)
 
         params = MPMParams(sim)
         particles = jnp.asarray(
-            get_particles(n, center=list(sim.center), size=list(sim.size)), dtype=jnp.float32)
+            get_particles(n, center=list(sim.center), size=list(sim.size)),
+            dtype=jnp.float32,
+        )
         backend = config.backend
         pre_fn, post_fn = build_boundary_fns(
-            list(sim.boundary_conditions), build_grid_x(g),
-            params.dx, particles, params.dt, params.p_mass)
+            list(sim.boundary_conditions),
+            build_grid_x(g),
+            params.dx,
+        )
         init_state = MPMState(
             x=particles,
             v=jnp.broadcast_to(
-                jnp.asarray(list(sim.initial_velocity), dtype=jnp.float32), (n, 3)).copy(),
+                jnp.asarray(list(sim.initial_velocity), dtype=jnp.float32), (n, 3)
+            ).copy(),
             C=jnp.zeros((n, 3, 3)),
             F=jnp.tile(jnp.eye(3), (n, 1, 1)),
         )
@@ -66,19 +111,26 @@ class MPMSolver:
         self._init_state = init_state
         self.state = init_state
         self.elasticity_fn = get_constitutive(mat.elasticity)
-        self.plasticity_fn = get_constitutive(mat.plasticity)
+        self.plasticity_fn = (
+            get_constitutive(mat.plasticity) if "plasticity" in mat else None
+        )
         self.pre_fn = pre_fn
         self.post_fn = post_fn
         self.backend = backend
         self._frame = build_backend_frame(
-            params, self.elasticity_fn, self.plasticity_fn, pre_fn, post_fn,
-            backend, self.steps_per_frame,
+            params,
+            self.elasticity_fn,
+            self.plasticity_fn,
+            pre_fn,
+            post_fn,
+            backend,
+            self.steps_per_frame,
         )
 
     def stepped(self):
         """Return a new solver with state advanced one frame (steps_per_frame)."""
         new_state = self._frame(self.state)
-        new = copy.copy(self)          # shallow: shares _frame + backend + closures
+        new = copy.copy(self)  # shallow: shares _frame + backend + closures
         new.state = new_state
         return new
 

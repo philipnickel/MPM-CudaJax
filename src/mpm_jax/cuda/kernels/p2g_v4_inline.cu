@@ -22,10 +22,10 @@
 //   flush cost, but reduces the block count by another 8x versus SC=2.
 //
 // The hypothesis is that the smem aggregation amortises the 27 global
-// atomicAdds per particle (108 floats) down to ~64 global atomicAdds per
-// super-cell. With inline weight computation, the (N, 27, *) momentum/mass/
-// index tensors disappear from HBM and only x/v/C/stress are loaded once per
-// particle.
+// atomicAdds per particle (108 floats) down to the per-super-cell tile flush
+// (~TILE_SIZE = (SC+2)^3 = 216 occupied grid nodes for SC=4). With inline
+// weight computation, the (N, 27, *) momentum/mass/index tensors disappear
+// from HBM and only x/v/C/stress are loaded once per particle.
 //
 // Inputs (all float32 unless noted):
 //   x:          (N, 3)        particle positions (SORTED by home super-cell)
@@ -49,37 +49,33 @@
 
 #include "xla/ffi/api/ffi.h"
 
-#define SC 4                                   // super-cell width (in cells)
-#define TILE_DIM (SC + 2)                      // stencil-union half = 1 on each side
-#define TILE_SIZE (TILE_DIM * TILE_DIM * TILE_DIM)  // 216 nodes for SC=4
+#include "p2g_common.cuh"
+
 #define BLOCK_SIZE 256  // threads per super-cell block
+
+// Super-cell width SC is a compile-time TEMPLATE parameter: TILE_DIM/TILE_SIZE
+// derive from it and statically size the __shared__ tile, so each instantiation
+// stays fully optimised. The FFI handler dispatches to the instantiated SC by a
+// runtime switch (kept in sync with SUPPORTED_SC in p2g_cuda.py), so SC is
+// selectable from config without a recompile and without dynamic shared memory.
 
 namespace ffi = xla::ffi;
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Super-cell-tiled inline kernel
 // ---------------------------------------------------------------------------
-
-__global__ void zero_kernel(float* __restrict__ buf, int n) {
-    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n;
-         i += blockDim.x * gridDim.x)
-        buf[i] = 0.0f;
-}
-
-// ---------------------------------------------------------------------------
-// Cell-major inline kernel
-// ---------------------------------------------------------------------------
-// One block per grid cell. Each thread in the block processes one or more
-// particles from that cell (grid-stride loop over the in-cell particle
-// range). Per particle:
+// One block per super-cell. Each thread in the block processes one or more
+// particles from that super-cell (grid-stride loop over the in-super-cell
+// particle range). Per particle:
 //   - load x, v, C, stress
 //   - compute base node + per-axis B-spline weight/dweight tables
 //   - loop over 27 stencil offsets, atomicAdd momentum + mass into the
 //     shared-memory tile (or fall back to global atomicAdd when the stencil
 //     clips outside the tile — only happens at grid boundary).
-// After all threads finish, the block flushes the 64 tile entries to global
-// memory with one atomicAdd per (mv, m).
+// After all threads finish, the block flushes the TILE_SIZE = (SC+2)^3 = 216
+// tile entries to global memory with one atomicAdd per (mv, m).
 
+template <int SC>
 __global__ void p2g_v4_inline_kernel(
     const float* __restrict__ x,          // (N, 3) sorted by home super-cell
     const float* __restrict__ v,          // (N, 3) sorted
@@ -91,6 +87,8 @@ __global__ void p2g_v4_inline_kernel(
     int G,
     float dt, float vol, float p_mass, float inv_dx, float dx
 ) {
+    constexpr int TILE_DIM = SC + 2;       // stencil-union: 1-node apron each side
+    constexpr int TILE_SIZE = TILE_DIM * TILE_DIM * TILE_DIM;
     int Gs = G / SC;                       // super-grid resolution
     int Gs3 = Gs * Gs * Gs;
     int super_id = blockIdx.x;
@@ -139,73 +137,28 @@ __global__ void p2g_v4_inline_kernel(
         int pid = p_start + p;
 
         // Register-resident particle state.
-        float px[3], pv[3];
-        for (int d = 0; d < 3; d++) {
-            px[d] = x[pid * 3 + d];
-            pv[d] = v[pid * 3 + d];
-        }
-        float pC[9], pS[9];
-        for (int i = 0; i < 9; i++) {
-            pC[i] = C[pid * 9 + i];
-            pS[i] = stress[pid * 9 + i];
-        }
+        float px[3], pv[3], pC[9], pS[9];
+        p2g_load_particle(x, v, C, stress, pid, px, pv, pC, pS);
 
-        // Base + fractional offset for quadratic B-spline.
-        float fx[3];
+        // Base node, fractional offset, and B-spline weight tables.
         int base[3];
-        for (int d = 0; d < 3; d++) {
-            float fpx = px[d] * inv_dx;
-            base[d] = (int)floorf(fpx - 0.5f);
-            fx[d] = fpx - (float)base[d];
-        }
-
-        // Per-axis weight + weight-gradient tables (3 entries each).
-        float w[3][3], dw[3][3];
-        for (int d = 0; d < 3; d++) {
-            w[d][0] = 0.5f * (1.5f - fx[d]) * (1.5f - fx[d]);
-            w[d][1] = 0.75f - (fx[d] - 1.0f) * (fx[d] - 1.0f);
-            w[d][2] = 0.5f * (fx[d] - 0.5f) * (fx[d] - 0.5f);
-            dw[d][0] = fx[d] - 1.5f;
-            dw[d][1] = -2.0f * (fx[d] - 1.0f);
-            dw[d][2] = fx[d] - 0.5f;
-        }
+        float fx[3], w[3][3], dw[3][3];
+        p2g_base_fx(px, inv_dx, base, fx);
+        p2g_bspline_tables(fx, w, dw);
 
         // 27-stencil register-resident loop.
         for (int di = 0; di < 3; di++)
         for (int dj = 0; dj < 3; dj++)
         for (int dk = 0; dk < 3; dk++) {
-            float weight = w[0][di] * w[1][dj] * w[2][dk];
+            // Clamped global grid index (per-axis clamp to [0, G-1]; see
+            // p2g_common.cuh — intentionally differs from the JAX flat clip).
+            int gi = p2g_clip_axis(base[0] + di, G);
+            int gj = p2g_clip_axis(base[1] + dj, G);
+            int gk = p2g_clip_axis(base[2] + dk, G);
 
-            float dweight[3];
-            dweight[0] = inv_dx * dw[0][di] * w[1][dj]  * w[2][dk];
-            dweight[1] = inv_dx * w[0][di]  * dw[1][dj] * w[2][dk];
-            dweight[2] = inv_dx * w[0][di]  * w[1][dj]  * dw[2][dk];
-
-            float dpos[3];
-            dpos[0] = ((float)di - fx[0]) * dx;
-            dpos[1] = ((float)dj - fx[1]) * dx;
-            dpos[2] = ((float)dk - fx[2]) * dx;
-
-            // Global grid index (with clip to match solver._single_particle_weights).
-            int gi_raw = base[0] + di;
-            int gj_raw = base[1] + dj;
-            int gk_raw = base[2] + dk;
-            int gi = max(0, min(gi_raw, G - 1));
-            int gj = max(0, min(gj_raw, G - 1));
-            int gk = max(0, min(gk_raw, G - 1));
-
-            // Momentum contribution.
-            float mv[3];
-            for (int d = 0; d < 3; d++) {
-                float s_dw = 0.0f;
-                float c_dp = 0.0f;
-                for (int j = 0; j < 3; j++) {
-                    s_dw += pS[d * 3 + j] * dweight[j];
-                    c_dp += pC[d * 3 + j] * dpos[j];
-                }
-                mv[d] = -dt * vol * s_dw + p_mass * weight * (pv[d] + c_dp);
-            }
-            float m_contrib = weight * p_mass;
+            float mv[3], m_contrib;
+            p2g_node_contribution(di, dj, dk, w, dw, fx, pC, pS, pv,
+                                  inv_dx, dx, dt, vol, p_mass, mv, &m_contrib);
 
             // Try the tile first. Tile-local index uses the (possibly
             // clipped) global index, so a clipped stencil that lands back
@@ -280,8 +233,13 @@ ffi::Error P2GV4InlineImpl(
     ffi::ResultBuffer<ffi::F32> grid_mv,
     ffi::ResultBuffer<ffi::F32> grid_m,
     int32_t G,
+    int32_t SC,
     float dt, float vol, float p_mass, float inv_dx, float dx
 ) {
+    if (G % SC != 0) {
+        return ffi::Error(ffi::ErrorCode::kInvalidArgument,
+                          "G must be divisible by SC (super-cell width)");
+    }
     // cell_start is ((G/SC)^3 + 1,) ints.
     int Gs = G / SC;
     int Gs3 = Gs * Gs * Gs;
@@ -291,31 +249,36 @@ ffi::Error P2GV4InlineImpl(
         return ffi::Error(ffi::ErrorCode::kInvalidArgument,
                           "cell_start size does not match (G/SC)^3 + 1");
     }
-    if (G % SC != 0) {
-        return ffi::Error(ffi::ErrorCode::kInvalidArgument,
-                          "G must be divisible by SC (super-cell width)");
-    }
 
     int G3 = G * G * G;
     int grid_mv_size = G3 * 3;
     int grid_m_size = G3;
 
-    // Zero the grid (the kernel only adds into it).
-    int zero_blocks = (grid_mv_size + 255) / 256;
-    zero_kernel<<<zero_blocks, 256, 0, stream>>>(grid_mv->typed_data(), grid_mv_size);
-    zero_kernel<<<(grid_m_size + 255) / 256, 256, 0, stream>>>(grid_m->typed_data(), grid_m_size);
+    // Zero the grid (the kernel only adds into it). f32 +0.0 is all-zero bits,
+    // so a byte memset is exactly correct and uses the driver's tuned fill path.
+    cudaMemsetAsync(grid_mv->typed_data(), 0,
+                    (size_t)grid_mv_size * sizeof(float), stream);
+    cudaMemsetAsync(grid_m->typed_data(), 0,
+                    (size_t)grid_m_size * sizeof(float), stream);
 
-    // One block per super-cell.
-    p2g_v4_inline_kernel<<<Gs3, BLOCK_SIZE, 0, stream>>>(
-        x.typed_data(),
-        v.typed_data(),
-        C.typed_data(),
-        stress.typed_data(),
-        reinterpret_cast<const int*>(cell_start.typed_data()),
-        grid_mv->typed_data(),
-        grid_m->typed_data(),
-        G, dt, vol, p_mass, inv_dx, dx
-    );
+    // One block per super-cell. SC selects the template instantiation (each has
+    // its own statically-sized shared tile); keep these cases in sync with
+    // SUPPORTED_SC in p2g_cuda.py.
+#define MPM_LAUNCH_V4(SCVAL)                                                  \
+    p2g_v4_inline_kernel<SCVAL><<<Gs3, BLOCK_SIZE, 0, stream>>>(              \
+        x.typed_data(), v.typed_data(), C.typed_data(), stress.typed_data(), \
+        reinterpret_cast<const int*>(cell_start.typed_data()),               \
+        grid_mv->typed_data(), grid_m->typed_data(),                         \
+        G, dt, vol, p_mass, inv_dx, dx)
+    switch (SC) {
+        case 2: MPM_LAUNCH_V4(2); break;
+        case 4: MPM_LAUNCH_V4(4); break;
+        case 8: MPM_LAUNCH_V4(8); break;
+        default:
+            return ffi::Error(ffi::ErrorCode::kInvalidArgument,
+                              "unsupported SC; kernel is built for SC in {2, 4, 8}");
+    }
+#undef MPM_LAUNCH_V4
 
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
@@ -336,6 +299,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::Buffer<ffi::F32>>()   // grid_mv
         .Ret<ffi::Buffer<ffi::F32>>()   // grid_m
         .Attr<int32_t>("G")
+        .Attr<int32_t>("SC")
         .Attr<float>("dt")
         .Attr<float>("vol")
         .Attr<float>("p_mass")

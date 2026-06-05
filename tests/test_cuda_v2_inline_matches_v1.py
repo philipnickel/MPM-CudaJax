@@ -15,9 +15,12 @@ import numpy as np
 import pytest
 from omegaconf import OmegaConf
 
-from mpm_jax.types import MPMState, MPMParams
-from mpm_jax.constitutive import get_constitutive
+from mpm_jax.backends import build_backend
 from mpm_jax.boundary import build_boundary_fns
+from mpm_jax.constitutive import get_constitutive
+from mpm_jax.cuda.p2g_cuda import is_available
+from mpm_jax.solver import build_backend_frame
+from mpm_jax.types import MPMState, MPMParams
 
 
 def _has_cuda() -> bool:
@@ -30,7 +33,6 @@ def _has_cuda() -> bool:
 def _kernel_available(kind: str) -> bool:
     if not _has_cuda():
         return False
-    from mpm_jax.cuda.p2g_cuda import is_available
     return is_available(kind)
 
 
@@ -40,22 +42,24 @@ def _kernel_available(kind: str) -> bool:
 )
 def test_cuda_v2_inline_matches_v1_inline():
     """Run a short sim under both inline kernels and compare final state."""
-    from mpm_jax.backends import build_backend, build_backend_frame
-
     n = 2000
     num_grids = 16
     rng = np.random.RandomState(0)
     x0 = jnp.array(rng.rand(n, 3).astype(np.float32) * 0.4 + 0.3)
-    params = MPMParams(OmegaConf.create({
-        "n_particles": n,
-        "num_grids": num_grids,
-        "dt": 3e-4,
-        "gravity": [0.0, 0.0, -9.8],
-        "rho": 1000.0,
-        "clip_bound": 0.5,
-        "damping": 1.0,
-        "size": [1.0, 1.0, 1.0],
-    }))
+    params = MPMParams(
+        OmegaConf.create(
+            {
+                "n_particles": n,
+                "num_grids": num_grids,
+                "dt": 3e-4,
+                "gravity": [0.0, 0.0, -9.8],
+                "rho": 1000.0,
+                "clip_bound": 0.5,
+                "damping": 1.0,
+                "size": [1.0, 1.0, 1.0],
+            }
+        )
+    )
 
     g = jnp.arange(num_grids, dtype=jnp.float32)
     gx, gy, gz = jnp.meshgrid(g, g, g, indexing="ij")
@@ -70,18 +74,20 @@ def test_cuda_v2_inline_matches_v1_inline():
             "end_time": 1e3,
         }
     ]
-    pre_fn, post_fn = build_boundary_fns(bcs, grid_x, params.dx, x0, params.dt)
+    pre_fn, post_fn = build_boundary_fns(bcs, grid_x, params.dx)
 
     # Use the sand Jacobi material so stress/plasticity stay on the JAX side
     # without a cuSOLVER dependence.
     e_cfg = OmegaConf.create({"name": "StVKElasticityJacobi", "E": 2e6, "nu": 0.4})
-    p_cfg = OmegaConf.create({
-        "name": "DruckerPragerPlasticityJacobi",
-        "E": 2e6,
-        "nu": 0.4,
-        "friction_angle": 25.0,
-        "cohesion": 0.0,
-    })
+    p_cfg = OmegaConf.create(
+        {
+            "name": "DruckerPragerPlasticityJacobi",
+            "E": 2e6,
+            "nu": 0.4,
+            "friction_angle": 25.0,
+            "cohesion": 0.0,
+        }
+    )
     elasticity_fn = get_constitutive(e_cfg)
     plasticity_fn = get_constitutive(p_cfg)
 
@@ -96,11 +102,23 @@ def test_cuda_v2_inline_matches_v1_inline():
     num_frames = 3
 
     jit_v1 = build_backend_frame(
-        params, elasticity_fn, plasticity_fn, pre_fn, post_fn,
-        build_backend("cuda_v1_inline", num_grids), steps_per_frame)
+        params,
+        elasticity_fn,
+        plasticity_fn,
+        pre_fn,
+        post_fn,
+        build_backend("cuda_v1_inline", num_grids),
+        steps_per_frame,
+    )
     jit_v2 = build_backend_frame(
-        params, elasticity_fn, plasticity_fn, pre_fn, post_fn,
-        build_backend("cuda_v2_inline", num_grids), steps_per_frame)
+        params,
+        elasticity_fn,
+        plasticity_fn,
+        pre_fn,
+        post_fn,
+        build_backend("cuda_v2_inline", num_grids),
+        steps_per_frame,
+    )
 
     s1 = state0
     s2 = state0
@@ -112,9 +130,6 @@ def test_cuda_v2_inline_matches_v1_inline():
 
     # Same scatter-only tolerance band as the rest of the CUDA-equivalence
     # suite: positions ~1e-4, velocities ~5e-3, F ~1e-4.
-    np.testing.assert_allclose(np.asarray(s1.x), np.asarray(s2.x),
-                               atol=1e-4, rtol=1e-3)
-    np.testing.assert_allclose(np.asarray(s1.v), np.asarray(s2.v),
-                               atol=5e-3, rtol=1e-3)
-    np.testing.assert_allclose(np.asarray(s1.F), np.asarray(s2.F),
-                               atol=1e-4, rtol=1e-3)
+    np.testing.assert_allclose(np.asarray(s1.x), np.asarray(s2.x), atol=1e-4, rtol=1e-3)
+    np.testing.assert_allclose(np.asarray(s1.v), np.asarray(s2.v), atol=5e-3, rtol=1e-3)
+    np.testing.assert_allclose(np.asarray(s1.F), np.asarray(s2.F), atol=1e-4, rtol=1e-3)

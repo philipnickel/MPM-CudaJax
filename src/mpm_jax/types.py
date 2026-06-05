@@ -6,10 +6,10 @@ import numpy as np
 
 
 class MPMState(NamedTuple):
-    x: jax.Array      # (N, 3) positions
-    v: jax.Array      # (N, 3) velocities
-    C: jax.Array      # (N, 3, 3) APIC affine matrix
-    F: jax.Array      # (N, 3, 3) deformation gradient
+    x: jax.Array  # (N, 3) positions
+    v: jax.Array  # (N, 3) velocities
+    C: jax.Array  # (N, 3, 3) APIC affine matrix
+    F: jax.Array  # (N, 3, 3) deformation gradient
 
 
 @dataclass(init=False)

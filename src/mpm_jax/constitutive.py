@@ -13,6 +13,7 @@ def _lame_params(E, nu):
 
 
 def _det3x3(F):
+    # this function is just ugly
     """Closed-form determinant of batched 3x3 matrices.
 
     Fully fusable (~9 mul + adds, pointwise per matrix) -- unlike
@@ -56,7 +57,9 @@ def drucker_prager_plasticity_jacobi(E=2e6, nu=0.4, friction_angle=25.0, cohesio
         epsilon = jnp.log(sigma)
         trace = epsilon.sum(axis=-1, keepdims=True)
         epsilon_hat = epsilon - trace / 3.0
-        epsilon_hat_norm = jnp.clip(jnp.linalg.norm(epsilon_hat, axis=-1, keepdims=True), 1e-10)
+        epsilon_hat_norm = jnp.clip(
+            jnp.linalg.norm(epsilon_hat, axis=-1, keepdims=True), 1e-10
+        )
 
         expand_epsilon = jnp.ones_like(epsilon) * cohesion
         shifted_trace = trace - cohesion * 3.0
@@ -66,7 +69,9 @@ def drucker_prager_plasticity_jacobi(E=2e6, nu=0.4, friction_angle=25.0, cohesio
             epsilon_hat_norm
             + (3.0 * la + 2.0 * mu) / (2.0 * mu) * shifted_trace * alpha
         )
-        compress_epsilon = epsilon - (jnp.clip(delta_gamma, 0.0) / epsilon_hat_norm) * epsilon_hat
+        compress_epsilon = (
+            epsilon - (jnp.clip(delta_gamma, 0.0) / epsilon_hat_norm) * epsilon_hat
+        )
 
         epsilon = jnp.where(cond_yield, compress_epsilon, expand_epsilon)
         diag_exp = jax.vmap(jnp.diag)(jnp.exp(epsilon))
@@ -75,18 +80,21 @@ def drucker_prager_plasticity_jacobi(E=2e6, nu=0.4, friction_angle=25.0, cohesio
     return apply
 
 
-ELASTICITY = {
+# Name -> constitutive-factory registry. sand_jacobi wires StVK elasticity +
+# Drucker-Prager plasticity; jelly wires StVK elasticity with no plasticity.
+# (A neo-Hookean elastic stress was tried for jelly but dropped: its log(J)/F^-T
+# singularity blows up at fine grids on impact; StVK is polynomial in F and stable.)
+# Add a function and a config entry to extend it.
+REGISTRY = {
     "StVKElasticityJacobi": stvk_elasticity_jacobi,
-}
-
-PLASTICITY = {
     "DruckerPragerPlasticityJacobi": drucker_prager_plasticity_jacobi,
 }
 
-REGISTRY = {**ELASTICITY, **PLASTICITY}
-
 
 def get_constitutive(cfg):
-    # subscript access works for both a plain dict and an OmegaConf DictConfig
-    params = {k: v for k, v in cfg.items() if k != "name"}
-    return REGISTRY[cfg["name"]](**params)
+    """Construct a constitutive fn from a config node: look up ``cfg['name']`` in
+    REGISTRY and pass the remaining keys as kwargs. ``dict(cfg)`` materialises
+    both a plain dict and an OmegaConf DictConfig."""
+    params = dict(cfg)
+    name = params.pop("name")
+    return REGISTRY[name](**params)

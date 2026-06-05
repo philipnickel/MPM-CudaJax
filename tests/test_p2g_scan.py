@@ -14,7 +14,10 @@ def test_p2g_scan_shapes_and_mass_are_finite():
     stress = jnp.zeros((n, 3, 3), dtype=jnp.float32)
 
     grid_mv, grid_m = _p2g_scan(
-        x, v, C, stress,
+        x,
+        v,
+        C,
+        stress,
         dt=3e-4,
         vol=1.0 / n,
         p_mass=1.0 / n,
@@ -23,8 +26,8 @@ def test_p2g_scan_shapes_and_mass_are_finite():
         num_grids=G,
     )
 
-    assert grid_mv.shape == (G ** 3, 3)
-    assert grid_m.shape == (G ** 3,)
+    assert grid_mv.shape == (G**3, 3)
+    assert grid_m.shape == (G**3,)
     assert jnp.all(jnp.isfinite(grid_mv))
     assert jnp.all(jnp.isfinite(grid_m))
     assert jnp.isclose(grid_m.sum(), 1.0, atol=1e-5)

@@ -16,12 +16,11 @@ def _sticky_surface(point, normal, grid_x, dx, start_time, end_time):
     return apply
 
 
-def build_boundary_fns(bc_configs, grid_x, dx, init_pos=None, dt=None, p_mass=1.0):
+def build_boundary_fns(bc_configs, grid_x, dx):
     """Build boundary callbacks for the sand benchmark.
 
     The supported boundary is a sticky `surface_collider`, used as the floor in
-    the default and benchmark configs. Extra parameters are accepted for
-    compatibility with older call sites but are not used.
+    the default and benchmark configs.
     """
     post_grid_fns = []
 
@@ -39,10 +38,16 @@ def build_boundary_fns(bc_configs, grid_x, dx, init_pos=None, dt=None, p_mass=1.
             raise ValueError(
                 f"Unsupported surface mode {surface!r}; only 'sticky' is supported."
             )
-        post_grid_fns.append(_sticky_surface(
-            bc_dict["point"], bc_dict["normal"], grid_x, dx,
-            bc_dict["start_time"], bc_dict["end_time"],
-        ))
+        post_grid_fns.append(
+            _sticky_surface(
+                bc_dict["point"],
+                bc_dict["normal"],
+                grid_x,
+                dx,
+                bc_dict["start_time"],
+                bc_dict["end_time"],
+            )
+        )
 
     def pre_particle_fn(x, v, time):
         return x, v
