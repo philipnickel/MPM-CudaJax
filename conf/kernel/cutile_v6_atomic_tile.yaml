@@ -1,8 +1,7 @@
 # cutile_v6_atomic_tile -- one-launch arena P2G via a tile-coalesced atomic.
-# Same SC=2 arena reduction as cutile_v4_arena, but the write-back is a SINGLE
-# TiledView.atomic_store_add per block instead of 8 colored non-atomic launches.
-# A 1-node halo pad aligns the arena's apron to an overlapping tiled view
-# (tile=(SC+2)^3, traversal_steps=SC), so each block atomic-adds its whole arena
-# in one coalesced op and overlapping apron nodes are reconciled by the atomics.
-# No coloring, no parity, one launch. Requires num_grids divisible by 2.
+# Each block reduces its SC=2 super-cell into a 4^3 L1 arena, then writes back
+# with a SINGLE TiledView.atomic_store_add (a 1-node halo pad aligns the arena's
+# apron to an overlapping tiled view, so shared apron nodes are reconciled by the
+# atomics). No coloring, no parity, one launch. Requires num_grids divisible by 2.
+# Occupancy is autotuned per-GPU and cached; disable with kernel.autotune=false.
 name: cutile_v6_atomic_tile

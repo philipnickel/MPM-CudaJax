@@ -1,17 +1,27 @@
-from mpm_jax.registry import KERNELS, KernelSpec
+from mpm_jax.registry import KERNEL_NAMES, build_backend
 
 
-def test_every_kernel_has_a_spec():
-    expected = {
+def test_kernel_names():
+    assert set(KERNEL_NAMES) == {
         "jax_baseline",
         "cutile_v6_atomic_tile",
         "cuda_v1_inline", "cuda_v2_inline", "cuda_v3_inline", "cuda_v4_inline",
     }
-    assert set(KERNELS) == expected
-    for spec in KERNELS.values():
-        assert isinstance(spec, KernelSpec)
-        assert spec.solver_cls is not None
-        assert callable(spec.backend_factory)
+
+
+def test_build_backend_jax_baseline_no_gpu():
+    # jax_baseline has no availability/super-cell requirement, so it builds on CPU.
+    from mpm_jax.backends import Backend
+    backend = build_backend("jax_baseline", 16)
+    assert isinstance(backend, Backend)
+    assert backend.name == "jax_baseline"
+    assert callable(backend.p2g) and callable(backend.g2p)
+
+
+def test_build_backend_rejects_unknown():
+    import pytest
+    with pytest.raises(KeyError):
+        build_backend("not_a_kernel", 16)
 
 
 def test_build_solver_dispatches_jax_baseline_kernel():

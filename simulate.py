@@ -213,31 +213,6 @@ def visualize_frames_ovrtx_mp4(frames, export_path, color='white', radius=0.008,
 # Unified run path
 # ---------------------------------------------------------------------------
 
-def _maybe_enable_cuda_graphs(cfg: DictConfig):
-    """Toggle XLA command-buffer capture (= CUDA Graphs) when requested.
-
-    Must be called BEFORE the first `import jax`, otherwise XLA has already
-    parsed XLA_FLAGS and the new value is ignored. Routed from main() before
-    any jax import, and gated by the _MPM_INSIDE_PROFILER ordering in main().
-
-    The cuda_v3_inline pipeline (Morton sort + warp-shuffle inline scatter +
-    fused G2P) gains a CUDA-Graph fast path when kernel.cuda_graph=true: we
-    ask XLA to wrap FUSION, CUSTOM_CALL (our FFI scatter / fused G2P) and
-    WHILE (the lax.scan substep loop) into command buffers, which the GPU
-    runtime executes as a single replayed graph per substep.
-    """
-    kernel_name = cfg.get('kernel', {}).get('name', 'jax_baseline')
-    if kernel_name != 'cuda_v3_inline':
-        return
-    if not cfg.get('kernel', {}).get('cuda_graph', False):
-        return
-    extra = "--xla_gpu_enable_command_buffer=FUSION,CUSTOM_CALL,WHILE"
-    cur = os.environ.get("XLA_FLAGS", "")
-    if extra not in cur:
-        os.environ["XLA_FLAGS"] = (cur + " " + extra).strip()
-        print(f"cuda_v3_inline: enabling XLA CUDA Graph capture via XLA_FLAGS={os.environ['XLA_FLAGS']}")
-
-
 def _run_jax_solver(solver, cfg: DictConfig, trace_dir=None, profile_opts=None):
     """Drive an MPMSolver (JAX backend): warmup, then benchmark or GIF loop.
 
@@ -378,11 +353,6 @@ def main(cfg: DictConfig):
             f"Unsupported profile={profile_name!r}. Only profile=none, "
             "and profile=jax are supported."
         )
-
-    # CUDA Graphs toggle must happen before any `import jax` in this process
-    # — including the profile=jax branch a few lines down and the registry
-    # import inside run(cfg) (which pulls in jax.numpy).
-    _maybe_enable_cuda_graphs(cfg)
 
     # JAX profiler: resolve the trace dir + options here, but let the solver
     # driver start/stop the trace around the steady-state loop only, so warmup /

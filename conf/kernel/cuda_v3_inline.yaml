@@ -5,9 +5,3 @@
 # 4-8x of the global atomics into one. Pair with material=sand_jacobi for
 # the fast pure-JAX Jacobi SVD material path upstream. Wired into the per-frame path.
 name: cuda_v3_inline
-# Substep driver for the per-frame lax.scan wrapper: 'fori' = lax.fori_loop,
-# 'python' = unrolled Python loop. Mirrors the registry default.
-loop_kind: fori
-# Enable XLA command-buffer (CUDA Graph) capture of the substep loop.
-# simulate.py sets the matching XLA_FLAGS before importing jax when true.
-cuda_graph: false

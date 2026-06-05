@@ -202,43 +202,12 @@ def _cuda_inline_p2g(kind):
     return p2g
 
 
-def cuda_v1_backend(**_opts):
-    _require_cuda("inline")
-    return Backend(
-        name="cuda_v1_inline",
-        p2g=_cuda_inline_p2g("inline"),
-        g2p=_make_jax_scan_g2p_mls(),
-        loop_kind="fori",
-    )
-
-
-def cuda_v2_backend(**_opts):
-    _require_cuda("v2_inline")
-    return Backend(
-        name="cuda_v2_inline",
-        p2g=_cuda_inline_p2g("v2_inline"),
-        g2p=_make_jax_scan_g2p_mls(),
-        loop_kind="fori",
-    )
-
-
 def _morton_prepare(params, state, stress):
     from mpm_jax.blocks.sort import morton_argsort  # pylint: disable=import-outside-toplevel
 
     order = morton_argsort(state.x, params.inv_dx, params.num_grids)
     return PreparedSubstep(
         state.x[order], state.v[order], state.C[order], state.F[order], stress[order]
-    )
-
-
-def cuda_v3_backend(**_opts):
-    _require_cuda("v3_inline")
-    return Backend(
-        name="cuda_v3_inline",
-        prepare=_morton_prepare,
-        p2g=_cuda_inline_p2g("v3_inline"),
-        g2p=_make_jax_scan_g2p_mls(),
-        loop_kind="fori",
     )
 
 
@@ -276,24 +245,6 @@ def _cuda_v4_p2g(params, prepared):
     )
 
 
-def cuda_v4_backend(**_opts):
-    from mpm_jax.cuda.p2g_cuda import V4_SUPER_CELL_WIDTH  # pylint: disable=import-outside-toplevel
-
-    if _opts.get("num_grids") is not None and _opts["num_grids"] % V4_SUPER_CELL_WIDTH != 0:
-        raise RuntimeError(
-            f"cuda_v4_inline requires num_grids ({_opts['num_grids']}) divisible by "
-            f"super-cell width ({V4_SUPER_CELL_WIDTH})."
-        )
-    _require_cuda("v4_inline")
-    return Backend(
-        name="cuda_v4_inline",
-        prepare=_cuda_v4_prepare,
-        p2g=_cuda_v4_p2g,
-        g2p=_make_jax_scan_g2p_mls(),
-        loop_kind="fori",
-    )
-
-
 # --- cuTile (tiled programming model) ---------------------------------------
 def _cutile_arena_prepare(params, state, stress):
     """Sort particles by home super-cell at the arena width (SC=2) and build the
@@ -326,29 +277,96 @@ def _make_cutile_atomic_tile_p2g(kernel):
     return p2g
 
 
-def cutile_v6_backend(*, num_grids=None, autotune=True, **_opts):
-    """Arena P2G whose write-back is a single tile-coalesced atomic_store_add per
-    block (no coloring, one launch): sort by SC=2 home super-cell, reduce each
-    super-cell into a 4**3 arena, then one atomic_store_add per arena. The
-    occupancy hint is autotuned per-GPU and cached (``autotune=False`` skips it ->
-    compiler default; occupancy does not affect results, only speed)."""
-    from mpm_jax.cutile_p2g import ARENA_SC  # pylint: disable=import-outside-toplevel
-
-    if num_grids is not None and num_grids % ARENA_SC != 0:
-        raise RuntimeError(
-            f"cutile_v6_atomic_tile requires num_grids ({num_grids}) divisible by "
-            f"arena_super_cell ({ARENA_SC})."
-        )
-    _require_cutile()
+def _cutile_v6_p2g(num_grids, autotune):
+    """Build the cuTile arena P2G, optionally with a per-GPU occupancy-tuned kernel
+    (``autotune=False`` -> compiler default; occupancy affects only speed)."""
     kernel = None
     if autotune:
         from mpm_jax.cutile_autotune import tuned_atomic_tile_kernel  # pylint: disable=import-outside-toplevel
 
         kernel = tuned_atomic_tile_kernel()
-    return Backend(
-        name="cutile_v6_atomic_tile",
+    return _make_cutile_atomic_tile_p2g(kernel)
+
+
+# --- P2G variant table: name -> how to build + validate its backend ----------
+# Only the P2G (and its particle ordering) varies; g2p / grid / loop are fixed.
+# Each variant declares how to build its p2g, its prepare (None -> identity), an
+# availability check, and the super-cell width its grid must divide by. All the
+# checks run in build_backend (i.e. at backend init), before any compile.
+def _v4_super_cell():
+    from mpm_jax.cuda.p2g_cuda import V4_SUPER_CELL_WIDTH  # pylint: disable=import-outside-toplevel
+    return V4_SUPER_CELL_WIDTH
+
+
+def _arena_super_cell():
+    from mpm_jax.cutile_p2g import ARENA_SC  # pylint: disable=import-outside-toplevel
+    return ARENA_SC
+
+
+@dataclass(frozen=True)
+class _P2GVariant:
+    make_p2g: Callable                 # (num_grids, autotune) -> p2g(params, prepared)
+    prepare: Callable = None           # None -> Backend default (identity ordering)
+    require: Callable = None           # availability check; raises with a build hint
+    super_cell: Callable = None        # () -> int; num_grids must divide it
+
+
+_P2G = {
+    "jax_baseline": _P2GVariant(
+        lambda num_grids, autotune: _make_jax_scan_p2g()),
+    "cuda_v1_inline": _P2GVariant(
+        lambda num_grids, autotune: _cuda_inline_p2g("inline"),
+        require=lambda: _require_cuda("inline")),
+    "cuda_v2_inline": _P2GVariant(
+        lambda num_grids, autotune: _cuda_inline_p2g("v2_inline"),
+        require=lambda: _require_cuda("v2_inline")),
+    "cuda_v3_inline": _P2GVariant(
+        lambda num_grids, autotune: _cuda_inline_p2g("v3_inline"),
+        prepare=_morton_prepare,
+        require=lambda: _require_cuda("v3_inline")),
+    "cuda_v4_inline": _P2GVariant(
+        lambda num_grids, autotune: _cuda_v4_p2g,
+        prepare=_cuda_v4_prepare,
+        require=lambda: _require_cuda("v4_inline"),
+        super_cell=_v4_super_cell),
+    "cutile_v6_atomic_tile": _P2GVariant(
+        _cutile_v6_p2g,
         prepare=_cutile_arena_prepare,
-        p2g=_make_cutile_atomic_tile_p2g(kernel),
+        require=_require_cutile,
+        super_cell=_arena_super_cell),
+}
+
+KERNEL_NAMES = tuple(_P2G)
+
+
+def build_backend(name, num_grids, *, autotune=True):
+    """Construct and validate the Backend for a P2G variant.
+
+    All variants share the JAX baseline G2P, grid update, and fori loop; only the
+    P2G (and its particle ordering) varies. Validation happens here, at backend
+    init, before any compile: kernel availability (raises with a build hint if a
+    .so / cuTile runtime is missing) and the super-cell grid-divisibility rule.
+    """
+    try:
+        variant = _P2G[name]
+    except KeyError:
+        raise KeyError(
+            f"Unknown P2G kernel {name!r}. Available: {', '.join(_P2G)}."
+        ) from None
+    if variant.require is not None:
+        variant.require()
+    if variant.super_cell is not None and num_grids is not None:
+        sc = variant.super_cell()
+        if num_grids % sc != 0:
+            raise RuntimeError(
+                f"{name} requires num_grids ({num_grids}) divisible by "
+                f"super-cell width ({sc})."
+            )
+    opts = {"prepare": variant.prepare} if variant.prepare is not None else {}
+    return Backend(
+        name=name,
+        p2g=variant.make_p2g(num_grids, autotune),
         g2p=_make_jax_scan_g2p_mls(),
         loop_kind="fori",
+        **opts,
     )

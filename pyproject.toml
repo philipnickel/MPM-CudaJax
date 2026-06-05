@@ -100,6 +100,11 @@ nsys-jax = { git = "https://github.com/NVIDIA/JAX-Toolbox.git", subdirectory = "
 
 [tool.pixi.feature.gpu.activation.env]
 JAX_PLATFORMS = "cuda"
+# Enable XLA command-buffer (CUDA Graph) capture for the whole frame loop:
+# FUSION + CUSTOM_CALL (the FFI/cuTile scatters & fused G2P) + WHILE (the substep
+# lax loop) are replayed as one graph per substep. Was an opt-in per-kernel flag
+# (cuda_v3 cuda_graph=true); now on for every kernel in the gpu env.
+XLA_FLAGS = "--xla_gpu_enable_command_buffer=FUSION,CUSTOM_CALL,WHILE"
 JAX_COMPILATION_CACHE_DIR = "$PIXI_PROJECT_ROOT/.jax_cache"
 JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS = "0"
 JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES = "0"

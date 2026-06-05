@@ -71,23 +71,13 @@ def _p2g_output(backend, params, state, stress):
     reason="CUDA P2G kernels not built or no GPU backend available",
 )
 def test_cuda_p2g_variants_match_jax_scan():
-    from mpm_jax.backends import (
-        cuda_v1_backend,
-        cuda_v2_backend,
-        cuda_v3_backend,
-        cuda_v4_backend,
-        jax_baseline_backend,
-    )
+    from mpm_jax.backends import build_backend, jax_baseline_backend
 
     params, state, stress = _inputs()
     ref_mv, ref_m = _p2g_output(jax_baseline_backend(), params, state, stress)
 
-    for backend in (
-        cuda_v1_backend(num_grids=params.num_grids),
-        cuda_v2_backend(num_grids=params.num_grids),
-        cuda_v3_backend(num_grids=params.num_grids),
-        cuda_v4_backend(num_grids=params.num_grids),
-    ):
+    for name in ("cuda_v1_inline", "cuda_v2_inline", "cuda_v3_inline", "cuda_v4_inline"):
+        backend = build_backend(name, params.num_grids)
         grid_mv, grid_m = _p2g_output(backend, params, state, stress)
         np.testing.assert_allclose(
             np.asarray(grid_mv), np.asarray(ref_mv), atol=1e-5, rtol=1e-5
@@ -103,16 +93,13 @@ def test_cuda_p2g_variants_match_jax_scan():
     reason="cuTile/JAX backend requires a GPU, cuda-tile, and the CUDA G2P kernel library",
 )
 def test_cutile_p2g_matches_jax_scan():
-    from mpm_jax.backends import (
-        cutile_v6_backend,
-        jax_baseline_backend,
-    )
+    from mpm_jax.backends import build_backend, jax_baseline_backend
 
     params, state, stress = _inputs()
     ref_mv, ref_m = _p2g_output(jax_baseline_backend(), params, state, stress)
 
     for backend in (
-        cutile_v6_backend(num_grids=params.num_grids, autotune=False),
+        build_backend("cutile_v6_atomic_tile", params.num_grids, autotune=False),
     ):
         grid_mv, grid_m = _p2g_output(backend, params, state, stress)
 

@@ -25,10 +25,7 @@ _P2G_KERNELS = {
     "cuda_v2_inline",
     "cuda_v3_inline",
     "cuda_v4_inline",
-    "cutile_v1_atomic",
-    "cutile_v2_supercell_reduce",
-    "warp_v3_supercell_tile",
-    "warp_v4_hashgrid_gather",
+    "cutile_v6_atomic_tile",
 }
 _SPEED_OF_LIGHT_METRICS = [
     "gpu__time_duration.sum",
@@ -98,15 +95,7 @@ def _require_nsight():
     return nsight
 
 
-def _maybe_enable_cuda_graphs(cfg: DictConfig):
-    from simulate import _maybe_enable_cuda_graphs as enable_cuda_graphs
-
-    enable_cuda_graphs(cfg)
-
-
 def _build_p2g_stage(cfg: DictConfig):
-    _maybe_enable_cuda_graphs(cfg)
-
     import jax
     import jax.numpy as jnp
 
@@ -114,11 +103,11 @@ def _build_p2g_stage(cfg: DictConfig):
     from mpm_jax.blocks.init import get_particles
     from mpm_jax.boundary import build_boundary_fns
     from mpm_jax.constitutive import get_constitutive
-    from mpm_jax.registry import KERNELS
+    from mpm_jax.registry import KERNEL_NAMES, build_backend
     from mpm_jax.types import MPMState, make_params
 
     kernel_name = str(cfg.kernel.name)
-    if kernel_name not in KERNELS:
+    if kernel_name not in KERNEL_NAMES:
         raise RuntimeError(f"Unsupported P2G kernel={kernel_name!r}.")
 
     sim = cfg.sim
@@ -150,12 +139,9 @@ def _build_p2g_stage(cfg: DictConfig):
         F=jnp.tile(jnp.eye(3), (n, 1, 1)),
     )
 
-    spec = KERNELS[kernel_name]
-    frame_opts = dict(spec.defaults)
-    for key in ("loop_kind", "cuda_graph", "graph_mode"):
-        if key in cfg.kernel:
-            frame_opts[key] = cfg.kernel[key]
-    backend = spec.backend_factory(num_grids=params.num_grids, **frame_opts)
+    backend = build_backend(
+        kernel_name, int(params.num_grids),
+        autotune=bool(cfg.kernel.get("autotune", True)))
 
     @jax.jit
     def jit_p2g_stage(state):

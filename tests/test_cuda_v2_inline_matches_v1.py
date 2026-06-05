@@ -40,11 +40,7 @@ def _kernel_available(kind: str) -> bool:
 )
 def test_cuda_v2_inline_matches_v1_inline():
     """Run a short sim under both inline kernels and compare final state."""
-    from mpm_jax.backends import (
-        build_backend_frame,
-        cuda_v1_backend,
-        cuda_v2_backend,
-    )
+    from mpm_jax.backends import build_backend, build_backend_frame
 
     n = 2000
     num_grids = 16
@@ -92,10 +88,10 @@ def test_cuda_v2_inline_matches_v1_inline():
 
     jit_v1 = build_backend_frame(
         params, elasticity_fn, plasticity_fn, pre_fn, post_fn,
-        cuda_v1_backend(), steps_per_frame)
+        build_backend("cuda_v1_inline", num_grids), steps_per_frame)
     jit_v2 = build_backend_frame(
         params, elasticity_fn, plasticity_fn, pre_fn, post_fn,
-        cuda_v2_backend(), steps_per_frame)
+        build_backend("cuda_v2_inline", num_grids), steps_per_frame)
 
     s1 = state0
     s2 = state0

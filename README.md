@@ -5,8 +5,9 @@ with hand-written **CUDA** kernels and an **NVIDIA cuTile** (tiled
 programming model) kernel. Investigates where JAX/XLA's automatic GPU
 compilation is sufficient and where custom kernels win.
 
-The solver uses a **registry-based class API**: `build_solver(cfg)` reads
-`KERNELS[kernel.name]`, constructs an `MPMSolver`, and returns it ready to call.
+The solver uses a **config-driven class API**: `build_solver(cfg)` calls
+`build_backend(cfg.kernel.name, num_grids)` (which validates the choice at init),
+constructs an `MPMSolver`, and returns it ready to call.
 `solver.step()` advances one frame;
 `solver.solve(num_frames, on_frame=...)` runs the full simulation with an
 optional IO callback.
@@ -123,7 +124,6 @@ pixi run -e gpu python simulate.py kernel=cuda_v1_inline material=sand_jacobi
 pixi run -e gpu python simulate.py kernel=cuda_v2_inline material=sand_jacobi         # warp-shuffle (default: fori loop)
 pixi run -e gpu python simulate.py kernel=cuda_v2_inline kernel.loop_kind=python material=sand_jacobi
 pixi run -e gpu python simulate.py kernel=cuda_v3_inline material=sand_jacobi         # Morton sort
-pixi run -e gpu python simulate.py kernel=cuda_v3_inline kernel.cuda_graph=true material=sand_jacobi
 pixi run -e gpu python simulate.py kernel=cuda_v4_inline material=sand_jacobi         # super-cell grid tile
 pixi run -e gpu python simulate.py kernel=cutile_v6_atomic_tile material=sand_jacobi benchmark=true  # cuTile (tiled model)
 
@@ -138,7 +138,7 @@ pixi run -e gpu python simulate.py sim.n_particles=1000000 sim.num_grids=64
 | `jax_baseline` | The JAX/XLA baseline: `lax.scan` over the 27 offsets for **both** P2G and G2P, unified MLS-MPM G2P (APIC affine `C` reused as ∇v), scatter-free Jacobi SVD. Every other kernel reuses this G2P, so only the P2G varies. |
 | `cuda_v1_inline` | CUDA inline-weight P2G (one thread/particle, global `atomicAdd`) + JAX baseline G2P. |
 | `cuda_v2_inline` | CUDA warp-shuffle coalesced inline P2G + JAX baseline G2P. Default `loop_kind=fori`. Override with `kernel.loop_kind=python`. |
-| `cuda_v3_inline` | CUDA Morton-sorted inline P2G + JAX baseline G2P. `kernel.cuda_graph=true` enables XLA command-buffer (CUDA Graph) replay. |
+| `cuda_v3_inline` | CUDA Morton-sorted inline P2G + JAX baseline G2P. (XLA command-buffer / CUDA-Graph capture is on for every kernel via the gpu env's `XLA_FLAGS`.) |
 | `cuda_v4_inline` | CUDA super-cell-owned grid tile inline P2G + JAX baseline G2P. |
 | `cutile_v6_atomic_tile` | NVIDIA cuTile (tiled programming model) P2G + JAX baseline G2P: SPGrid-style arena scatter — sort by SC=2 home super-cell, reduce each super-cell into a 4³ L1 arena, write back with one tile-coalesced `atomic_store_add` (no coloring). Occupancy autotuned per-GPU. Requires `cuda-tile`. |
 
@@ -155,7 +155,7 @@ The solver is class-based:
 - **`MPMSolver`** is an Equinox module. Particle/grid state is stored as dynamic JAX leaves, while backend choices, constitutive functions, boundary functions, and the compiled `_frame` are static fields. `stepped()` returns a new solver with updated state; `step()` keeps the driver-friendly mutating API and advances one frame by running `_frame(self.state)`. The frame contains `steps_per_frame` substeps as a single XLA program (via `lax.fori_loop` by default, or unrolled with `loop_kind="python"`).
 
 Kernel selection is driven by `src/mpm_jax/registry.py`:
-- `KERNELS` maps each `kernel=<name>` to a `KernelSpec(solver_cls, backend_factory, defaults)`.
+- `backends._P2G` maps each `kernel=<name>` to a `_P2GVariant`, and `build_backend(name, num_grids)` constructs + validates the `Backend` at init (availability + super-cell divisibility). `KERNEL_NAMES` lists the valid names.
 - `build_solver(cfg)` reads the registry, builds all closures (particles, params, BCs, constitutive fns), and returns the fully initialised solver.
 - No if/elif dispatch in `simulate.py`; the routing is entirely in the registry.
 
@@ -263,12 +263,11 @@ Kernel-specific knobs passed as top-level CLI overrides (merged into `cfg.kernel
 # loop_kind: fori (default) | python (unrolled)
 pixi run -e gpu python simulate.py kernel=cuda_v2_inline kernel.loop_kind=python
 
-# cuda_graph: enable XLA command-buffer capture for cuda_v3_inline
-pixi run -e gpu python simulate.py kernel=cuda_v3_inline kernel.cuda_graph=true
-
 # autotune: cutile_v6 occupancy is tuned per-GPU and cached; disable with autotune=false
 pixi run -e gpu python simulate.py kernel=cutile_v6_atomic_tile kernel.autotune=false
 ```
+
+(XLA command-buffer / CUDA-Graph capture is always on via `XLA_FLAGS` in the gpu env — no per-kernel flag.)
 
 ## Tests
 
@@ -305,7 +304,7 @@ MPM-CudaJax/
     └── mpm_jax/
         ├── types.py         # MPMState, MPMParams, make_params
         ├── solver.py        # MPMSolver
-        ├── registry.py      # KERNELS, build_solver(cfg)
+        ├── registry.py      # build_solver(cfg): config -> MPMSolver
         ├── constitutive.py  # sand Jacobi elasticity + plasticity
         ├── boundary.py      # sticky surface collider
         ├── blocks/          # Pure math: weights, g2p, grid, svd, sort, init

@@ -97,11 +97,11 @@ conf/                  Hydra config groups
 src/mpm_jax/
   types.py             MPMState, MPMParams, make_params
   solver.py            MPMSolver
-  registry.py          KERNELS dict, build_solver(cfg)
+  registry.py          build_solver(cfg): resolved Hydra config -> MPMSolver
   constitutive.py      sand Jacobi elasticity + plasticity
   boundary.py          sticky surface collider
   callbacks.py         on_frame callback helpers
-  backends.py          Backend interface + shared JAX-owned frame loop
+  backends.py          Backend interface + shared frame loop + _P2G variant table + build_backend
   p2g_scan.py          JAX baseline P2G: lax.scan over 27 offsets
   g2p_scan.py          JAX baseline G2P: lax.scan over 27 offsets + MLS C=∇v (shared by ALL kernels)
   blocks/              Pure-math building blocks (no JIT, no closures)
@@ -143,9 +143,7 @@ Three embarrassingly parallel phases per substep:
 
 ### Kernel registry
 
-Kernel selection is a registry, not an if/elif chain. `src/mpm_jax/registry.py` defines:
-
-- `KERNELS: dict[str, KernelSpec]` — maps `kernel.name` to a `KernelSpec(solver_cls, backend_factory, defaults)`. `build_solver(cfg)` reads this dict, builds particles/params/BCs/constitutive functions, creates the backend object, and passes it to `MPMSolver`.
+Kernel selection is a data table, not an if/elif chain. Because only the P2G varies, `src/mpm_jax/backends.py` holds a `_P2G` dict mapping `kernel.name` to a `_P2GVariant(make_p2g, prepare, require, super_cell)`, and `build_backend(name, num_grids)` reads it to construct + **validate the `Backend` at init** (availability via `_require_cuda`/`_require_cutile`, and the super-cell grid-divisibility rule). `KERNEL_NAMES` exposes the valid names. `build_solver(cfg)` in `registry.py` builds particles/params/BCs/constitutive functions, calls `build_backend`, and passes the result to `MPMSolver`. The `conf/kernel/<name>.yaml` files are thin — just `name:` (the filename is the identifier; G2P/grid/loop are fixed in code).
 
 Current kernel names:
 
@@ -154,7 +152,7 @@ Current kernel names:
 | `jax_baseline` | MPMSolver | The JAX/XLA baseline. `lax.scan` over the 27 offsets for **both** P2G and G2P, unified MLS-MPM G2P (APIC affine `C` reused as ∇v), scatter-free Jacobi SVD. The shared G2P every other kernel reuses — so only P2G varies |
 | `cuda_v1_inline` | MPMSolver | CUDA inline-weight P2G (one thread/particle, global atomicAdd) + JAX baseline G2P |
 | `cuda_v2_inline` | MPMSolver | CUDA warp-shuffle coalesced inline P2G + JAX baseline G2P; default `loop_kind=fori` |
-| `cuda_v3_inline` | MPMSolver | CUDA Morton-sorted inline P2G + JAX baseline G2P; `cuda_graph=true` enables XLA command-buffer replay |
+| `cuda_v3_inline` | MPMSolver | CUDA Morton-sorted inline P2G + JAX baseline G2P (XLA command-buffer / CUDA-Graph capture is on for all kernels via the gpu env's `XLA_FLAGS`) |
 | `cuda_v4_inline` | MPMSolver | CUDA super-cell-owned grid tile inline P2G + JAX baseline G2P |
 | `cutile_v6_atomic_tile` | MPMSolver | NVIDIA cuTile (tiled programming model) P2G + JAX baseline G2P: SPGrid-style arena scatter (SC=2 super-cell → 4³ L1 arena → one tile-coalesced `atomic_store_add`, no coloring), occupancy autotuned per-GPU. Fastest P2G in the registry. Requires `cuda-tile` |
 
@@ -176,7 +174,6 @@ pixi run -e gpu python simulate.py kernel=jax_baseline                          
 pixi run -e gpu python simulate.py kernel=cuda_v1_inline material=sand_jacobi         # CUDA inline P2G + JAX G2P
 pixi run -e gpu python simulate.py kernel=cuda_v2_inline material=sand_jacobi         # warp-shuffle CUDA (fori loop)
 pixi run -e gpu python simulate.py kernel=cuda_v3_inline material=sand_jacobi         # Morton-sorted CUDA
-pixi run -e gpu python simulate.py kernel=cuda_v3_inline cuda_graph=true material=sand_jacobi  # with XLA CUDA graphs
 pixi run -e gpu python simulate.py kernel=cuda_v4_inline material=sand_jacobi         # super-cell grid tile CUDA
 pixi run -e gpu python simulate.py kernel=cutile_v6_atomic_tile material=sand_jacobi benchmark=true  # cuTile tiled P2G
 
@@ -238,14 +235,14 @@ CMake auto-detects the local GPU arch when `MPM_CUDA_ARCH` is unset.
   1. Add `src/mpm_jax/cuda/kernels/p2g_vX_inline.cu`.
   2. Add the kernel name to the `KERNELS` list in `CMakeLists.txt`.
   3. Add `_register_vX_inline()` + `cuda_p2g_vX_inline()` wrapper in `src/mpm_jax/cuda/p2g_cuda.py`.
-  4. Add a `cuda_vX_backend()` factory in `src/mpm_jax/backends.py` — set `g2p=_make_jax_scan_g2p_mls()` (the shared JAX baseline G2P) so only P2G differs.
-  5. Register it in `src/mpm_jax/registry.py` `KERNELS` dict as `KernelSpec(MPMSolver, cuda_vX_backend)`.
-  6. Add `conf/kernel/cuda_vX_inline.yaml`.
+  4. Add a `make_p2g`/prepare helper in `src/mpm_jax/backends.py` (G2P is always `_make_jax_scan_g2p_mls()` — `build_backend` wires it, so only P2G differs).
+  5. Add a `_P2GVariant` row to the `_P2G` table in `src/mpm_jax/backends.py` (declare `make_p2g`, optional `prepare`/`require`/`super_cell` — the divisibility/availability checks then run at backend init).
+  6. Add a thin `conf/kernel/cuda_vX_inline.yaml` (just `name: cuda_vX_inline`).
   7. Rebuild: `pixi reinstall mpm-cudajax`.
-- **Adding a new cuTile-in-JAX kernel:** put the cuTile kernel + `cutile_call` bridge in a dedicated module (see `cutile_p2g.py`), expose it through a `Backend` factory in `src/mpm_jax/backends.py` (set `g2p=_make_jax_scan_g2p_mls()` so only P2G differs), and register that factory in `registry.py`.
+- **Adding a new cuTile-in-JAX kernel:** put the cuTile kernel + `cutile_call` bridge in a dedicated module (see `cutile_p2g.py`), add its `make_p2g`/prepare helpers and a `_P2G` table row in `src/mpm_jax/backends.py`, and a thin `conf/kernel/<name>.yaml`.
 - Boundary conditions and constitutive models are registry-based (`REGISTRY` dict in `constitutive.py`, `build_boundary_fns` in `boundary.py`); add a function and a config entry.
 - **No `block_until_ready` inside the timed region in benchmark mode.** Both timing modes dispatch all frames back-to-back and sync exactly once after the loop; elapsed/num_frames is the average. Per-stage breakdown comes from `profile=jax` (TensorBoard trace) or `profile_nsight.py`, not from `simulate.py`'s output.
-- `simulate.py` enables XLA CUDA graph capture for `kernel=cuda_v3_inline cuda_graph=true` by setting `XLA_FLAGS` before JAX is imported. This must happen before any `import jax` in the process.
+- XLA command-buffer / CUDA-Graph capture is enabled for **all** kernels via `XLA_FLAGS` in the gpu env's `[tool.pixi.feature.gpu.activation.env]` block (`--xla_gpu_enable_command_buffer=FUSION,CUSTOM_CALL,WHILE`), so it is always on under `pixi run -e gpu`. There is no per-kernel `cuda_graph` flag anymore.
 - Lint with ruff (config in `ruff.toml`); `I` is allowed as a variable name (identity matrix), and `tests/*` skips E402/F401.
 
 ## Don't
