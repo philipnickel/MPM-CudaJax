@@ -72,20 +72,3 @@ def home_super_cell_id(x, inv_dx, num_grids, super_cell_width):
     sj = home[:, 1] // super_cell_width
     sk = home[:, 2] // super_cell_width
     return (si * (super_grids * super_grids) + sj * super_grids + sk).astype(jnp.int32)
-
-
-def home_cell_id(x, inv_dx, num_grids):
-    """Flat grid-cell id of the quadratic B-spline home node ``floor(x/dx-0.5)+1``.
-
-    The cuTile atomic-free *gather* P2G (``cutile_v3_gather``) sorts particles by
-    this per-cell id and builds a per-cell CSR ``cell_start`` of length
-    ``num_grids**3 + 1``, so a block that owns one super-cell's interior nodes can
-    gather exactly the particles in the 6**3 covering home-cells. Row-major flat id
-    matches the grid layout used everywhere else (``i*G*G + j*G + k``).
-    """
-    px = x * inv_dx
-    base = jnp.floor(px - 0.5).astype(jnp.int32)
-    home = jnp.clip(base + 1, 0, num_grids - 1)
-    return (
-        home[:, 0] * num_grids * num_grids + home[:, 1] * num_grids + home[:, 2]
-    ).astype(jnp.int32)

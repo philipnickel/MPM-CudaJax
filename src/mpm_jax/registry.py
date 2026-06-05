@@ -7,11 +7,6 @@ import jax.numpy as jnp
 from mpm_jax.solver import MPMSolver
 from mpm_jax.backends import (
     jax_baseline_backend,
-    cutile_v1_backend,
-    cutile_v2_backend,
-    cutile_v3_backend,
-    cutile_v4_backend,
-    cutile_v5_backend,
     cutile_v6_backend,
     cuda_v1_backend,
     cuda_v2_backend,
@@ -36,11 +31,6 @@ class KernelSpec:
 
 KERNELS = {
     "jax_baseline":           KernelSpec(MPMSolver, jax_baseline_backend),
-    "cutile_v1_atomic":       KernelSpec(MPMSolver, cutile_v1_backend),
-    "cutile_v2_supercell_reduce": KernelSpec(MPMSolver, cutile_v2_backend),
-    "cutile_v3_gather":       KernelSpec(MPMSolver, cutile_v3_backend),
-    "cutile_v4_arena":        KernelSpec(MPMSolver, cutile_v4_backend),
-    "cutile_v5_full":         KernelSpec(MPMSolver, cutile_v5_backend),
     "cutile_v6_atomic_tile":  KernelSpec(MPMSolver, cutile_v6_backend),
     "cuda_v1_inline":         KernelSpec(MPMSolver, cuda_v1_backend),
     "cuda_v2_inline":         KernelSpec(MPMSolver, cuda_v2_backend, MappingProxyType({"loop_kind": "fori"})),

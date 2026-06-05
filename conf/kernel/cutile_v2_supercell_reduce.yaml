@@ -1,5 +1,0 @@
-# cutile_v2_supercell_reduce -- experimental particle-owned P2G through cuTile JAX FFI.
-# JAX sorts particles by 4^3 home supercell, then one cuTile block reduces the
-# supercell's particles into the 6^3 stencil-union node tile before flushing
-# aggregate node totals to the global grid.
-name: cutile_v2_supercell_reduce

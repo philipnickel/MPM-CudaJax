@@ -4,11 +4,6 @@ from mpm_jax.registry import KERNELS, KernelSpec
 def test_every_kernel_has_a_spec():
     expected = {
         "jax_baseline",
-        "cutile_v1_atomic",
-        "cutile_v2_supercell_reduce",
-        "cutile_v3_gather",
-        "cutile_v4_arena",
-        "cutile_v5_full",
         "cutile_v6_atomic_tile",
         "cuda_v1_inline", "cuda_v2_inline", "cuda_v3_inline", "cuda_v4_inline",
         "warp_v3_supercell_tile", "warp_v4_hashgrid_gather",
