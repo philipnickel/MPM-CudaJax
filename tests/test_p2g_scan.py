@@ -3,6 +3,7 @@
 import jax.numpy as jnp
 
 from mpm_jax.p2g.scan import _p2g_scan
+from mpm_jax.p2g.stencil import flat_grid_index
 
 
 def test_p2g_scan_shapes_and_mass_are_finite():
@@ -31,3 +32,20 @@ def test_p2g_scan_shapes_and_mass_are_finite():
     assert jnp.all(jnp.isfinite(grid_mv))
     assert jnp.all(jnp.isfinite(grid_m))
     assert jnp.isclose(grid_m.sum(), 1.0, atol=1e-5)
+
+
+def test_flat_grid_index_preserves_flat_clip_boundary_semantics():
+    G = 4
+    base = jnp.array(
+        [
+            [-1, G - 1, G - 1],
+            [G, 0, 0],
+        ],
+        dtype=jnp.int32,
+    )
+    offset = jnp.zeros((3,), dtype=jnp.int32)
+
+    idx = flat_grid_index(base, offset, G)
+
+    assert idx[0] == 0
+    assert idx[1] == G**3 - 1
