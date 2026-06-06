@@ -6,16 +6,17 @@
 defaults:
   - config
   - _self_
+  - sim: benchmark
 
 hydra:
   mode: MULTIRUN
   sweeper:
     params:
-      sim.n_particles: 5000,10000,50000,100000
-      backend: jax_baseline,cuda_v2_inline,cuda_v3_inline
+      sim.n_particles: 8000000      
+      backend: jax,cuda_v1,cuda_v3,cuda_v4,cutile
 
 benchmark: true
 tag: sweep_all
 sim:
-  num_frames: 20
+  num_frames: 1
   num_grids: 64

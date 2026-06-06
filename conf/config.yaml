@@ -1,7 +1,7 @@
 defaults:
   - material: jelly
   - sim: default
-  - backend: jax_baseline
+  - backend: jax
   - profile: none
   - _self_
 
