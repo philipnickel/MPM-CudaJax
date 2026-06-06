@@ -24,15 +24,14 @@ Usage in a Hydra sweep config:
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from typing import Any
 
 import matplotlib.pyplot as plt
-import pandas as pd
 import seaborn as sns
 from hydra.experimental.callback import Callback
+from mpm_jax.metrics import metrics_dataframe
 from omegaconf import DictConfig
 
 logger = logging.getLogger(__name__)
@@ -70,19 +69,11 @@ class ScalingPlotCallback(Callback):
             )
             return
 
-        rows = []
-        for path in result_files:
-            try:
-                rows.append(json.loads(path.read_text()))
-            except Exception as exc:
-                logger.warning("Failed to read %s: %s", path, exc)
-                continue
-
-        if not rows:
-            logger.warning("All results.json files were unreadable.")
+        df = metrics_dataframe(result_files)
+        if df.empty:
+            logger.warning("All results.json files were empty.")
             return
 
-        df = pd.DataFrame(rows)
         df.to_csv(sweep_root / "results.csv", index=False)
         logger.info("Wrote %s with %d rows.", sweep_root / "results.csv", len(df))
 
