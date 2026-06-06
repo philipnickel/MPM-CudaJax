@@ -4,7 +4,7 @@ project(mpm_cuda LANGUAGES CXX)
 # CUDA arch: respect MPM_CUDA_ARCH env (e.g. sm_86 / sm_90), else autodetect.
 if(DEFINED ENV{MPM_CUDA_ARCH})
     string(REPLACE "sm_" "" _arch "$ENV{MPM_CUDA_ARCH}")
-    set(CMAKE_CUDA_ARCHITECTURES "${_arch}" CACHE STRING "CUDA architectures")
+    set(CMAKE_CUDA_ARCHITECTURES "${_arch}" CACHE STRING "CUDA architectures" FORCE)
 elseif(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
     set(CMAKE_CUDA_ARCHITECTURES native CACHE STRING "CUDA architectures")
 endif()
@@ -18,7 +18,10 @@ if(NOT CMAKE_CUDA_COMPILER)
 endif()
 
 enable_language(CUDA)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 17)
+set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # Locate Python, nanobind, and the JAX FFI header from whichever Python is

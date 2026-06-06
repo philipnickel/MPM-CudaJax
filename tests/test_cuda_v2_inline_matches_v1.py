@@ -6,7 +6,7 @@ atomicAdd). The same drift sources as the rest of the CUDA equivalence
 suite apply (non-deterministic atomicAdd ordering), so we use the same
 tolerances as the v1-vs-JAX comparison.
 
-Skipped when the .so isn't built or there's no GPU.
+Skipped when the native CUDA extension isn't built or there's no GPU.
 """
 
 import jax
@@ -30,21 +30,16 @@ def _has_cuda() -> bool:
         return False
 
 
-def _kernel_available(registrar) -> bool:
+def _require_kernels(*registrars):
     if not _has_cuda():
-        return False
-    return registrar()
+        pytest.skip("cuda_v1 / cuda_v2 require a GPU backend")
+    if not all(registrar() for registrar in registrars):
+        pytest.skip("cuda_v1 / cuda_v2 native extension not built")
 
 
-@pytest.mark.skipif(
-    not (
-        _kernel_available(register_p2g_inline)
-        and _kernel_available(register_p2g_v2_inline)
-    ),
-    reason="cuda_v1 / cuda_v2 .so not built or no GPU",
-)
 def test_cuda_v2_matches_v1():
     """Run a short sim under both inline kernels and compare final state."""
+    _require_kernels(register_p2g_inline, register_p2g_v2_inline)
     n = 2000
     num_grids = 16
     rng = np.random.RandomState(0)

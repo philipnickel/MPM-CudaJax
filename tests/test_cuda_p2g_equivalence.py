@@ -42,16 +42,22 @@ def _has_cuda() -> bool:
         return False
 
 
-def _cuda_kernels_available(*registrars) -> bool:
+def _require_cuda_kernels(*registrars):
     if not _has_cuda():
-        return False
-    return all(register() for register in registrars)
+        pytest.skip("CUDA P2G kernels require a GPU backend")
+    if not all(register() for register in registrars):
+        pytest.skip("CUDA P2G kernels not built")
 
 
 def _cutile_available() -> bool:
     if not _has_cuda():
         return False
     return cuda_tile is not None
+
+
+def _require_cutile():
+    if not _cutile_available():
+        pytest.skip("cuTile/JAX backend requires a GPU and cuda-tile")
 
 
 def _inputs():
@@ -93,16 +99,13 @@ def _p2g_output(backend, params, state, stress):
     return out
 
 
-@pytest.mark.skipif(
-    not _cuda_kernels_available(
+def test_cuda_p2g_variants_match_jax_scan():
+    _require_cuda_kernels(
         register_p2g_inline,
         register_p2g_v2_inline,
         register_p2g_v3_inline,
         register_p2g_v4_inline,
-    ),
-    reason="CUDA P2G kernels not built or no GPU backend available",
-)
-def test_cuda_p2g_variants_match_jax_scan():
+    )
     params, state, stress = _inputs()
     ref_mv, ref_m = _p2g_output(JaxBackend(), params, state, stress)
 
@@ -124,11 +127,8 @@ def test_cuda_p2g_variants_match_jax_scan():
         )
 
 
-@pytest.mark.skipif(
-    not _cuda_kernels_available(register_p2g_v4_inline),
-    reason="cuda_v4 kernel not built or no GPU backend available",
-)
 def test_cuda_v4_supercell_widths_match_jax_scan():
+    _require_cuda_kernels(register_p2g_v4_inline)
     # cuda_v4 is templated + dispatched over SUPPORTED_SC; every compiled
     # super-cell width must scatter identically to the JAX baseline.
     from mpm_jax.backends import CudaV4Backend
@@ -156,11 +156,8 @@ def test_cuda_v4_supercell_widths_match_jax_scan():
         )
 
 
-@pytest.mark.skipif(
-    not _cutile_available(),
-    reason="cuTile/JAX backend requires a GPU and cuda-tile",
-)
 def test_cutile_p2g_matches_jax_scan():
+    _require_cutile()
     params, state, stress = _inputs()
     ref_mv, ref_m = _p2g_output(JaxBackend(), params, state, stress)
 

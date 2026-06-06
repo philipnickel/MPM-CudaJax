@@ -92,7 +92,6 @@ class CudaV4Backend(BaseBackend):
     name = "cuda_v4"
 
     def __init__(self, num_grids=None, super_cell_width=None):
-        register_p2g_v4_inline()
         super_cell = (
             V4_SUPER_CELL_WIDTH if super_cell_width is None else int(super_cell_width)
         )
@@ -103,6 +102,7 @@ class CudaV4Backend(BaseBackend):
             )
         self.super_cell = super_cell
         super().__init__(num_grids=num_grids)
+        register_p2g_v4_inline()
 
     def prepare(self, params, state, stress):
         return supercell_order(params, state, stress, self.super_cell)

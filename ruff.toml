@@ -8,4 +8,3 @@ ignore = [
 
 [lint.per-file-ignores]
 "tests/*" = ["E402", "F401"]  # late imports and unused imports OK in tests
-"mpm_jax/cuda/benchmark.py" = ["F401"]  # legacy file

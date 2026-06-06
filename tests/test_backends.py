@@ -45,9 +45,7 @@ def test_cuda_backend_constructors_register_expected_kind(monkeypatch):
     assert calls == ["cuda_v1", "cuda_v2", "cuda_v3", "cuda_v4"]
 
 
-def test_supercell_backend_validates_num_grids(monkeypatch):
-    monkeypatch.setattr("mpm_jax.backends.cuda.register_p2g_v4_inline", lambda: True)
-
+def test_supercell_backend_validates_num_grids():
     with pytest.raises(RuntimeError, match="requires num_grids"):
         CudaV4Backend(num_grids=18, super_cell_width=4)
 
