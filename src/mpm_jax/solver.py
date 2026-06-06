@@ -5,9 +5,11 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 import numpy as np
+from hydra.utils import instantiate
+from omegaconf import DictConfig
 
 from mpm_jax.grid import build_grid_x, grid_update
-from mpm_jax.boundary import build_boundary_fns
+from mpm_jax.boundary import bind_boundaries
 from mpm_jax.types import MPMParams, MPMState
 
 
@@ -19,6 +21,12 @@ def get_particles(n_particles, center, size):
     return (start + rng.rand(n_particles, 3).astype(np.float32) * (end - start)).astype(
         np.float32, copy=False
     )
+
+
+def _instantiate_target(value):
+    if isinstance(value, dict | DictConfig) and "_target_" in value:
+        return instantiate(value)
+    return value
 
 
 def build_backend_frame(
@@ -94,14 +102,15 @@ class MPMSolver:
         n, g = int(sim.n_particles), int(sim.num_grids)
 
         params = MPMParams(sim)
-        backend = config.backend
+        backend = _instantiate_target(config.backend)
         backend.validate_num_grids(params.num_grids)
+        boundaries = [_instantiate_target(bc) for bc in sim.boundary_conditions]
         particles = jnp.asarray(
             get_particles(n, center=list(sim.center), size=list(sim.size)),
             dtype=jnp.float32,
         )
-        pre_fn, post_fn = build_boundary_fns(
-            list(sim.boundary_conditions),
+        pre_fn, post_fn = bind_boundaries(
+            boundaries,
             build_grid_x(g),
             params.dx,
         )
@@ -117,7 +126,7 @@ class MPMSolver:
         self.steps_per_frame = int(sim.steps_per_frame)
         self._init_state = init_state
         self.state = init_state
-        self.elasticity_fn = mat.elasticity
+        self.elasticity_fn = _instantiate_target(mat.elasticity)
         if not callable(self.elasticity_fn):
             raise TypeError(
                 "material.elasticity must be a Hydra-instantiated callable. "

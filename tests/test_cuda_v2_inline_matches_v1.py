@@ -16,7 +16,7 @@ import pytest
 from omegaconf import OmegaConf
 
 from mpm_jax.backends import CudaV1Backend, CudaV2Backend
-from mpm_jax.boundary import build_boundary_fns
+from mpm_jax.boundary import StickyPlane, bind_boundaries
 from mpm_jax.constitutive import stvk_elasticity_jacobi
 from mpm_jax.cuda.p2g_cuda import register_p2g_inline, register_p2g_v2_inline
 from mpm_jax.solver import build_backend_frame
@@ -63,14 +63,14 @@ def test_cuda_v2_matches_v1():
     gx, gy, gz = jnp.meshgrid(g, g, g, indexing="ij")
     grid_x = jnp.stack([gx, gy, gz], axis=-1).reshape(-1, 3)
     bcs = [
-        {
-            "point": [1.0, 1.0, 0.02],
-            "normal": [0.0, 0.0, 1.0],
-            "start_time": 0.0,
-            "end_time": 1e3,
-        }
+        StickyPlane(
+            point=(1.0, 1.0, 0.02),
+            normal=(0.0, 0.0, 1.0),
+            start_time=0.0,
+            end_time=1e3,
+        )
     ]
-    pre_fn, post_fn = build_boundary_fns(bcs, grid_x, params.dx)
+    pre_fn, post_fn = bind_boundaries(bcs, grid_x, params.dx)
 
     # jelly material (StVK elasticity, no plasticity): stress stays on the JAX
     # side without a cuSOLVER dependence.

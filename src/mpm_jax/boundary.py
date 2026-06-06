@@ -1,60 +1,39 @@
+from dataclasses import dataclass
+
 import jax.numpy as jnp
 
-_STICKY_SURFACE_KEYS = {"point", "normal", "start_time", "end_time"}
+
+def _identity_particles(x, v, time):
+    return x, v
 
 
-def _sticky_surface(point, normal, grid_x, dx, start_time, end_time):
-    point = jnp.array(point, dtype=jnp.float32)
-    normal = jnp.array(normal, dtype=jnp.float32)
-    normal = normal / jnp.linalg.norm(normal)
-    signed_distance = jnp.sum((grid_x * dx - point) * normal, axis=1)
-    masked = signed_distance < 0.0
+@dataclass(frozen=True)
+class StickyPlane:
+    point: tuple[float, float, float]
+    normal: tuple[float, float, float]
+    start_time: float
+    end_time: float
 
-    def apply(grid_mv, grid_m, time):
-        active = (time >= start_time) & (time < end_time)
-        stuck_mv = jnp.where(masked[:, None], 0.0, grid_mv)
-        return jnp.where(active, stuck_mv, grid_mv)
+    def bind_grid(self, grid_x, dx):
+        point = jnp.asarray(self.point, dtype=jnp.float32)
+        normal = jnp.asarray(self.normal, dtype=jnp.float32)
+        normal = normal / jnp.linalg.norm(normal)
+        blocked = jnp.sum((grid_x * dx - point) * normal, axis=1) < 0.0
 
-    return apply
+        def post_grid(grid_mv, grid_m, time):
+            active = (time >= self.start_time) & (time < self.end_time)
+            return jnp.where(active & blocked[:, None], 0.0, grid_mv)
 
-
-def _sticky_surface_from_config(bc, grid_x, dx):
-    keys = set(bc.keys())
-    missing = _STICKY_SURFACE_KEYS - keys
-    extra = keys - _STICKY_SURFACE_KEYS
-    if missing or extra:
-        expected = ", ".join(sorted(_STICKY_SURFACE_KEYS))
-        problems = []
-        if missing:
-            problems.append("missing " + ", ".join(sorted(missing)))
-        if extra:
-            problems.append("unexpected " + ", ".join(sorted(extra)))
-        raise ValueError(
-            "Sticky boundary configs must contain exactly "
-            f"{expected}; got {'; '.join(problems)}."
-        )
-    return _sticky_surface(
-        bc["point"],
-        bc["normal"],
-        grid_x,
-        dx,
-        bc["start_time"],
-        bc["end_time"],
-    )
+        return post_grid
 
 
-def build_boundary_fns(bc_configs, grid_x, dx):
-    """Build sticky plane boundary callbacks for the benchmark."""
-    post_grid_fns = [
-        _sticky_surface_from_config(bc, grid_x, dx) for bc in bc_configs
-    ]
-
-    def pre_particle_fn(x, v, time):
-        return x, v
+def bind_boundaries(boundaries, grid_x, dx):
+    """Bind configured sticky planes to the current grid."""
+    post_grid_fns = [boundary.bind_grid(grid_x, dx) for boundary in boundaries]
 
     def post_grid_fn(grid_mv, grid_m, time):
         for fn in post_grid_fns:
             grid_mv = fn(grid_mv, grid_m, time)
         return grid_mv
 
-    return pre_particle_fn, post_grid_fn
+    return _identity_particles, post_grid_fn

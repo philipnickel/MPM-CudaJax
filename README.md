@@ -275,7 +275,7 @@ MPM-CudaJax/
         ├── types.py         # MPMState, MPMParams
         ├── solver.py        # MPMSolver
         ├── constitutive.py  # StVK elastic stress (jelly material)
-        ├── boundary.py      # sticky surface collider
+        ├── boundary.py      # sticky plane boundary
         ├── grid.py          # grid_update + build_grid_x
         ├── sort.py          # morton_argsort, home_super_cell_id
         ├── backends/        # backend implementations + hydra-zen registrations
