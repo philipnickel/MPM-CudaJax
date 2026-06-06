@@ -133,11 +133,11 @@ Three embarrassingly parallel phases per timestep:
 
 The solver is class-based:
 
-- **`MPMSolver`** is a plain Python class. Particle/grid state is mutated in place by the driver API; the backend, constitutive/boundary closures, and the compiled `_frame` are fixed for the solver's lifetime. `stepped()` returns a new solver with advanced state (shallow copy + new state); `step()` is the mutating driver and advances one frame by running `_frame(self.state)`. The frame runs `steps_per_frame` substeps as a single XLA program via `lax.fori_loop`.
+- **`MPMSolver`** is a plain Python class. Particle/grid state is mutated in place by the driver API; the backend, constitutive closure, sticky-floor mask, and the compiled `_frame` are fixed for the solver's lifetime. `stepped()` returns a new solver with advanced state (shallow copy + new state); `step()` is the mutating driver and advances one frame by running `_frame(self.state)`. The frame runs `steps_per_frame` substeps as a single XLA program via `lax.fori_loop`.
 
 Construction (`RuntimeConfig` + `MPMSolver` in `src/mpm_jax/solver.py`):
 - Hydra instantiates `cfg.solver` into `RuntimeConfig`; backend choices are Python-backed hydra-zen registrations in `src/mpm_jax/backends/`, with each backend passing `num_grids` for validation. `simulate.py` / `profile_nsight.py` import `mpm_jax.backends` before composition, then call `MPMSolver(hydra.utils.instantiate(cfg.solver))`.
-- `MPMSolver` reads the runtime config and builds params (with derived dx/vol/p_mass), particles, boundary closures, and initial state. The backend object is already instantiated by Hydra and owns CUDA/cuTile registration and grid-divisibility validation.
+- `MPMSolver` reads the runtime config and builds params (with derived dx/vol/p_mass), particles, and initial state. The backend object is already instantiated by Hydra and owns CUDA/cuTile registration and grid-divisibility validation; the sticky floor is fixed in the solver frame.
 - `src/mpm_jax/backends/` is a small backend hierarchy (base = `jax`; one subclass per variant overriding `prepare()`/`p2g()`, with `g2p()` shared on the base). The implementation modules register the user-facing Hydra choices (`jax`, `cuda_v1`, etc.) directly via hydra-zen. The frame loop calls `backend.step()` (order + scatter) and `backend.g2p()`.
 
 All solver variants now run through the same JAX-owned frame loop. The pure-JAX path compiles the entire frame (multiple substeps) as one XLA program. The CUDA variants (`cuda_v*`) move per-particle stencil work into CUDA kernels so the `(N, 27, *)` intermediate tensors never materialize in HBM. The cuTile variant (`cutile`) launches a tiled-programming-model P2G kernel from inside that same JAX frame via the cuTile/JAX bridge.
@@ -275,7 +275,6 @@ MPM-CudaJax/
         ├── types.py         # MPMState, MPMParams
         ├── solver.py        # MPMSolver
         ├── constitutive.py  # StVK elastic stress (jelly material)
-        ├── boundary.py      # sticky plane boundary
         ├── grid.py          # grid_update + build_grid_x
         ├── sort.py          # morton_argsort, home_super_cell_id
         ├── backends/        # backend implementations + hydra-zen registrations

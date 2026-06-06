@@ -5,13 +5,6 @@ from mpm_jax.types import MPMState, MPMParams
 from mpm_jax.backends import JaxBackend
 from mpm_jax.solver import build_backend_frame
 from mpm_jax.constitutive import stvk_elasticity_jacobi
-from mpm_jax.boundary import StickyPlane
-
-
-def _make_grid_x(num_grids):
-    g = jnp.arange(num_grids, dtype=jnp.float32)
-    gx, gy, gz = jnp.meshgrid(g, g, g, indexing="ij")
-    return jnp.stack([gx, gy, gz], axis=-1).reshape(-1, 3)
 
 
 def _runtime_params(n_particles, num_grids, dt=3e-4):
@@ -36,14 +29,6 @@ def test_elastic_simulation_10_frames():
     num_grids = 15
     x0 = jnp.ones((N, 3)) * 0.5
     params = _runtime_params(n_particles=N, num_grids=num_grids, dt=3e-4)
-    grid_x = _make_grid_x(num_grids)
-    boundary = StickyPlane(
-        point=(1.0, 1.0, 0.02),
-        normal=(0.0, 0.0, 1.0),
-        start_time=0.0,
-        end_time=1e3,
-    )
-    post_fn = boundary.bind_grid(grid_x, params.dx)
     elasticity_fn = stvk_elasticity_jacobi(E=2e6, nu=0.4)
     state = MPMState(
         x=x0,
@@ -54,7 +39,6 @@ def test_elastic_simulation_10_frames():
     frame = build_backend_frame(
         params,
         elasticity_fn,
-        post_fn,
         JaxBackend(),
         steps_per_frame=5,
     )
@@ -72,14 +56,6 @@ def test_outer_frame_jit_runs_multiple_frames():
     x0 = jnp.ones((N, 3), dtype=jnp.float32) * 0.5
 
     params = _runtime_params(n_particles=N, num_grids=num_grids, dt=3e-4)
-    grid_x = _make_grid_x(num_grids)
-    boundary = StickyPlane(
-        point=(1.0, 1.0, 0.02),
-        normal=(0.0, 0.0, 1.0),
-        start_time=0.0,
-        end_time=1e3,
-    )
-    post_fn = boundary.bind_grid(grid_x, params.dx)
     elasticity_fn = stvk_elasticity_jacobi(E=2e6, nu=0.4)
 
     state = MPMState(
@@ -91,7 +67,6 @@ def test_outer_frame_jit_runs_multiple_frames():
     jit_frame = build_backend_frame(
         params,
         elasticity_fn,
-        post_fn,
         JaxBackend(),
         steps_per_frame,
     )

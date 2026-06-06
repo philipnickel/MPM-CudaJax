@@ -69,13 +69,6 @@ def test_hydra_instantiates_runtime_config_and_solver():
                 "size": [0.5, 0.5, 0.5],
                 "initial_velocity": [0, 0, 0],
                 "center": [0.5, 0.5, 0.5],
-                "boundary": {
-                    "_target_": "mpm_jax.boundary.StickyPlane",
-                    "point": [1.0, 1.0, 0.02],
-                    "normal": [0.0, 0.0, 1.0],
-                    "start_time": 0.0,
-                    "end_time": 1e3,
-                },
             },
             "material": {
                 "elasticity": {

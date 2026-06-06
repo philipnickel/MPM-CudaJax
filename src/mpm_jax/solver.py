@@ -28,7 +28,15 @@ def _instantiate_target(value):
     return value
 
 
-def build_backend_frame(params, elasticity_fn, post_fn, backend, steps_per_frame):
+def _sticky_floor_mask(grid_x, dx):
+    return grid_x[:, 2] * dx < 0.02
+
+
+def _apply_sticky_floor(grid_v, sticky_floor):
+    return jnp.where(sticky_floor[:, None], 0.0, grid_v)
+
+
+def build_backend_frame(params, elasticity_fn, backend, steps_per_frame):
     """Build one JIT-compiled frame from a backend object.
 
     The frame owns the common MPM control flow (boundary conditions, elasticity,
@@ -36,6 +44,7 @@ def build_backend_frame(params, elasticity_fn, post_fn, backend, steps_per_frame
     P2G — ``backend.step`` orders the particles and scatters — and ``g2p``.
     The ``steps_per_frame`` substeps run as a single ``lax.fori_loop``.
     """
+    sticky_floor = _sticky_floor_mask(build_grid_x(params.num_grids), params.dx)
 
     @jax.jit
     def jit_frame(state):
@@ -50,7 +59,7 @@ def build_backend_frame(params, elasticity_fn, post_fn, backend, steps_per_frame
                 grid_mv = grid_update(
                     grid_mv, grid_m, params.gravity, params.dt, params.damping
                 )
-                grid_v = post_fn(grid_mv, grid_m, 0.0)
+                grid_v = _apply_sticky_floor(grid_mv, sticky_floor)
 
             with jax.named_scope(f"{backend.name}_g2p"):
                 new_x, new_v, new_C, new_F = backend.g2p(params, prepared, grid_v)
@@ -75,11 +84,11 @@ class MPMSolver:
     """Stateful driver over the functional JAX core.
 
     A plain Python object: array state (`state`) is mutated in place by the
-    driver API, while the backend object, constitutive/boundary closures, and
-    the compiled `_frame` are fixed for the solver's lifetime. The solver itself
-    is never a JAX argument — only `state` (an `MPMState` pytree) is traced; the
-    backend/fns are baked into `_frame`'s closure at build time. So no pytree
-    machinery is needed here.
+    driver API, while the backend object, constitutive closure, sticky-floor
+    mask, and the compiled `_frame` are fixed for the solver's lifetime. The
+    solver itself is never a JAX argument — only `state` (an `MPMState` pytree)
+    is traced; the backend/fns are baked into `_frame`'s closure at build time.
+    So no pytree machinery is needed here.
     """
 
     def __init__(self, config):
@@ -87,22 +96,18 @@ class MPMSolver:
 
         Reads each config section and constructs the pieces — params (with its
         derived dx/vol/p_mass), particles, the target-instantiated backend,
-        the boundary closure, and the initial state — then hands them to
-        the compiled frame. The shared scalars (``n_particles``/``num_grids``)
-        are read once and threaded as locals (``n``/``g``).
+        and the initial state — then hands them to the compiled frame.
         """
         sim, mat = config.sim, config.material
-        n, g = int(sim.n_particles), int(sim.num_grids)
+        n = int(sim.n_particles)
 
         params = MPMParams(sim)
         backend = _instantiate_target(config.backend)
         backend.validate_num_grids(params.num_grids)
-        boundary = _instantiate_target(sim.boundary)
         particles = jnp.asarray(
             get_particles(n, center=list(sim.center), size=list(sim.size)),
             dtype=jnp.float32,
         )
-        post_fn = boundary.bind_grid(build_grid_x(g), params.dx)
         init_state = MPMState(
             x=particles,
             v=jnp.broadcast_to(
@@ -121,12 +126,10 @@ class MPMSolver:
                 "material.elasticity must be a Hydra-instantiated callable. "
                 "Use an `_target_` in conf/material/<name>.yaml."
             )
-        self.post_fn = post_fn
         self.backend = backend
         self._frame = build_backend_frame(
             params,
             self.elasticity_fn,
-            post_fn,
             backend,
             self.steps_per_frame,
         )

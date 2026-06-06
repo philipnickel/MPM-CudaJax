@@ -86,14 +86,13 @@ conf/                  Hydra config groups
   config.yaml          top-level defaults (material/sim/backend/profile)
   nsight_profile.yaml  top-level defaults for profile_nsight.py
   material/            jelly.yaml  (constitutive model)
-  sim/default.yaml     n_particles, num_grids, dt, BCs, ...
+  sim/default.yaml     n_particles, num_grids, dt, ...
   profile/             none.yaml, jax.yaml
   sweep_*.yaml         pre-baked Hydra multirun sweeps
 src/mpm_jax/
   types.py             MPMState, MPMParams
   solver.py            RuntimeConfig + MPMSolver + build_backend_frame (per-frame loop) + get_particles
   constitutive.py      StVK elastic stress (the jelly material), SVD-free
-  boundary.py          sticky plane boundary
   backends/            backend implementations; modules register Hydra choices via hydra-zen
   p2g_scan.py          JAX baseline P2G: lax.scan over 27 offsets (defines OFFSET_27)
   g2p_scan.py          JAX baseline G2P: lax.scan over 27 offsets + MLS C=∇v (shared by ALL kernels)
@@ -123,14 +122,14 @@ Three embarrassingly parallel phases per substep:
 
 `MPMSolver` (in `src/mpm_jax/solver.py`) is a plain Python class wrapping the functional JAX core:
 
-- Built once from `params`, an `elasticity_fn`, a post-grid boundary function, a `Backend`, and `steps_per_frame`. Array state is mutated in place by the driver API; the backend, closures, and the compiled `_frame` are fixed for the solver's lifetime. The solver is never a JAX argument — only `state` (an `MPMState` pytree) is traced — so it needs no pytree machinery.
+- Built once from `params`, an `elasticity_fn`, a `Backend`, and `steps_per_frame`. Array state is mutated in place by the driver API; the backend, sticky-floor mask, closures, and the compiled `_frame` are fixed for the solver's lifetime. The solver is never a JAX argument — only `state` (an `MPMState` pytree) is traced — so it needs no pytree machinery.
 - `stepped()` returns a new solver with advanced state. `step()` keeps the existing mutating driver API and advances one frame (= `steps_per_frame` substeps) by calling `_frame(self.state)`.
 - `solve(num_frames, on_frame=None)` loops `step()` with an optional IO callback.
 - The `steps_per_frame` substeps run inside `build_backend_frame` as a single `lax.fori_loop`.
 
 ### Backend Variants
 
-Kernel selection is a small implementation package, not an if/elif chain. Because only the P2G varies, `src/mpm_jax/backends/common.py` defines the shared interface/helpers and each implementation module registers its own Hydra backend choice with hydra-zen: `jax.py`, `cuda.py`, and `cutile.py`. A variant overrides `prepare()` (the "sort") and `p2g()` (the scatter); `g2p()` lives on the base and is shared by all. The frame loop calls `backend.step()` (which orders the particles then scatters) and `backend.g2p()` — it never sees the sort. Importing `mpm_jax.backends` loads those modules and commits their config-group entries to Hydra's ConfigStore, so `backend=jax,cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile` are Python-backed Hydra choices with no `conf/backend/*.yaml` stubs. Backend constructors own super-cell grid-divisibility checks and CUDA/cuTile registration. Solver construction is `MPMSolver(hydra.utils.instantiate(cfg.solver))`: the `solver` config node targets `RuntimeConfig`, whose `backend` field is already the instantiated backend object. `MPMSolver` derives params, particles, boundary closures, and initial state from that runtime config. There is no availability check — the default Pixi env guarantees the kernels exist.
+Kernel selection is a small implementation package, not an if/elif chain. Because only the P2G varies, `src/mpm_jax/backends/common.py` defines the shared interface/helpers and each implementation module registers its own Hydra backend choice with hydra-zen: `jax.py`, `cuda.py`, and `cutile.py`. A variant overrides `prepare()` (the "sort") and `p2g()` (the scatter); `g2p()` lives on the base and is shared by all. The frame loop calls `backend.step()` (which orders the particles then scatters) and `backend.g2p()` — it never sees the sort. Importing `mpm_jax.backends` loads those modules and commits their config-group entries to Hydra's ConfigStore, so `backend=jax,cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile` are Python-backed Hydra choices with no `conf/backend/*.yaml` stubs. Backend constructors own super-cell grid-divisibility checks and CUDA/cuTile registration. Solver construction is `MPMSolver(hydra.utils.instantiate(cfg.solver))`: the `solver` config node targets `RuntimeConfig`, whose `backend` field is already the instantiated backend object. `MPMSolver` derives params, particles, and initial state from that runtime config; the sticky floor is fixed in the solver frame. There is no availability check — the default Pixi env guarantees the kernels exist.
 
 Current kernel names:
 
@@ -215,7 +214,7 @@ CMake auto-detects the local GPU arch when `MPM_CUDA_ARCH` is unset.
   5. Include the backend in any sweep configs that should exercise it.
   6. Rebuild the editable package metadata after module/package shape changes: `pixi reinstall mpm-cudajax`.
 - **Adding a new cuTile-in-JAX kernel:** put the cuTile kernel + `cutile_call` bridge in a dedicated module (see `cutile_p2g.py`), add a backend implementation under `src/mpm_jax/backends/`, and decorate it with `hydra_zen.store(..., group="backend")`.
-- Constitutive models and the sticky plane boundary are Hydra-instantiated (`material.elasticity._target_`, `sim.boundary._target_`).
+- Constitutive models are Hydra-instantiated (`material.elasticity._target_`); the sticky floor boundary is fixed in `solver.py`.
 - **No `block_until_ready` inside the timed region in benchmark mode.** Both timing modes dispatch all frames back-to-back and sync exactly once after the loop; elapsed/num_frames is the average. Per-stage breakdown comes from `profile=jax` (TensorBoard trace) or `profile_nsight.py`, not from `simulate.py`'s output.
 - XLA command-buffer / CUDA-Graph capture is enabled for **all** kernels via `XLA_FLAGS` in the GPU activation block (`--xla_gpu_enable_command_buffer=FUSION,CUSTOM_CALL,WHILE`), so it is always on under `pixi run`. There is no per-kernel `cuda_graph` flag anymore.
 - Lint with ruff (config in `ruff.toml`); `I` is allowed as a variable name (identity matrix), and `tests/*` skips E402/F401.
