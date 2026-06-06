@@ -55,6 +55,7 @@ def _p2g_home_cell_kernel(
     p_mass: ct.Constant[float],
     inv_dx: ct.Constant[float],
     dx: ct.Constant[float],
+    particles_per_tile: ct.Constant[int],
 ):
     hi = ct.bid(0)
     hj = ct.bid(1)
@@ -63,7 +64,7 @@ def _p2g_home_cell_kernel(
     p_start = ct.gather(cell_bounds, (hi, hj, hk, 0), check_bounds=False)
     p_end = ct.gather(cell_bounds, (hi, hj, hk, 1), check_bounds=False)
     if p_start < p_end:
-        p_lane = ct.arange(PARTICLES_PER_TILE, dtype=ct.int32)
+        p_lane = ct.arange(particles_per_tile, dtype=ct.int32)
         nodes, offsets, valid_node = _home_stencil(hi, hj, hk)
 
         acc = ct.zeros((STENCIL_LANES, GRID_CHANNELS), ct.float32)
@@ -71,8 +72,10 @@ def _p2g_home_cell_kernel(
         while chunk_start < p_end:
             p = chunk_start + p_lane
             active = p < p_end
-            pcols = _load_particle_columns(x, v, C, stress, p, inv_dx, PARTICLES_PER_TILE)
-            active_col = ct.reshape(active, (PARTICLES_PER_TILE, 1))
+            pcols = _load_particle_columns(
+                x, v, C, stress, p, inv_dx, particles_per_tile
+            )
+            active_col = ct.reshape(active, (particles_per_tile, 1))
             mv0, mv1, mv2, mass = _stencil_contribution_columns(
                 pcols, offsets, dt, vol, p_mass, inv_dx, dx
             )
@@ -83,10 +86,10 @@ def _p2g_home_cell_kernel(
                 mv1,
                 mv2,
                 mass,
-                (PARTICLES_PER_TILE, STENCIL_LANES, 1),
+                (particles_per_tile, STENCIL_LANES, 1),
                 2,
             )
-            chunk_start += PARTICLES_PER_TILE
+            chunk_start += particles_per_tile
 
         _scatter_stencil(grid, nodes, acc, G)
 
@@ -103,19 +106,26 @@ def cutile_p2g_v3(
     p_mass,
     inv_dx,
     dx,
+    *,
+    particles_per_tile=PARTICLES_PER_TILE,
+    kernel_hints=None,
 ):
     """Cell-owned cuTile scatter: reduce one home cell's 27-node stencil locally."""
     g = int(num_grids)
     g3 = g**3
     n = int(v.shape[0])
+    particles_per_tile = int(particles_per_tile)
     C = C.reshape((n, MAT_USED))
     stress = stress.reshape((n, MAT_USED))
 
     grid = jnp.zeros((g, g, g, GRID_CHANNELS), dtype=jnp.float32)
     cells_per_axis = g + 1
+    kernel = _p2g_home_cell_kernel
+    if kernel_hints:
+        kernel = kernel.replace_hints(**kernel_hints)
     grid = cutile_call(
         (cells_per_axis, cells_per_axis, cells_per_axis),
-        _p2g_home_cell_kernel,
+        kernel,
         (
             x,
             v,
@@ -129,6 +139,7 @@ def cutile_p2g_v3(
             float(p_mass),
             float(inv_dx),
             float(dx),
+            particles_per_tile,
         ),
     )
     return grid[..., :3].reshape((g3, 3)), grid[..., 3].reshape((g3,))

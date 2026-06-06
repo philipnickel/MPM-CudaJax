@@ -17,7 +17,7 @@ from mpm_jax.p2g.cutile.common import (
 )
 
 
-PARTICLES_PER_TILE = 16
+PARTICLES_PER_TILE = 4
 
 
 @ct.kernel
@@ -34,15 +34,16 @@ def _p2g_direct_kernel(
     p_mass: ct.Constant[float],
     inv_dx: ct.Constant[float],
     dx: ct.Constant[float],
+    particles_per_tile: ct.Constant[int],
 ):
     block = ct.bid(0)
-    p_lane = ct.arange(PARTICLES_PER_TILE, dtype=ct.int32)
-    chunk_start = block * PARTICLES_PER_TILE
+    p_lane = ct.arange(particles_per_tile, dtype=ct.int32)
+    chunk_start = block * particles_per_tile
     p = chunk_start + p_lane
     in_bounds = p < n_particles
-    pcols = _load_particle_columns(x, v, C, stress, p, inv_dx, PARTICLES_PER_TILE)
+    pcols = _load_particle_columns(x, v, C, stress, p, inv_dx, particles_per_tile)
 
-    active_lane = ct.reshape(in_bounds, (PARTICLES_PER_TILE, 1))
+    active_lane = ct.reshape(in_bounds, (particles_per_tile, 1))
     offset = ct.reshape(
         ct.arange(STENCIL_LANES, dtype=ct.int32), (1, STENCIL_LANES)
     )
@@ -61,32 +62,50 @@ def _p2g_direct_kernel(
     valid_stencil = offset < STENCIL_NODES
     mask = active_lane & valid_stencil
     contrib = _channel_tile(
-        mv0, mv1, mv2, mass, (PARTICLES_PER_TILE, STENCIL_LANES, 1), 2
+        mv0, mv1, mv2, mass, (particles_per_tile, STENCIL_LANES, 1), 2
     )
     _atomic_add_grid_channels(
         grid,
         (gi, gj, gk),
         contrib,
         G,
-        (PARTICLES_PER_TILE, STENCIL_LANES, 1),
+        (particles_per_tile, STENCIL_LANES, 1),
         (1, 1, GRID_CHANNELS),
         mask,
     )
 
 
-def cutile_p2g_v1(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
+def cutile_p2g_v1(
+    x,
+    v,
+    C,
+    stress,
+    num_grids,
+    dt,
+    vol,
+    p_mass,
+    inv_dx,
+    dx,
+    *,
+    particles_per_tile=PARTICLES_PER_TILE,
+    kernel_hints=None,
+):
     """Direct cuTile scatter for comparison with the arena backend."""
     n = int(x.shape[0])
     g = int(num_grids)
     g3 = g**3
-    blocks = (n + PARTICLES_PER_TILE - 1) // PARTICLES_PER_TILE
+    particles_per_tile = int(particles_per_tile)
+    blocks = (n + particles_per_tile - 1) // particles_per_tile
     C = C.reshape((n, MAT_USED))
     stress = stress.reshape((n, MAT_USED))
 
     grid = jnp.zeros((g, g, g, GRID_CHANNELS), dtype=jnp.float32)
+    kernel = _p2g_direct_kernel
+    if kernel_hints:
+        kernel = kernel.replace_hints(**kernel_hints)
     grid = cutile_call(
         (blocks,),
-        _p2g_direct_kernel,
+        kernel,
         (
             x,
             v,
@@ -100,6 +119,7 @@ def cutile_p2g_v1(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
             float(p_mass),
             float(inv_dx),
             float(dx),
+            particles_per_tile,
         ),
     )
     return grid[..., :3].reshape((g3, 3)), grid[..., 3].reshape((g3,))
