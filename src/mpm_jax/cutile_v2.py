@@ -5,7 +5,11 @@ import jax.numpy as jnp
 import cuda.tile as ct
 from cuda.tile.jax import InputOutput, cutile_call
 
-from mpm_jax.cutile_common import _load_particle_columns, _node_contribution_columns
+from mpm_jax.cutile_common import (
+    _load_particle_columns,
+    _node_contribution_columns,
+    _pack4,
+)
 
 
 ARENA_SC = 2
@@ -93,11 +97,7 @@ def _p2g_atomic_tile_kernel(
         accm = accm + summ
         chunk_start += particle_tile
 
-    arena0 = ct.reshape(acc0, (DIM, DIM, DIM, 1))
-    arena1 = ct.reshape(acc1, (DIM, DIM, DIM, 1))
-    arena2 = ct.reshape(acc2, (DIM, DIM, DIM, 1))
-    arenam = ct.reshape(accm, (DIM, DIM, DIM, 1))
-    arena = ct.cat((ct.cat((arena0, arena1), 3), ct.cat((arena2, arenam), 3)), 3)
+    arena = _pack4(acc0, acc1, acc2, accm, (DIM, DIM, DIM, 1), 3)
     view = grid.tiled_view((DIM, DIM, DIM, 4), traversal_steps=(SC, SC, SC, 4))
     view.atomic_store_add((si, sj, sk, 0), arena)
 

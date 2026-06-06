@@ -5,7 +5,11 @@ import jax.numpy as jnp
 import cuda.tile as ct
 from cuda.tile.jax import InputOutput, cutile_call
 
-from mpm_jax.cutile_common import _load_particle_columns, _node_contribution_columns
+from mpm_jax.cutile_common import (
+    _load_particle_columns,
+    _node_contribution_columns,
+    _pack4,
+)
 
 
 DIRECT_STENCIL_TILE = 32
@@ -60,25 +64,7 @@ def _p2g_direct_kernel(
     channel = ct.reshape(ct.arange(4, dtype=ct.int32), (1, 1, 4))
     flat = ct.reshape(flat, (particle_tile, stencil_tile, 1))
     mask = ct.reshape(mask, (particle_tile, stencil_tile, 1))
-    contrib = ct.cat(
-        (
-            ct.cat(
-                (
-                    ct.reshape(mv0, (particle_tile, stencil_tile, 1)),
-                    ct.reshape(mv1, (particle_tile, stencil_tile, 1)),
-                ),
-                2,
-            ),
-            ct.cat(
-                (
-                    ct.reshape(mv2, (particle_tile, stencil_tile, 1)),
-                    ct.reshape(mass, (particle_tile, stencil_tile, 1)),
-                ),
-                2,
-            ),
-        ),
-        2,
-    )
+    contrib = _pack4(mv0, mv1, mv2, mass, (particle_tile, stencil_tile, 1), 2)
     ct.atomic_add(grid, (flat, channel), ct.where(mask, contrib, 0.0))
 
 

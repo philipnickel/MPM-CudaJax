@@ -113,3 +113,13 @@ def _node_contribution_columns(pcols, node_rows, dt, vol, p_mass, inv_dx, dx):
         p_mass * weight,
         contributes,
     )
+
+
+def _pack4(c0, c1, c2, c3, shape, axis):
+    return ct.cat(
+        (
+            ct.cat((ct.reshape(c0, shape), ct.reshape(c1, shape)), axis),
+            ct.cat((ct.reshape(c2, shape), ct.reshape(c3, shape)), axis),
+        ),
+        axis,
+    )
