@@ -115,6 +115,24 @@ def _node_contribution_columns(pcols, node_rows, dt, vol, p_mass, inv_dx, dx):
     )
 
 
+def _add4(a0, a1, a2, a3, b0, b1, b2, b3):
+    return a0 + b0, a1 + b1, a2 + b2, a3 + b3
+
+
+def _masked_sum4(mask, mv0, mv1, mv2, mass):
+    return ct.reduce(
+        (
+            ct.where(mask, mv0, 0.0),
+            ct.where(mask, mv1, 0.0),
+            ct.where(mask, mv2, 0.0),
+            ct.where(mask, mass, 0.0),
+        ),
+        axis=0,
+        func=_add4,
+        identity=(0.0, 0.0, 0.0, 0.0),
+    )
+
+
 @ct.kernel
 def _p2g_atomic_tile_kernel(
     x,
@@ -171,10 +189,11 @@ def _p2g_atomic_tile_kernel(
             pcols, (gi_row, gj_row, gk_row), dt, vol, p_mass, inv_dx, dx
         )
         m = contributes & active_col
-        acc0 = acc0 + ct.sum(ct.where(m, mv0, 0.0), axis=0)
-        acc1 = acc1 + ct.sum(ct.where(m, mv1, 0.0), axis=0)
-        acc2 = acc2 + ct.sum(ct.where(m, mv2, 0.0), axis=0)
-        accm = accm + ct.sum(ct.where(m, mass, 0.0), axis=0)
+        sum0, sum1, sum2, summ = _masked_sum4(m, mv0, mv1, mv2, mass)
+        acc0 = acc0 + sum0
+        acc1 = acc1 + sum1
+        acc2 = acc2 + sum2
+        accm = accm + summ
         chunk_start += particle_tile
 
     arena0 = ct.reshape(acc0, (DIM, DIM, DIM, 1))
