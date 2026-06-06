@@ -13,7 +13,8 @@ from mpm_jax.backends import (
     CudaV2Backend,
     CudaV3Backend,
     CudaV4Backend,
-    CutileBackend,
+    CutileV1Backend,
+    CutileV2Backend,
     JaxBackend,
 )
 from mpm_jax.cuda.p2g_cuda import (
@@ -164,7 +165,10 @@ def test_cutile_p2g_matches_jax_scan():
     params, state, stress = _inputs()
     ref_mv, ref_m = _p2g_output(JaxBackend(), params, state, stress)
 
-    for backend in (CutileBackend(params.num_grids),):
+    for backend in (
+        CutileV1Backend(params.num_grids),
+        CutileV2Backend(params.num_grids),
+    ):
         grid_mv, grid_m = _p2g_output(backend, params, state, stress)
 
         np.testing.assert_allclose(

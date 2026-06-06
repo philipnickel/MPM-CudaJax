@@ -65,11 +65,10 @@ def supercell_order(params, state, stress, super_cell_width):
     )
     order = jnp.argsort(super_id)
     grids_per_super_cell = params.num_grids // super_cell_width
-    boundaries = jnp.arange(grids_per_super_cell**3 + 1, dtype=jnp.int32)
-    cell_start = jnp.searchsorted(
-        super_id[order],
-        boundaries,
-    ).astype(jnp.int32)
+    counts = jnp.bincount(super_id, length=grids_per_super_cell**3).astype(jnp.int32)
+    cell_start = jnp.concatenate(
+        [jnp.zeros((1,), dtype=jnp.int32), jnp.cumsum(counts).astype(jnp.int32)]
+    )
     return PreparedSubstep(
         state.x[order],
         state.v[order],

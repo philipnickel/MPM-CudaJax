@@ -16,7 +16,8 @@ EXPECTED_BACKENDS = {
     "cuda_v2": "mpm_jax.backends.cuda.CudaV2Backend",
     "cuda_v3": "mpm_jax.backends.cuda.CudaV3Backend",
     "cuda_v4": "mpm_jax.backends.cuda.CudaV4Backend",
-    "cutile": "mpm_jax.backends.cutile.CutileBackend",
+    "cutile_v1": "mpm_jax.backends.cutile.CutileV1Backend",
+    "cutile_v2": "mpm_jax.backends.cutile.CutileV2Backend",
 }
 
 
@@ -43,7 +44,9 @@ def test_each_backend_config_instantiates_expected_backend_name(monkeypatch):
         "mpm_jax.backends.cutile._cutile_module",
         lambda: SimpleNamespace(
             ARENA_SC=2,
-            cutile_p2g_atomic_tile=lambda *args, **kwargs: None,
+            ARENA_PARTICLE_TILE=16,
+            cutile_p2g_v1=lambda *args, **kwargs: None,
+            cutile_p2g_v2=lambda *args, **kwargs: None,
         ),
     )
 

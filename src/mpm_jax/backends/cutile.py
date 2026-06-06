@@ -11,16 +11,42 @@ def _cutile_module():
     return cutile_p2g
 
 
-@store(name="cutile", group="backend", num_grids="${sim.num_grids}")
-class CutileBackend(BaseBackend):
+@store(name="cutile_v1", group="backend", num_grids="${sim.num_grids}")
+class CutileV1Backend(BaseBackend):
+    """cuTile direct 27-stencil scatter with global atomics."""
+
+    name = "cutile_v1"
+
+    def __init__(self, num_grids=None):
+        cutile = _cutile_module()
+        self.kernel = cutile.cutile_p2g_v1
+        super().__init__(num_grids=num_grids)
+
+    def p2g(self, params, prepared):
+        return self.kernel(
+            prepared.x,
+            prepared.v,
+            prepared.C,
+            prepared.stress,
+            params.num_grids,
+            params.dt,
+            params.vol,
+            params.p_mass,
+            params.inv_dx,
+            params.dx,
+        )
+
+
+@store(name="cutile_v2", group="backend", num_grids="${sim.num_grids}")
+class CutileV2Backend(BaseBackend):
     """cuTile arena scatter; occupancy is left to the cuTile compiler default."""
 
-    name = "cutile"
+    name = "cutile_v2"
 
     def __init__(self, num_grids=None):
         cutile = _cutile_module()
         self.super_cell = cutile.ARENA_SC
-        self.kernel = cutile.cutile_p2g_atomic_tile
+        self.kernel = cutile.cutile_p2g_v2
         super().__init__(num_grids=num_grids)
 
     def prepare(self, params, state, stress):

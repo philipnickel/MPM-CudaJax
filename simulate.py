@@ -43,7 +43,7 @@ def main(cfg: DictConfig):
         "Wall-clock timing: %.3f ms/frame (%d substeps each, n=%d, %.3e particles/s)",
         metrics["ms_per_frame"],
         solver.steps_per_frame,
-        solver.num_frames,
+        metrics["n_particles"],
         metrics["particles_per_sec"],
     )
 

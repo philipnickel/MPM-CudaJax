@@ -12,7 +12,7 @@ hydra:
     mode: MULTIRUN
     sweeper:
         params:
-            backend: jax,cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile
+            backend: jax,cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v2
 
 render:
     enabled: false
