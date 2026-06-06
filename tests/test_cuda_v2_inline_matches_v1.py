@@ -64,10 +64,8 @@ def test_cuda_v2_matches_v1():
     grid_x = jnp.stack([gx, gy, gz], axis=-1).reshape(-1, 3)
     bcs = [
         {
-            "type": "surface_collider",
             "point": [1.0, 1.0, 0.02],
             "normal": [0.0, 0.0, 1.0],
-            "surface": "sticky",
             "start_time": 0.0,
             "end_time": 1e3,
         }

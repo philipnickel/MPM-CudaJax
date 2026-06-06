@@ -10,16 +10,14 @@ def _make_grid_x(num_grids):
     return jnp.stack([gx, gy, gz], axis=-1).reshape(-1, 3)
 
 
-def test_surface_collider_sticky_zeroes_velocity():
+def test_sticky_boundary_zeroes_velocity_below_surface():
     num_grids = 5
     dx = 1.0 / num_grids
     grid_x = _make_grid_x(num_grids)
     bc_configs = [
         {
-            "type": "surface_collider",
             "point": [1.0, 1.0, 0.02],
             "normal": [0.0, 0.0, 1.0],
-            "surface": "sticky",
             "start_time": 0.0,
             "end_time": 1e3,
         },
@@ -48,18 +46,19 @@ def test_noop_when_no_bcs():
     assert jnp.allclose(v2, v)
 
 
-def test_rejects_unsupported_boundary_type():
+def test_rejects_stale_boundary_choice_fields():
     num_grids = 5
     dx = 1.0 / num_grids
     grid_x = _make_grid_x(num_grids)
     bc_configs = [
         {
-            "type": "sdf_collider",
-            "bound": 0.1,
-            "dim": 2,
+            "type": "surface_collider",
+            "point": [1.0, 1.0, 0.02],
+            "normal": [0.0, 0.0, 1.0],
+            "surface": "sticky",
             "start_time": 0.0,
             "end_time": 1e3,
         },
     ]
-    with pytest.raises(ValueError, match="only 'surface_collider' is supported"):
+    with pytest.raises(ValueError, match="unexpected surface, type"):
         build_boundary_fns(bc_configs, grid_x, dx)

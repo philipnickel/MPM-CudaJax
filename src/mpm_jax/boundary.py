@@ -1,5 +1,7 @@
 import jax.numpy as jnp
 
+_STICKY_SURFACE_KEYS = {"point", "normal", "start_time", "end_time"}
+
 
 def _sticky_surface(point, normal, grid_x, dx, start_time, end_time):
     point = jnp.array(point, dtype=jnp.float32)
@@ -16,38 +18,36 @@ def _sticky_surface(point, normal, grid_x, dx, start_time, end_time):
     return apply
 
 
-def build_boundary_fns(bc_configs, grid_x, dx):
-    """Build boundary callbacks for the benchmark.
-
-    The supported boundary is a sticky `surface_collider`, used as the floor in
-    the default and benchmark configs.
-    """
-    post_grid_fns = []
-
-    for bc in bc_configs:
-        bc_type = bc["type"] if isinstance(bc, dict) else bc.type
-        bc_dict = dict(bc) if not isinstance(bc, dict) else bc
-
-        if bc_type != "surface_collider":
-            raise ValueError(
-                f"Unsupported boundary type {bc_type!r}; only "
-                "'surface_collider' is supported."
-            )
-        surface = bc_dict.get("surface", "sticky")
-        if surface != "sticky":
-            raise ValueError(
-                f"Unsupported surface mode {surface!r}; only 'sticky' is supported."
-            )
-        post_grid_fns.append(
-            _sticky_surface(
-                bc_dict["point"],
-                bc_dict["normal"],
-                grid_x,
-                dx,
-                bc_dict["start_time"],
-                bc_dict["end_time"],
-            )
+def _sticky_surface_from_config(bc, grid_x, dx):
+    keys = set(bc.keys())
+    missing = _STICKY_SURFACE_KEYS - keys
+    extra = keys - _STICKY_SURFACE_KEYS
+    if missing or extra:
+        expected = ", ".join(sorted(_STICKY_SURFACE_KEYS))
+        problems = []
+        if missing:
+            problems.append("missing " + ", ".join(sorted(missing)))
+        if extra:
+            problems.append("unexpected " + ", ".join(sorted(extra)))
+        raise ValueError(
+            "Sticky boundary configs must contain exactly "
+            f"{expected}; got {'; '.join(problems)}."
         )
+    return _sticky_surface(
+        bc["point"],
+        bc["normal"],
+        grid_x,
+        dx,
+        bc["start_time"],
+        bc["end_time"],
+    )
+
+
+def build_boundary_fns(bc_configs, grid_x, dx):
+    """Build sticky plane boundary callbacks for the benchmark."""
+    post_grid_fns = [
+        _sticky_surface_from_config(bc, grid_x, dx) for bc in bc_configs
+    ]
 
     def pre_particle_fn(x, v, time):
         return x, v

@@ -39,10 +39,8 @@ def test_elastic_simulation_10_frames():
     grid_x = _make_grid_x(num_grids)
     bc_configs = [
         {
-            "type": "surface_collider",
             "point": [1.0, 1.0, 0.02],
             "normal": [0.0, 0.0, 1.0],
-            "surface": "sticky",
             "start_time": 0.0,
             "end_time": 1e3,
         },
@@ -80,10 +78,8 @@ def test_outer_frame_jit_runs_multiple_frames():
     grid_x = _make_grid_x(num_grids)
     bc_configs = [
         {
-            "type": "surface_collider",
             "point": [1.0, 1.0, 0.02],
             "normal": [0.0, 0.0, 1.0],
-            "surface": "sticky",
             "start_time": 0.0,
             "end_time": 1e3,
         },
