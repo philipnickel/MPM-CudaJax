@@ -91,21 +91,6 @@ def _p2g_output_shapes(num_grids):
     )
 
 
-def _particle_mats(C, stress, n_particles):
-    return C.reshape(n_particles, 9), stress.reshape(n_particles, 9)
-
-
-def _physical_attrs(num_grids, dt, vol, p_mass, inv_dx, dx):
-    return {
-        "G": np.int32(num_grids),
-        "dt": np.float32(dt),
-        "vol": np.float32(vol),
-        "p_mass": np.float32(p_mass),
-        "inv_dx": np.float32(inv_dx),
-        "dx": np.float32(dx),
-    }
-
-
 def _p2g_ffi_call(
     target_name,
     x,
@@ -114,10 +99,23 @@ def _p2g_ffi_call(
     stress,
     *extra_args,
     num_grids,
-    attrs,
+    dt,
+    vol,
+    p_mass,
+    inv_dx,
+    dx,
+    extra_attrs=None,
 ):
     n_particles = x.shape[0]
-    C_flat, stress_flat = _particle_mats(C, stress, n_particles)
+    attrs = {
+        "G": np.int32(num_grids),
+        "dt": np.float32(dt),
+        "vol": np.float32(vol),
+        "p_mass": np.float32(p_mass),
+        "inv_dx": np.float32(inv_dx),
+        "dx": np.float32(dx),
+        **(extra_attrs or {}),
+    }
 
     return jax.ffi.ffi_call(
         target_name,
@@ -126,8 +124,8 @@ def _p2g_ffi_call(
     )(
         x,
         v,
-        C_flat,
-        stress_flat,
+        C.reshape(n_particles, 9),
+        stress.reshape(n_particles, 9),
         *extra_args,
         **attrs,
     )
@@ -141,10 +139,12 @@ def _inline_p2g_call(target_name, x, v, C, stress, num_grids, dt, vol, p_mass, i
         C,
         stress,
         num_grids=num_grids,
-        attrs={
-            "N": np.int32(x.shape[0]),
-            **_physical_attrs(num_grids, dt, vol, p_mass, inv_dx, dx),
-        },
+        dt=dt,
+        vol=vol,
+        p_mass=p_mass,
+        inv_dx=inv_dx,
+        dx=dx,
+        extra_attrs={"N": np.int32(x.shape[0])},
     )
 
 
@@ -264,10 +264,12 @@ def cuda_p2g_v4_inline(
         stress_sorted,
         cell_start,
         num_grids=num_grids,
-        attrs={
-            "SC": np.int32(super_cell),
-            **_physical_attrs(num_grids, dt, vol, p_mass, inv_dx, dx),
-        },
+        dt=dt,
+        vol=vol,
+        p_mass=p_mass,
+        inv_dx=inv_dx,
+        dx=dx,
+        extra_attrs={"SC": np.int32(super_cell)},
     )
 
 
