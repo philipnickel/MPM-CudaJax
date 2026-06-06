@@ -6,80 +6,57 @@ from mpm_jax.backends.common import BaseBackend, morton_order, supercell_order
 from mpm_jax.cuda.p2g_cuda import (
     SUPPORTED_SC,
     V4_SUPER_CELL_WIDTH,
-    cuda_p2g_inline,
-    cuda_p2g_v2_inline,
-    cuda_p2g_v3_inline,
-    cuda_p2g_v4_inline,
-    register_p2g_inline,
-    register_p2g_v2_inline,
-    register_p2g_v3_inline,
-    register_p2g_v4_inline,
+    CudaP2GKernel,
+    CudaV1P2G,
+    CudaV2P2G,
+    CudaV3P2G,
+    CudaV4P2G,
 )
 
 
-def _call_inline_p2g(kernel, params, prepared):
-    return kernel(
-        prepared.x,
-        prepared.v,
-        prepared.C,
-        prepared.stress,
-        params.num_grids,
-        params.dt,
-        params.vol,
-        params.p_mass,
-        params.inv_dx,
-        params.dx,
-    )
+class CudaP2GBackend(BaseBackend):
+    """Backend backed by a callable CUDA P2G FFI target."""
 
-
-class CudaInlineBackend(BaseBackend):
-    """One CUDA inline-scatter launch."""
+    kernel_type: type[CudaP2GKernel]
 
     def __init__(self, num_grids=None):
-        self.register_kernel()
+        self.kernel = self.kernel_type()
         super().__init__(num_grids=num_grids)
 
-    def register_kernel(self):
-        raise NotImplementedError
-
     def p2g(self, params, prepared):
-        raise NotImplementedError
+        return self.kernel(
+            prepared.x,
+            prepared.v,
+            prepared.C,
+            prepared.stress,
+            params.num_grids,
+            params.dt,
+            params.vol,
+            params.p_mass,
+            params.inv_dx,
+            params.dx,
+        )
 
 
 @store(name="cuda_v1", group="backend", num_grids="${sim.num_grids}")
-class CudaV1Backend(CudaInlineBackend):
+class CudaV1Backend(CudaP2GBackend):
     name = "cuda_v1"
-
-    def register_kernel(self):
-        register_p2g_inline()
-
-    def p2g(self, params, prepared):
-        return _call_inline_p2g(cuda_p2g_inline, params, prepared)
+    kernel_type = CudaV1P2G
 
 
 @store(name="cuda_v2", group="backend", num_grids="${sim.num_grids}")
-class CudaV2Backend(CudaInlineBackend):
+class CudaV2Backend(CudaP2GBackend):
     name = "cuda_v2"
-
-    def register_kernel(self):
-        register_p2g_v2_inline()
-
-    def p2g(self, params, prepared):
-        return _call_inline_p2g(cuda_p2g_v2_inline, params, prepared)
+    kernel_type = CudaV2P2G
 
 
 @store(name="cuda_v3", group="backend", num_grids="${sim.num_grids}")
-class CudaV3Backend(CudaInlineBackend):
+class CudaV3Backend(CudaP2GBackend):
     name = "cuda_v3"
+    kernel_type = CudaV3P2G
 
     def prepare(self, params, state, stress):
         return morton_order(params, state, stress)
-
-    def register_kernel(self):
-        register_p2g_v3_inline()
-
-    def p2g(self, params, prepared):
-        return _call_inline_p2g(cuda_p2g_v3_inline, params, prepared)
 
 
 @store(
@@ -101,14 +78,14 @@ class CudaV4Backend(BaseBackend):
                 f"instantiation; the kernel is built for {SUPPORTED_SC}."
             )
         self.super_cell = super_cell
+        self.kernel = CudaV4P2G(super_cell)
         super().__init__(num_grids=num_grids)
-        register_p2g_v4_inline()
 
     def prepare(self, params, state, stress):
         return supercell_order(params, state, stress, self.super_cell)
 
     def p2g(self, params, prepared):
-        return cuda_p2g_v4_inline(
+        return self.kernel(
             prepared.x,
             prepared.v,
             prepared.C,
@@ -120,7 +97,6 @@ class CudaV4Backend(BaseBackend):
             params.p_mass,
             params.inv_dx,
             params.dx,
-            super_cell=self.super_cell,
         )
 
     def grid_divisor(self):

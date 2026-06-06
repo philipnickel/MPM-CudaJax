@@ -34,10 +34,10 @@ def test_backend_config_choices_point_at_expected_targets():
 
 
 def test_each_backend_config_instantiates_expected_backend_name(monkeypatch):
-    monkeypatch.setattr("mpm_jax.backends.cuda.register_p2g_inline", lambda: True)
-    monkeypatch.setattr("mpm_jax.backends.cuda.register_p2g_v2_inline", lambda: True)
-    monkeypatch.setattr("mpm_jax.backends.cuda.register_p2g_v3_inline", lambda: True)
-    monkeypatch.setattr("mpm_jax.backends.cuda.register_p2g_v4_inline", lambda: True)
+    monkeypatch.setattr("mpm_jax.cuda.p2g_cuda.CudaV1P2G.register", lambda self: True)
+    monkeypatch.setattr("mpm_jax.cuda.p2g_cuda.CudaV2P2G.register", lambda self: True)
+    monkeypatch.setattr("mpm_jax.cuda.p2g_cuda.CudaV3P2G.register", lambda self: True)
+    monkeypatch.setattr("mpm_jax.cuda.p2g_cuda.CudaV4P2G.register", lambda self: True)
     monkeypatch.setattr("mpm_jax.backends.cutile.load_cutile_kernels", lambda: None)
     monkeypatch.setattr("mpm_jax.backends.cutile.arena_super_cell", lambda: 2)
 

@@ -280,7 +280,7 @@ MPM-CudaJax/
         ├── backends/        # backend implementations + hydra-zen registrations
         ├── cutile_p2g.py    # cuTile arena-scatter P2G kernel + jax bridge
         └── cuda/
-            ├── p2g_cuda.py  # FFI capsule registration + kernel wrappers
+            ├── p2g_cuda.py  # FFI capsule registration + kernel objects
             └── kernels/     # p2g_ffi_module.cc plus p2g_inline.cu,
                              # p2g_v2_inline.cu, p2g_v3_inline.cu,
                              # p2g_v4_inline.cu

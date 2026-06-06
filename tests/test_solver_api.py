@@ -23,13 +23,11 @@ def _make_solver(steps_per_frame=2, n=64, G=16):
         center=[0.5, 0.5, 0.5],
     )
     material = SimpleNamespace(elasticity=stvk_elasticity_jacobi())
-    return MPMSolver(
-        RuntimeConfig(material=material, sim=sim, backend=JaxBackend())
-    )
+    return MPMSolver(RuntimeConfig(material=material, sim=sim, backend=JaxBackend()))
 
 
 def test_solver_validates_backend_against_runtime_num_grids(monkeypatch):
-    monkeypatch.setattr("mpm_jax.backends.cuda.register_p2g_v4_inline", lambda: True)
+    monkeypatch.setattr("mpm_jax.cuda.p2g_cuda.CudaV4P2G.register", lambda self: True)
 
     sim = SimpleNamespace(
         n_particles=64,

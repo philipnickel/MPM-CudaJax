@@ -6,7 +6,7 @@ from omegaconf import OmegaConf
 
 from mpm_jax.backends.common import BaseBackend, PreparedSubstep
 from mpm_jax.backends.cuda import (
-    CudaInlineBackend,
+    CudaP2GBackend,
     CudaV1Backend,
     CudaV2Backend,
     CudaV3Backend,
@@ -39,7 +39,7 @@ def backend_config(choice: str):
 
 __all__ = [
     "BaseBackend",
-    "CudaInlineBackend",
+    "CudaP2GBackend",
     "CudaV1Backend",
     "CudaV2Backend",
     "CudaV3Backend",

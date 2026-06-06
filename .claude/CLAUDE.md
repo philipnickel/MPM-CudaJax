@@ -206,11 +206,11 @@ CMake auto-detects the local GPU arch when `MPM_CUDA_ARCH` is unset.
 - **Sweeps must use Hydra multirun**, never a bash `for` loop. Either use a pre-baked sweep config (`-cn sweep_*`) or pass axes inline: `pixi run python simulate.py -m sim.n_particles=5000,50000,200000 backend=jax,cuda_v1,cuda_v2 benchmark=true`. Add new sweep configs under `conf/sweep_<name>.yaml`. Hydra puts each combination in its own `multirun/<date>/<run>/` subdir.
 - **Default to short benchmarks.** Steady-state ms/step is stable after the first frame (warmup), so `sim.num_frames=5` (50 substeps) gives reliable timings.
 - Single-particle functions vectorise via `jax.vmap` (e.g. `constitutive.stvk_elasticity_jacobi` is `jax.vmap` of a single-3×3 stress). Don't write batched code by hand — vmap is the contract.
-- **Adding a new CUDA P2G kernel** (e.g. `cuda_vX_inline`) — only the P2G varies; G2P stays the JAX baseline:
+- **Adding a new CUDA P2G kernel** (e.g. `cuda_vX`) — only the P2G varies; G2P stays the JAX baseline:
   1. Add `src/mpm_jax/cuda/kernels/p2g_vX_inline.cu`.
   2. Add the `.cu` source to `P2G_FFI_SOURCES` in `CMakeLists.txt`.
-  3. Declare/export the handler capsule in `p2g_ffi_module.cc`, then add `register_p2g_vX_inline()` + `cuda_p2g_vX_inline()` in `src/mpm_jax/cuda/p2g_cuda.py`.
-  4. Add a backend implementation in `src/mpm_jax/backends/` overriding `p2g()` (and `prepare()` if it needs a sort); `g2p()` is inherited from the base, so only P2G differs. Decorate the implementation with `hydra_zen.store(name="cuda_vX", group="backend", num_grids="${sim.num_grids}")`, register the kernel in `__init__` (so a compile-cache hit still finds the handler), and return the super-cell width from `grid_divisor()` if the grid must divide it.
+  3. Declare/export the handler capsule in `p2g_ffi_module.cc`, then add a `CudaVXP2G` kernel class in `src/mpm_jax/cuda/p2g_cuda.py`; constructing the class registers the FFI target.
+  4. Add a backend implementation in `src/mpm_jax/backends/` using that kernel class (and overriding `prepare()` if it needs a sort); `g2p()` is inherited from the base, so only P2G differs. Decorate the implementation with `hydra_zen.store(name="cuda_vX", group="backend", num_grids="${sim.num_grids}")`, and return the super-cell width from `grid_divisor()` if the grid must divide it.
   5. Include the backend in any sweep configs that should exercise it.
   6. Rebuild the editable package metadata after module/package shape changes: `pixi reinstall mpm-cudajax`.
 - **Adding a new cuTile-in-JAX kernel:** put the cuTile kernel + `cutile_call` bridge in a dedicated module (see `cutile_p2g.py`), add a backend implementation under `src/mpm_jax/backends/`, and decorate it with `hydra_zen.store(..., group="backend")`.

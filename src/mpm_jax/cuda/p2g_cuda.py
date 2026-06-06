@@ -20,43 +20,71 @@ _FFI_MODULE = "mpm_jax.cuda._p2g_ffi"
 _REGISTERED: set[str] = set()
 _REGISTER_LOCK = Lock()
 
-_P2G_INLINE_TARGET = "p2g_inline_cuda"
-_P2G_V2_INLINE_TARGET = "p2g_v2_inline_cuda"
-_P2G_V3_INLINE_TARGET = "p2g_v3_inline_cuda"
-_P2G_V4_INLINE_TARGET = "p2g_v4_inline_cuda"
+_P2G_TARGET = "p2g_inline_cuda"
+_P2G_V2_TARGET = "p2g_v2_inline_cuda"
+_P2G_V3_TARGET = "p2g_v3_inline_cuda"
+_P2G_V4_TARGET = "p2g_v4_inline_cuda"
 
 
-def _register(name: str, capsule_factory: str) -> bool:
-    """Import the native binding module and register one FFI target."""
-    with _REGISTER_LOCK:
-        if name not in _REGISTERED:
-            ffi_module = importlib.import_module(_FFI_MODULE)
-            capsule = getattr(ffi_module, capsule_factory)()
-            jax.ffi.register_ffi_target(
-                name,
-                capsule,
-                platform="CUDA",
-                api_version=1,
-            )
-            _REGISTERED.add(name)
+class CudaP2GKernel:
+    """Callable CUDA P2G FFI target that registers itself on construction."""
 
+    target: str
+    capsule_factory: str
+
+    def __init__(self):
+        self.register()
+
+    def register(self):
+        with _REGISTER_LOCK:
+            if self.target not in _REGISTERED:
+                ffi_module = importlib.import_module(_FFI_MODULE)
+                capsule = getattr(ffi_module, self.capsule_factory)()
+                jax.ffi.register_ffi_target(
+                    self.target,
+                    capsule,
+                    platform="CUDA",
+                    api_version=1,
+                )
+                _REGISTERED.add(self.target)
         return True
 
+    def __call__(self, x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
+        return _p2g_ffi_call(
+            self.target,
+            x,
+            v,
+            C,
+            stress,
+            num_grids=num_grids,
+            dt=dt,
+            vol=vol,
+            p_mass=p_mass,
+            inv_dx=inv_dx,
+            dx=dx,
+            extra_attrs={"N": np.int32(x.shape[0])},
+        )
 
-def register_p2g_inline():
-    return _register(_P2G_INLINE_TARGET, "p2g_inline")
+
+class CudaV1P2G(CudaP2GKernel):
+    """One CUDA thread per particle with global atomics."""
+
+    target = _P2G_TARGET
+    capsule_factory = "p2g_inline"
 
 
-def register_p2g_v2_inline():
-    return _register(_P2G_V2_INLINE_TARGET, "p2g_v2_inline")
+class CudaV2P2G(CudaP2GKernel):
+    """Warp-shuffle coalesced scatter."""
+
+    target = _P2G_V2_TARGET
+    capsule_factory = "p2g_v2_inline"
 
 
-def register_p2g_v3_inline():
-    return _register(_P2G_V3_INLINE_TARGET, "p2g_v3_inline")
+class CudaV3P2G(CudaP2GKernel):
+    """Warp-shuffle coalesced scatter for Morton-sorted particles."""
 
-
-def register_p2g_v4_inline():
-    return _register(_P2G_V4_INLINE_TARGET, "p2g_v4_inline")
+    target = _P2G_V3_TARGET
+    capsule_factory = "p2g_v3_inline"
 
 
 def _p2g_ffi_call(
@@ -103,95 +131,6 @@ def _p2g_ffi_call(
     )
 
 
-def _inline_p2g_call(target_name, x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
-    return _p2g_ffi_call(
-        target_name,
-        x,
-        v,
-        C,
-        stress,
-        num_grids=num_grids,
-        dt=dt,
-        vol=vol,
-        p_mass=p_mass,
-        inv_dx=inv_dx,
-        dx=dx,
-        extra_attrs={"N": np.int32(x.shape[0])},
-    )
-
-
-def cuda_p2g_inline(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
-    """Inline-scatter CUDA P2G via JAX FFI (backend: cuda_v1).
-
-    Takes per-particle state including precomputed stress (from the JAX-side
-    StVK elasticity). One CUDA kernel launch, one thread per particle, with a
-    register-resident 27-stencil loop. No (N, 27, *) tensor materialised.
-
-    Stress is computed by the JAX elasticity model; weights and scatter happen
-    inside this CUDA kernel.
-    """
-    return _inline_p2g_call(
-        _P2G_INLINE_TARGET,
-        x,
-        v,
-        C,
-        stress,
-        num_grids,
-        dt,
-        vol,
-        p_mass,
-        inv_dx,
-        dx,
-    )
-
-
-def cuda_p2g_v2_inline(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
-    """Inline-scatter CUDA P2G with warp-shuffle reduction (backend: cuda_v2).
-
-    Same FFI signature as ``cuda_p2g_inline`` — only the C++ symbol is
-    different. The kernel inserts a ``__match_any_sync`` + ``__shfl_sync``
-    reduction over each arbitrary peer mask in front of every atomicAdd inside
-    the 27-stencil scatter loop, so warp-resident contributions to the same
-    grid_idx collapse to a single atomic.
-    """
-    return _inline_p2g_call(
-        _P2G_V2_INLINE_TARGET,
-        x,
-        v,
-        C,
-        stress,
-        num_grids,
-        dt,
-        vol,
-        p_mass,
-        inv_dx,
-        dx,
-    )
-
-
-def cuda_p2g_v3_inline(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
-    """Inline-scatter CUDA P2G with warp-shuffle atomic coalescing (backend: cuda_v3).
-
-    Identical kernel-side reduction as ``cuda_p2g_v2_inline``. Designed to
-    be called on Morton-sorted particles (see
-    :func:`mpm_jax.sort.morton_argsort`) so adjacent warp lanes share
-    stencil targets — the sort is what makes the warp reduction productive.
-    """
-    return _inline_p2g_call(
-        _P2G_V3_INLINE_TARGET,
-        x,
-        v,
-        C,
-        stress,
-        num_grids,
-        dt,
-        vol,
-        p_mass,
-        inv_dx,
-        dx,
-    )
-
-
 # Super-cell width for the cuda_v4 backend. With SC=k the kernel launches (G/SC)^3
 # blocks (vs G^3) and each block aggregates particles from SC^3 cells into a
 # (SC+2)^3 shared-memory tile. The kernel is a template on SC; the FFI handler
@@ -203,59 +142,54 @@ SUPPORTED_SC = (2, 4, 8)  # template instantiations compiled into the extension
 V4_SUPER_CELL_WIDTH = 4  # default super-cell width
 
 
-def cuda_p2g_v4_inline(
-    x_sorted,
-    v_sorted,
-    C_sorted,
-    stress_sorted,
-    cell_start,
-    num_grids,
-    dt,
-    vol,
-    p_mass,
-    inv_dx,
-    dx,
-    super_cell=V4_SUPER_CELL_WIDTH,
-):
-    """Cell-major inline P2G via JAX FFI (backend: cuda_v4).
+class CudaV4P2G(CudaP2GKernel):
+    """Super-cell-owned grid tile scatter."""
 
-    The Python wrapper assumes the inputs are already sorted by home
-    *super*-cell and that ``cell_start`` is the CSR boundary array of length
-    (G/SC)^3 + 1, where SC is ``super_cell`` (one of :data:`SUPPORTED_SC`).
+    target = _P2G_V4_TARGET
+    capsule_factory = "p2g_v4_inline"
 
-    The kernel uses one CUDA block per super-cell and aggregates each
-    super-cell's contributions into a (SC+2)^3 shared-memory tile before
-    flushing to HBM. With SC=4, the standard 8 particles/cell benchmark gives
-    each non-empty block enough particles to amortize the tile overhead.
-    """
-    return _p2g_ffi_call(
-        _P2G_V4_INLINE_TARGET,
+    def __init__(self, super_cell=V4_SUPER_CELL_WIDTH):
+        self.super_cell = int(super_cell)
+        super().__init__()
+
+    def __call__(
+        self,
         x_sorted,
         v_sorted,
         C_sorted,
         stress_sorted,
         cell_start,
-        num_grids=num_grids,
-        dt=dt,
-        vol=vol,
-        p_mass=p_mass,
-        inv_dx=inv_dx,
-        dx=dx,
-        extra_attrs={"SC": np.int32(super_cell)},
-    )
+        num_grids,
+        dt,
+        vol,
+        p_mass,
+        inv_dx,
+        dx,
+    ):
+        return _p2g_ffi_call(
+            self.target,
+            x_sorted,
+            v_sorted,
+            C_sorted,
+            stress_sorted,
+            cell_start,
+            num_grids=num_grids,
+            dt=dt,
+            vol=vol,
+            p_mass=p_mass,
+            inv_dx=inv_dx,
+            dx=dx,
+            extra_attrs={"SC": np.int32(self.super_cell)},
+        )
 
 
 __all__ = [
-    # FFI registration
-    "register_p2g_inline",
-    "register_p2g_v2_inline",
-    "register_p2g_v3_inline",
-    "register_p2g_v4_inline",
-    # FFI op wrappers
-    "cuda_p2g_inline",
-    "cuda_p2g_v2_inline",
-    "cuda_p2g_v3_inline",
-    "cuda_p2g_v4_inline",
+    # FFI kernels
+    "CudaP2GKernel",
+    "CudaV1P2G",
+    "CudaV2P2G",
+    "CudaV3P2G",
+    "CudaV4P2G",
     # Super-cell helpers
     "V4_SUPER_CELL_WIDTH",
     "SUPPORTED_SC",

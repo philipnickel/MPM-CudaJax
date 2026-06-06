@@ -17,31 +17,19 @@ def test_register_missing_extension_raises(monkeypatch):
     _isolate_registry(monkeypatch)
 
     with pytest.raises(ImportError):
-        p2g_cuda._register("unit_test_missing", "missing_factory")
+        p2g_cuda.CudaV1P2G()
 
 
 @pytest.mark.parametrize(
-    ("registrar", "target", "factory"),
+    ("kernel_type", "factory"),
     [
-        (p2g_cuda.register_p2g_inline, p2g_cuda._P2G_INLINE_TARGET, "p2g_inline"),
-        (
-            p2g_cuda.register_p2g_v2_inline,
-            p2g_cuda._P2G_V2_INLINE_TARGET,
-            "p2g_v2_inline",
-        ),
-        (
-            p2g_cuda.register_p2g_v3_inline,
-            p2g_cuda._P2G_V3_INLINE_TARGET,
-            "p2g_v3_inline",
-        ),
-        (
-            p2g_cuda.register_p2g_v4_inline,
-            p2g_cuda._P2G_V4_INLINE_TARGET,
-            "p2g_v4_inline",
-        ),
+        (p2g_cuda.CudaV1P2G, "p2g_inline"),
+        (p2g_cuda.CudaV2P2G, "p2g_v2_inline"),
+        (p2g_cuda.CudaV3P2G, "p2g_v3_inline"),
+        (p2g_cuda.CudaV4P2G, "p2g_v4_inline"),
     ],
 )
-def test_public_registrar_imports_expected_capsule(monkeypatch, registrar, target, factory):
+def test_kernel_class_imports_expected_capsule(monkeypatch, kernel_type, factory):
     capsules = {
         "p2g_inline": object(),
         "p2g_v2_inline": object(),
@@ -67,11 +55,12 @@ def test_public_registrar_imports_expected_capsule(monkeypatch, registrar, targe
     )
     _isolate_registry(monkeypatch)
 
-    assert registrar()
+    kernel = kernel_type()
 
+    assert kernel.target in p2g_cuda._REGISTERED
     assert calls == [
         (
-            target,
+            kernel_type.target,
             capsules[factory],
             {"platform": "CUDA", "api_version": 1},
         )
@@ -95,7 +84,6 @@ def test_register_is_cached(monkeypatch):
     )
     _isolate_registry(monkeypatch)
 
-    name = "unit_test_cache_check"
-    assert p2g_cuda._register(name, "p2g_inline")
-    assert p2g_cuda._register(name, "p2g_inline")
+    p2g_cuda.CudaV1P2G()
+    p2g_cuda.CudaV1P2G()
     assert imported == [p2g_cuda._FFI_MODULE]

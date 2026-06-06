@@ -17,10 +17,10 @@ from mpm_jax.backends import (
     JaxBackend,
 )
 from mpm_jax.cuda.p2g_cuda import (
-    register_p2g_inline,
-    register_p2g_v2_inline,
-    register_p2g_v3_inline,
-    register_p2g_v4_inline,
+    CudaV1P2G,
+    CudaV2P2G,
+    CudaV3P2G,
+    CudaV4P2G,
 )
 from mpm_jax.types import MPMState, MPMParams
 
@@ -42,11 +42,14 @@ def _has_cuda() -> bool:
         return False
 
 
-def _require_cuda_kernels(*registrars):
+def _require_cuda_kernels(*kernel_types):
     if not _has_cuda():
         pytest.skip("CUDA P2G kernels require a GPU backend")
-    if not all(register() for register in registrars):
-        pytest.skip("CUDA P2G kernels not built")
+    try:
+        for kernel_type in kernel_types:
+            kernel_type()
+    except ImportError as exc:
+        pytest.skip(f"CUDA P2G kernels not built: {exc}")
 
 
 def _cutile_available() -> bool:
@@ -101,10 +104,10 @@ def _p2g_output(backend, params, state, stress):
 
 def test_cuda_p2g_variants_match_jax_scan():
     _require_cuda_kernels(
-        register_p2g_inline,
-        register_p2g_v2_inline,
-        register_p2g_v3_inline,
-        register_p2g_v4_inline,
+        CudaV1P2G,
+        CudaV2P2G,
+        CudaV3P2G,
+        CudaV4P2G,
     )
     params, state, stress = _inputs()
     ref_mv, ref_m = _p2g_output(JaxBackend(), params, state, stress)
@@ -128,7 +131,7 @@ def test_cuda_p2g_variants_match_jax_scan():
 
 
 def test_cuda_v4_supercell_widths_match_jax_scan():
-    _require_cuda_kernels(register_p2g_v4_inline)
+    _require_cuda_kernels(CudaV4P2G)
     # cuda_v4 is templated + dispatched over SUPPORTED_SC; every compiled
     # super-cell width must scatter identically to the JAX baseline.
     from mpm_jax.backends import CudaV4Backend
