@@ -6,7 +6,6 @@
 defaults:
   - config
   - _self_
-  - sim: benchmark
 
 hydra:
   mode: MULTIRUN

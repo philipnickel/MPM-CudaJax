@@ -1,6 +1,6 @@
 defaults:
   - material: jelly
-  - sim: default
+  - sim: benchmark
   - backend: jax
   - profile: none
   - _self_
