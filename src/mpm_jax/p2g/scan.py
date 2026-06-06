@@ -30,8 +30,8 @@ def _one_offset_contrib(
         x, offset_int, inv_dx, dx, num_grids
     )
 
-    stress_term = jnp.einsum("nij,nj->ni", stress, dweight)
-    affine = jnp.einsum("nij,nj->ni", C, dpos)
+    stress_term = jnp.matvec(stress, dweight)
+    affine = jnp.matvec(C, dpos)
     mv = -dt * vol * stress_term + p_mass * weight[:, None] * (v + affine)
     mass = weight * p_mass
 
