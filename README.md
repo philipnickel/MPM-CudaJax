@@ -9,8 +9,7 @@ The solver is **constructed from config** by Hydra-instantiating `cfg.solver`
 into a `RuntimeConfig` and passing it to `MPMSolver`: the `backend` config
 targets the backend class directly, and `MPMSolver` builds params, particles,
 boundaries, and initial state. `solver.step()` advances one frame;
-`solver.solve(num_frames, on_frame=...)` runs the full simulation with an
-optional IO callback.
+`solver.run(capture_frames=...)` drives the configured frame loop.
 
 ## Quickstart
 

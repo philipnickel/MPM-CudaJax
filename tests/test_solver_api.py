@@ -58,11 +58,25 @@ def test_step_returns_and_mutates_state():
     assert not jnp.array_equal(s.state.x, x0)
 
 
-def test_solve_equals_n_steps_and_fires_hook():
-    s = _make_solver()
-    calls = []
-    s.solve(3, on_frame=lambda i, _state: calls.append(i))
-    assert calls == [0, 1, 2]
+def test_run_uses_configured_frames_and_can_capture_initial_states():
+    s = _make_solver(steps_per_frame=1)
+    s.num_frames = 2
+
+    frames, elapsed = s.run(capture_frames=True, progress=False)
+
+    assert len(frames) == 2
+    assert frames[0].shape == (64, 3)
+    assert elapsed >= 0
+
+
+def test_run_without_capture_returns_no_frames():
+    s = _make_solver(steps_per_frame=1)
+    s.num_frames = 2
+
+    frames, elapsed = s.run(capture_frames=False, progress=False)
+
+    assert frames == []
+    assert elapsed >= 0
 
 
 def test_reset_restores_state():

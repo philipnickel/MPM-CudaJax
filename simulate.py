@@ -1,60 +1,16 @@
 import json
 import logging
 import os
-import time
 
 import hydra
-import jax
-import numpy as np
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
-from tqdm import tqdm
 
 import mpm_jax.backends  # noqa: F401 - registers Hydra backend config choices
 from mpm_jax.rendering import render_warp_opengl
 from mpm_jax.solver import MPMSolver
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Unified run path
-# ---------------------------------------------------------------------------
-
-
-def _run_solver(solver, *, render_enabled):
-    """Drive an MPMSolver, capturing frames only when rendering is enabled."""
-    solver.step()
-    jax.block_until_ready(solver.state.x)
-    solver.reset_to_initial()
-
-    frames = []
-
-    t0 = time.perf_counter()
-    for _ in tqdm(range(solver.num_frames), desc="simulate"):
-        if render_enabled:
-            frames.append(np.array(solver.state.x))
-        solver.step()
-        if render_enabled:
-            jax.block_until_ready(solver.state.x)
-    if not render_enabled:
-        jax.block_until_ready(solver.state.x)
-    elapsed = time.perf_counter() - t0
-
-    return frames, elapsed
-
-
-def run(cfg: DictConfig):
-    """Instantiate the runtime config, build the solver, and drive it.
-
-    Returns (solver, frames, elapsed_s).
-    """
-    solver = MPMSolver(hydra.utils.instantiate(cfg.solver))
-    frames, elapsed = _run_solver(
-        solver,
-        render_enabled=bool(cfg.render.get("enabled", True)),
-    )
-    return solver, frames, elapsed
 
 
 # ---------------------------------------------------------------------------
@@ -67,7 +23,8 @@ def main(cfg: DictConfig):
     run_dir = os.path.abspath(HydraConfig.get().runtime.output_dir)
     render_enabled = bool(cfg.render.get("enabled", True))
 
-    solver, frames, elapsed = run(cfg)
+    solver = MPMSolver(hydra.utils.instantiate(cfg.solver))
+    frames, elapsed = solver.run(capture_frames=render_enabled)
     metrics = solver.metrics(elapsed)
     metrics["render_enabled"] = render_enabled
 

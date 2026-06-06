@@ -1,4 +1,5 @@
 import copy
+import time
 from dataclasses import dataclass
 from functools import partial
 from typing import Any
@@ -8,6 +9,7 @@ import jax.numpy as jnp
 import numpy as np
 from hydra.utils import instantiate
 from omegaconf import DictConfig
+from tqdm import tqdm
 
 from mpm_jax.grid import build_grid_x, grid_update
 from mpm_jax.types import MPMParams, MPMState
@@ -181,12 +183,27 @@ class MPMSolver:
         self.state = self.stepped().state
         return self.state
 
-    def solve(self, num_frames, on_frame=None):
-        for f in range(num_frames):
+    def run(self, *, capture_frames, progress=True):
+        self.step()
+        jax.block_until_ready(self.state.x)
+        self.reset_to_initial()
+
+        frames = []
+        frame_iter = range(self.num_frames)
+        if progress:
+            frame_iter = tqdm(frame_iter, desc="simulate")
+
+        t0 = time.perf_counter()
+        for _ in frame_iter:
+            if capture_frames:
+                frames.append(np.array(self.state.x))
             self.step()
-            if on_frame is not None:
-                on_frame(f, self.state)
-        return self.state
+            if capture_frames:
+                jax.block_until_ready(self.state.x)
+        if not capture_frames:
+            jax.block_until_ready(self.state.x)
+
+        return frames, time.perf_counter() - t0
 
     def metrics(self, elapsed_s):
         elapsed_s = float(elapsed_s)
