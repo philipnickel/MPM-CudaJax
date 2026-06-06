@@ -152,17 +152,15 @@ def _p2g_atomic_tile_kernel(
 ):
     SC = ARENA_SC
     DIM = ARENA_DIM
-    Gs = G // SC
     si = ct.bid(0)
     sj = ct.bid(1)
     sk = ct.bid(2)
-    super_id = si * (Gs * Gs) + sj * Gs + sk
     tile_i = si * SC - 1
     tile_j = sj * SC - 1
     tile_k = sk * SC - 1
 
-    p_start = ct.gather(cell_start, super_id)
-    p_end = ct.gather(cell_start, super_id + 1)
+    p_start = ct.gather(cell_start, (si, sj, sk, 0))
+    p_end = ct.gather(cell_start, (si, sj, sk, 1))
     p_lane = ct.arange(particle_tile, dtype=ct.int32)
 
     node_lane = ct.arange(node_tile, dtype=ct.int32)
