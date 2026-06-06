@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import hydra
 from hydra import compose, initialize_config_dir
@@ -38,8 +39,13 @@ def test_each_backend_config_instantiates_expected_backend_name(monkeypatch):
     monkeypatch.setattr("mpm_jax.cuda.p2g_cuda.CudaV2P2G.register", lambda self: True)
     monkeypatch.setattr("mpm_jax.cuda.p2g_cuda.CudaV3P2G.register", lambda self: True)
     monkeypatch.setattr("mpm_jax.cuda.p2g_cuda.CudaV4P2G.register", lambda self: True)
-    monkeypatch.setattr("mpm_jax.backends.cutile.load_cutile_kernels", lambda: None)
-    monkeypatch.setattr("mpm_jax.backends.cutile.arena_super_cell", lambda: 2)
+    monkeypatch.setattr(
+        "mpm_jax.backends.cutile._cutile_module",
+        lambda: SimpleNamespace(
+            ARENA_SC=2,
+            cutile_p2g_atomic_tile=lambda *args, **kwargs: None,
+        ),
+    )
 
     for choice in EXPECTED_BACKENDS:
         cfg = _registered_backend_config(choice)

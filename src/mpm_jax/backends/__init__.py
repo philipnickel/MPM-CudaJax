@@ -12,7 +12,7 @@ from mpm_jax.backends.cuda import (
     CudaV3Backend,
     CudaV4Backend,
 )
-from mpm_jax.backends.cutile import CutileBackend, arena_super_cell, load_cutile_kernels
+from mpm_jax.backends.cutile import CutileBackend
 from mpm_jax.backends.jax import JaxBackend
 
 store.add_to_hydra_store(overwrite_ok=True)
@@ -47,8 +47,6 @@ __all__ = [
     "CutileBackend",
     "JaxBackend",
     "PreparedSubstep",
-    "arena_super_cell",
     "backend_choices",
     "backend_config",
-    "load_cutile_kernels",
 ]

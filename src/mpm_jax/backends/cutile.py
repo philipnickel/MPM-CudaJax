@@ -5,16 +5,10 @@ from hydra_zen import store
 from mpm_jax.backends.common import BaseBackend, supercell_order
 
 
-def load_cutile_kernels():
-    import mpm_jax.cutile_p2g  # noqa: F401
+def _cutile_module():
+    from mpm_jax import cutile_p2g
 
-    return None
-
-
-def arena_super_cell():
-    from mpm_jax.cutile_p2g import ARENA_SC
-
-    return ARENA_SC
+    return cutile_p2g
 
 
 @store(name="cutile", group="backend", num_grids="${sim.num_grids}")
@@ -24,16 +18,16 @@ class CutileBackend(BaseBackend):
     name = "cutile"
 
     def __init__(self, num_grids=None):
-        load_cutile_kernels()
+        cutile = _cutile_module()
+        self.super_cell = cutile.ARENA_SC
+        self.kernel = cutile.cutile_p2g_atomic_tile
         super().__init__(num_grids=num_grids)
 
     def prepare(self, params, state, stress):
-        return supercell_order(params, state, stress, arena_super_cell())
+        return supercell_order(params, state, stress, self.super_cell)
 
     def p2g(self, params, prepared):
-        from mpm_jax.cutile_p2g import cutile_p2g_atomic_tile
-
-        return cutile_p2g_atomic_tile(
+        return self.kernel(
             prepared.x,
             prepared.v,
             prepared.C,
@@ -48,4 +42,4 @@ class CutileBackend(BaseBackend):
         )
 
     def grid_divisor(self):
-        return arena_super_cell()
+        return self.super_cell
