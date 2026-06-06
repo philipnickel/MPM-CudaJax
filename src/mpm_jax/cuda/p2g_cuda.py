@@ -83,14 +83,6 @@ def register_p2g_v4_inline():
     return _register(_P2G_V4_INLINE_TARGET, "p2g_v4_inline")
 
 
-def _p2g_output_shapes(num_grids):
-    grid_nodes = num_grids**3
-    return (
-        jax.ShapeDtypeStruct((grid_nodes, 3), jnp.float32),
-        jax.ShapeDtypeStruct((grid_nodes,), jnp.float32),
-    )
-
-
 def _p2g_ffi_call(
     target_name,
     x,
@@ -107,6 +99,7 @@ def _p2g_ffi_call(
     extra_attrs=None,
 ):
     n_particles = x.shape[0]
+    grid_nodes = num_grids**3
     attrs = {
         "G": np.int32(num_grids),
         "dt": np.float32(dt),
@@ -119,7 +112,10 @@ def _p2g_ffi_call(
 
     return jax.ffi.ffi_call(
         target_name,
-        _p2g_output_shapes(num_grids),
+        (
+            jax.ShapeDtypeStruct((grid_nodes, 3), jnp.float32),
+            jax.ShapeDtypeStruct((grid_nodes,), jnp.float32),
+        ),
         vmap_method="broadcast_all",
     )(
         x,

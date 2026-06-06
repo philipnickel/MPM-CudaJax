@@ -35,7 +35,7 @@ class BaseBackend:
             )
 
     def prepare(self, params, state, stress):
-        return identity_order(state, stress)
+        return PreparedSubstep(state.x, state.v, state.C, state.F, stress)
 
     def p2g(self, params, prepared):
         raise NotImplementedError
@@ -52,10 +52,6 @@ class BaseBackend:
         return None
 
 
-def identity_order(state, stress):
-    return PreparedSubstep(state.x, state.v, state.C, state.F, stress)
-
-
 def morton_order(params, state, stress):
     order = morton_argsort(state.x, params.inv_dx, params.num_grids)
     return PreparedSubstep(
@@ -63,18 +59,16 @@ def morton_order(params, state, stress):
     )
 
 
-def supercell_boundaries(params, super_cell_width):
-    grids_per_super_cell = params.num_grids // super_cell_width
-    return jnp.arange(grids_per_super_cell**3 + 1, dtype=jnp.int32)
-
-
 def supercell_order(params, state, stress, super_cell_width):
     super_id = home_super_cell_id(
         state.x, params.inv_dx, params.num_grids, super_cell_width
     )
     order = jnp.argsort(super_id)
+    grids_per_super_cell = params.num_grids // super_cell_width
+    boundaries = jnp.arange(grids_per_super_cell**3 + 1, dtype=jnp.int32)
     cell_start = jnp.searchsorted(
-        super_id[order], supercell_boundaries(params, super_cell_width)
+        super_id[order],
+        boundaries,
     ).astype(jnp.int32)
     return PreparedSubstep(
         state.x[order],
