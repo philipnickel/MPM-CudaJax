@@ -24,16 +24,14 @@ def _vector_columns(tile, particle_tile):
 
 def _matrix_columns(tile, particle_tile):
     columns = ()
-    for row in ct.static_iter(range(3)):
-        for col in ct.static_iter(range(3)):
-            column = ct.extract(tile, (0, row, col), shape=(particle_tile, 1, 1))
-            columns += (ct.reshape(column, (particle_tile, 1)),)
+    for column_id in ct.static_iter(range(9)):
+        column = ct.extract(tile, (0, column_id), shape=(particle_tile, 1))
+        columns += (column,)
     return columns
 
 
 def _load_particle_columns(x, v, C, stress, p, active, inv_dx, particle_tile):
     active_v = ct.reshape(active, (particle_tile, 1))
-    active_m = ct.reshape(active, (particle_tile, 1, 1))
 
     x_p = ct.load_advanced_indexing(
         x,
@@ -47,19 +45,19 @@ def _load_particle_columns(x, v, C, stress, p, active, inv_dx, particle_tile):
     )
     C_p = ct.load_advanced_indexing(
         C,
-        (p, ct.Slice(0, 4), ct.Slice(0, 4)),
+        (p, ct.Slice(0, 16)),
         padding_mode=ct.PaddingMode.ZERO,
     )
     stress_p = ct.load_advanced_indexing(
         stress,
-        (p, ct.Slice(0, 4), ct.Slice(0, 4)),
+        (p, ct.Slice(0, 16)),
         padding_mode=ct.PaddingMode.ZERO,
     )
 
     x_p = ct.where(active_v, x_p, 0.0) * inv_dx
     v_p = ct.where(active_v, v_p, 0.0)
-    C_p = ct.where(active_m, C_p, 0.0)
-    stress_p = ct.where(active_m, stress_p, 0.0)
+    C_p = ct.where(active_v, C_p, 0.0)
+    stress_p = ct.where(active_v, stress_p, 0.0)
 
     b = ct.astype(ct.floor(x_p - 0.5), ct.int32)
     fx = x_p - ct.astype(b, ct.float32)
@@ -221,6 +219,9 @@ def cutile_p2g_v2(
     g3 = g**3
     gp = g + 2
     gs = g // ARENA_SC
+    n = int(v.shape[0])
+    C = C.reshape((n, 9))
+    stress = stress.reshape((n, 9))
 
     grid = jnp.zeros((gp, gp, gp, 4), dtype=jnp.float32)
 
