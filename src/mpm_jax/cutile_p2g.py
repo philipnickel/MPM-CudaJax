@@ -291,8 +291,7 @@ def _p2g_atomic_tile_kernel(
     C,
     stress,
     cell_start,
-    grid_mv,
-    grid_m,
+    grid,
     G: ct.Constant[int],
     dt: ct.Constant[float],
     vol: ct.Constant[float],
@@ -347,12 +346,13 @@ def _p2g_atomic_tile_kernel(
         accm = accm + ct.sum(ct.where(m, mass, 0.0), axis=0)
         chunk_start += particle_tile
 
-    view_mv = grid_mv.tiled_view((DIM, DIM, DIM, 1), traversal_steps=(SC, SC, SC, 1))
-    view_m = grid_m.tiled_view((DIM, DIM, DIM), traversal_steps=(SC, SC, SC))
-    view_mv.atomic_store_add((si, sj, sk, 0), ct.reshape(acc0, (DIM, DIM, DIM, 1)))
-    view_mv.atomic_store_add((si, sj, sk, 1), ct.reshape(acc1, (DIM, DIM, DIM, 1)))
-    view_mv.atomic_store_add((si, sj, sk, 2), ct.reshape(acc2, (DIM, DIM, DIM, 1)))
-    view_m.atomic_store_add((si, sj, sk), ct.reshape(accm, (DIM, DIM, DIM)))
+    arena0 = ct.reshape(acc0, (DIM, DIM, DIM, 1))
+    arena1 = ct.reshape(acc1, (DIM, DIM, DIM, 1))
+    arena2 = ct.reshape(acc2, (DIM, DIM, DIM, 1))
+    arenam = ct.reshape(accm, (DIM, DIM, DIM, 1))
+    arena = ct.cat((ct.cat((arena0, arena1), 3), ct.cat((arena2, arenam), 3)), 3)
+    view = grid.tiled_view((DIM, DIM, DIM, 4), traversal_steps=(SC, SC, SC, 4))
+    view.atomic_store_add((si, sj, sk, 0), arena)
 
 
 def cutile_p2g_v2(
@@ -374,10 +374,9 @@ def cutile_p2g_v2(
     gp = g + 2  # 1-node halo on each side
     gs = g // ARENA_SC
 
-    grid_mv = jnp.zeros((gp, gp, gp, 3), dtype=jnp.float32)
-    grid_m = jnp.zeros((gp, gp, gp), dtype=jnp.float32)
+    grid = jnp.zeros((gp, gp, gp, 4), dtype=jnp.float32)
 
-    grid_mv, grid_m = cutile_call(
+    grid = cutile_call(
         (gs, gs, gs),
         _p2g_atomic_tile_kernel,
         (
@@ -386,8 +385,7 @@ def cutile_p2g_v2(
             C,
             stress,
             cell_start,
-            InputOutput(grid_mv),
-            InputOutput(grid_m),
+            InputOutput(grid),
             g,
             float(dt),
             float(vol),
@@ -399,8 +397,9 @@ def cutile_p2g_v2(
         ),
     )
     # Strip the halo -> real (G**3, 3) / (G**3,) grids.
-    grid_mv = grid_mv[1 : g + 1, 1 : g + 1, 1 : g + 1, :].reshape((g3, 3))
-    grid_m = grid_m[1 : g + 1, 1 : g + 1, 1 : g + 1].reshape((g3,))
+    grid = grid[1 : g + 1, 1 : g + 1, 1 : g + 1, :]
+    grid_mv = grid[..., :3].reshape((g3, 3))
+    grid_m = grid[..., 3].reshape((g3,))
     return grid_mv, grid_m
 
 
