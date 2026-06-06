@@ -10,17 +10,14 @@ Override the CUDA architecture at build time with ``MPM_CUDA_ARCH=sm_86``
 """
 
 import importlib
-import logging
 from threading import Lock
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 
-logger = logging.getLogger(__name__)
-
 _FFI_MODULE = "mpm_jax.cuda._p2g_ffi"
-_REGISTERED: dict[str, bool] = {}
+_REGISTERED: set[str] = set()
 _REGISTER_LOCK = Lock()
 
 _P2G_INLINE_TARGET = "p2g_inline_cuda"
@@ -32,39 +29,18 @@ _P2G_V4_INLINE_TARGET = "p2g_v4_inline_cuda"
 def _register(name: str, capsule_factory: str) -> bool:
     """Import the native binding module and register one FFI target."""
     with _REGISTER_LOCK:
-        if name in _REGISTERED:
-            return _REGISTERED[name]
-
-        try:
+        if name not in _REGISTERED:
             ffi_module = importlib.import_module(_FFI_MODULE)
             capsule = getattr(ffi_module, capsule_factory)()
-        except ImportError:
-            logger.warning(
-                "CUDA FFI extension %s is unavailable. Run "
-                "`pixi install` in an environment where nvcc is on PATH.",
-                _FFI_MODULE,
-            )
-            _REGISTERED[name] = False
-            return False
-        except Exception as e:
-            logger.error("Failed to load CUDA FFI target '%s': %s", name, e)
-            _REGISTERED[name] = False
-            return False
-
-        try:
             jax.ffi.register_ffi_target(
                 name,
                 capsule,
                 platform="CUDA",
                 api_version=1,
             )
-            _REGISTERED[name] = True
-            logger.info("Registered CUDA FFI target '%s'", name)
-            return True
-        except Exception as e:
-            logger.error("Failed to register CUDA FFI target '%s': %s", name, e)
-            _REGISTERED[name] = False
-            return False
+            _REGISTERED.add(name)
+
+        return True
 
 
 def register_p2g_inline():

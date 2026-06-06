@@ -6,19 +6,18 @@ from mpm_jax.cuda import p2g_cuda
 
 
 def _isolate_registry(monkeypatch):
-    monkeypatch.setattr(p2g_cuda, "_REGISTERED", {})
+    monkeypatch.setattr(p2g_cuda, "_REGISTERED", set())
 
 
-def test_register_missing_extension_returns_false(monkeypatch):
-    """When the native extension is absent we should fail gracefully."""
-
+def test_register_missing_extension_raises(monkeypatch):
     def fake_import_module(name):
         raise ImportError(name)
 
     monkeypatch.setattr(p2g_cuda.importlib, "import_module", fake_import_module)
     _isolate_registry(monkeypatch)
 
-    assert p2g_cuda._register("unit_test_missing", "missing_factory") is False
+    with pytest.raises(ImportError):
+        p2g_cuda._register("unit_test_missing", "missing_factory")
 
 
 @pytest.mark.parametrize(
