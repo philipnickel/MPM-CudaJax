@@ -24,11 +24,10 @@ from mpm_jax.p2g_scan import OFFSET_27
 
 
 def _weights_one_stencil(x_p, offset_int, inv_dx, dx, num_grids):
-    """B-spline weight / dweight / dpos / flat-index for one particle, one node.
+    """B-spline weight / dpos / flat-index for one particle, one node.
 
-    Identical math to ``p2g_scan._single_particle_one_stencil`` (weights part)
-    and ``weights._single_particle_weights`` (one offset slice), so the gathered
-    APIC reconstruction matches a dense (N, 27, *) vmap gather exactly.
+    Identical weight math to ``p2g_scan._single_particle_one_stencil``, so the
+    gathered APIC reconstruction matches a dense (N, 27, *) vmap gather exactly.
     """
     px = x_p * inv_dx
     base = jnp.floor(px - 0.5).astype(jnp.int32)  # (3,)
@@ -41,32 +40,17 @@ def _weights_one_stencil(x_p, offset_int, inv_dx, dx, num_grids):
             0.5 * (fx - 0.5) ** 2,
         ]
     )  # (3, 3): [offset_value, spatial_axis]
-    dw_table = jnp.stack(
-        [
-            fx - 1.5,
-            -2.0 * (fx - 1.0),
-            fx - 0.5,
-        ]
-    )  # (3, 3)
 
     ix, iy, iz = offset_int[0], offset_int[1], offset_int[2]
     wx, wy, wz = w_table[ix, 0], w_table[iy, 1], w_table[iz, 2]
-    dwx, dwy, dwz = dw_table[ix, 0], dw_table[iy, 1], dw_table[iz, 2]
 
     weight = wx * wy * wz  # scalar
-    dweight = inv_dx * jnp.stack(
-        [  # (3,)
-            dwx * wy * wz,
-            wx * dwy * wz,
-            wx * wy * dwz,
-        ]
-    )
     dpos = (offset_int.astype(jnp.float32) - fx) * dx  # (3,)
 
     idx_3d = base + offset_int  # (3,)
     idx = idx_3d[0] * num_grids * num_grids + idx_3d[1] * num_grids + idx_3d[2]
     idx = jnp.clip(idx, 0, num_grids**3 - 1)
-    return idx, weight, dweight, dpos
+    return idx, weight, dpos
 
 
 def _g2p_scan_mls(grid_v, x, F, dt, inv_dx, dx, num_grids, clip_bound):
@@ -85,8 +69,7 @@ def _g2p_scan_mls(grid_v, x, F, dt, inv_dx, dx, num_grids, clip_bound):
 
     def scan_body(carry, offset_int):
         v_acc, C_acc = carry
-        # dweight is unused here (XLA dead-code-eliminates it) -> no grad_v build.
-        idx, weight, _dweight, dpos = per_particle(x, offset_int, inv_dx, dx, num_grids)
+        idx, weight, dpos = per_particle(x, offset_int, inv_dx, dx, num_grids)
         gv = grid_v[idx]  # (N, 3) gather one node
         v_acc = v_acc + weight[:, None] * gv  # (N, 3)
         C_acc = C_acc + weight[:, None, None] * (
