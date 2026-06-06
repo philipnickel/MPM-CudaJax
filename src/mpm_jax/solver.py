@@ -1,4 +1,3 @@
-import copy
 import time
 from dataclasses import dataclass
 from functools import partial
@@ -171,16 +170,9 @@ class MPMSolver:
             self.steps_per_frame,
         )
 
-    def stepped(self):
-        """Return a new solver with state advanced one frame (steps_per_frame)."""
-        new_state = self._frame(self.state)
-        new = copy.copy(self)  # shallow: shares _frame + backend + closures
-        new.state = new_state
-        return new
-
     def step(self):
         """Advance this solver in place and return the new state."""
-        self.state = self.stepped().state
+        self.state = self._frame(self.state)
         return self.state
 
     def run(self, *, capture_frames, progress=True):

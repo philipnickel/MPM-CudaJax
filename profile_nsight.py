@@ -149,19 +149,16 @@ def _build_p2g_stage(cfg: DictConfig):
     """Isolate the P2G as a profiled callable, reusing the constructed solver.
 
     Builds the solver from the Hydra-instantiated runtime config, then
-    runs just pre -> elasticity -> backend.prepare (sort) ->
-    backend.p2g (scatter) on the solver's own params/state/fns — no duplicated
-    construction.
+    runs just elasticity -> backend.prepare (sort) -> backend.p2g (scatter)
+    on the solver's own params/state/fns — no duplicated construction.
     """
     solver = MPMSolver(hydra.utils.instantiate(cfg.solver))
     params, backend = solver.params, solver.backend
-    pre_fn, elasticity_fn = solver.pre_fn, solver.elasticity_fn
+    elasticity_fn = solver.elasticity_fn
     state = solver.state
 
     @jax.jit
     def jit_p2g_stage(state):
-        x, v = pre_fn(state.x, state.v, 0.0)
-        state = state._replace(x=x, v=v)
         stress = elasticity_fn(state.F)
         prepared = backend.prepare(params, state, stress)
         return backend.p2g(params, prepared)

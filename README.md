@@ -132,7 +132,11 @@ Three embarrassingly parallel phases per timestep:
 
 The solver is class-based:
 
-- **`MPMSolver`** is a plain Python class. Particle/grid state is mutated in place by the driver API; the backend, constitutive closure, sticky-floor mask, and the compiled `_frame` are fixed for the solver's lifetime. `stepped()` returns a new solver with advanced state (shallow copy + new state); `step()` is the mutating driver and advances one frame by running `_frame(self.state)`. The frame runs `steps_per_frame` substeps as a single XLA program via `lax.fori_loop`.
+- **`MPMSolver`** is a plain Python class. Particle/grid state is mutated in
+  place by the driver API; the backend, constitutive closure, sticky-floor mask,
+  and the compiled `_frame` are fixed for the solver's lifetime. `step()`
+  advances one frame by running `_frame(self.state)`. The frame runs
+  `steps_per_frame` substeps as a single XLA program via `lax.fori_loop`.
 
 Construction (`RuntimeConfig` + `MPMSolver` in `src/mpm_jax/solver.py`):
 - Hydra instantiates `cfg.solver` into `RuntimeConfig`; backend choices are Python-backed hydra-zen registrations in `src/mpm_jax/backends/`, with each backend passing `num_grids` for validation. `simulate.py` / `profile_nsight.py` import `mpm_jax.backends` before composition, then call `MPMSolver(hydra.utils.instantiate(cfg.solver))`.

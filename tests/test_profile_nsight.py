@@ -57,6 +57,17 @@ def test_nsight_profile_config_composes():
     assert profile_nsight._nsight_configs(cfg) == [("jax", 8, 16, 1)]
 
 
+def test_p2g_stage_reuses_solver_state_without_extra_particle_prepass():
+    cfg = _compose_config()
+
+    jit_stage, state, backend_name = profile_nsight._build_p2g_stage(cfg)
+    grid_mv, grid_m = jit_stage(state)
+
+    assert backend_name == "jax"
+    assert grid_mv.shape == (16**3, 3)
+    assert grid_m.shape == (16**3,)
+
+
 def test_sweep_backend_choices_are_hydra_choices():
     cfg = _compose_config()
     cfg.nsight.sweep = {
@@ -115,10 +126,7 @@ def test_merge_variant_cfg_loads_registered_backend_config_into_solver_reference
     resolved_solver_backend = OmegaConf.to_container(
         variant.solver.backend, resolve=True
     )
-    assert (
-        resolved_solver_backend["_target_"]
-        == "mpm_jax.backends.cuda.CudaV3Backend"
-    )
+    assert resolved_solver_backend["_target_"] == "mpm_jax.backends.cuda.CudaV3Backend"
     assert resolved_solver_backend["num_grids"] == 40
 
 

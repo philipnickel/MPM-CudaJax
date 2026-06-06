@@ -87,19 +87,6 @@ def test_reset_restores_state():
     assert s.state is init
 
 
-def test_stepped_returns_new_solver():
-    s = _make_solver()
-    out = s.stepped()
-    assert isinstance(out, MPMSolver)
-    assert out is not s
-    # shallow copy shares the static parts; only state is replaced
-    assert out.backend is s.backend
-    assert out._frame is s._frame
-    assert out.state is not s.state
-    assert out.state.x.shape == s.state.x.shape
-    assert not jnp.array_equal(out.state.x, s.state.x)
-
-
 def test_solver_exposes_backend_and_constitutive():
     s = _make_solver()
     assert s.backend.name == "jax"
