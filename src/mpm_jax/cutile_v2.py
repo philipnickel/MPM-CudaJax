@@ -61,8 +61,8 @@ def _p2g_atomic_tile_kernel(
     tile_j = sj * SC - 1
     tile_k = sk * SC - 1
 
-    p_start = ct.gather(cell_bounds, (si, sj, sk, 0), check_bounds=False)
-    p_end = ct.gather(cell_bounds, (si, sj, sk, 1), check_bounds=False)
+    p_start = ct.gather(cell_bounds, (si, sj, sk, 0))
+    p_end = ct.gather(cell_bounds, (si, sj, sk, 1))
     p_lane = ct.arange(particle_tile, dtype=ct.int32)
 
     node_lane = ct.arange(node_tile, dtype=ct.int32)
