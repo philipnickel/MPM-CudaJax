@@ -42,7 +42,7 @@ def _p2g_atomic_tile_kernel(
     v,
     C,
     stress,
-    cell_start,
+    cell_bounds,
     grid,
     G: ct.Constant[int],
     dt: ct.Constant[float],
@@ -62,8 +62,8 @@ def _p2g_atomic_tile_kernel(
     tile_j = sj * SC - 1
     tile_k = sk * SC - 1
 
-    p_start = ct.gather(cell_start, (si, sj, sk, 0))
-    p_end = ct.gather(cell_start, (si, sj, sk, 1))
+    p_start = ct.gather(cell_bounds, (si, sj, sk, 0))
+    p_end = ct.gather(cell_bounds, (si, sj, sk, 1))
     p_lane = ct.arange(particle_tile, dtype=ct.int32)
 
     node_lane = ct.arange(node_tile, dtype=ct.int32)
@@ -107,7 +107,7 @@ def cutile_p2g_v2(
     v,
     C,
     stress,
-    cell_start,
+    cell_bounds,
     num_grids,
     dt,
     vol,
@@ -134,7 +134,7 @@ def cutile_p2g_v2(
             v,
             C,
             stress,
-            cell_start,
+            cell_bounds,
             InputOutput(grid),
             g,
             float(dt),
