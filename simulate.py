@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import time
 
@@ -12,6 +13,8 @@ from tqdm import tqdm
 import mpm_jax.backends  # noqa: F401 - registers Hydra backend config choices
 from mpm_jax.rendering import render_warp_opengl
 from mpm_jax.solver import MPMSolver
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -68,17 +71,23 @@ def main(cfg: DictConfig):
     metrics = solver.metrics(elapsed)
     metrics["render_enabled"] = render_enabled
 
-    # Print timing summary
     backend_label = "solver-loop"
-    print(
-        f"\n{backend_label} ({metrics['kernel']}): {metrics['total_steps']} steps in {elapsed:.2f}s "
-        f"({metrics['steps_per_sec']:.1f} steps/s, {metrics['ms_per_step']:.2f} ms/step)"
+    logger.info(
+        "%s (%s): %d steps in %.2fs (%.1f steps/s, %.2f ms/step)",
+        backend_label,
+        metrics["kernel"],
+        metrics["total_steps"],
+        elapsed,
+        metrics["steps_per_sec"],
+        metrics["ms_per_step"],
     )
 
-    print(
-        f"\nWall-clock timing: {metrics['ms_per_frame']:.3f} ms/frame "
-        f"({solver.steps_per_frame} substeps each, n={solver.num_frames}, "
-        f"{metrics['particles_per_sec']:.3e} particles/s)"
+    logger.info(
+        "Wall-clock timing: %.3f ms/frame (%d substeps each, n=%d, %.3e particles/s)",
+        metrics["ms_per_frame"],
+        solver.steps_per_frame,
+        solver.num_frames,
+        metrics["particles_per_sec"],
     )
 
     metrics["render_path"] = None
@@ -87,7 +96,7 @@ def main(cfg: DictConfig):
         fps = int(render_cfg.get("fps", 30))
         radius = float(render_cfg.get("point_radius", 0.008))
         export_path = os.path.join(run_dir, "render.gif")
-        print(f"\nRendering with Warp OpenGL to {export_path}...")
+        logger.info("Rendering with Warp OpenGL to %s", export_path)
         render_warp_opengl(
             frames,
             export_path,
@@ -99,7 +108,7 @@ def main(cfg: DictConfig):
         )
         metrics["render_path"] = export_path
     elif not render_enabled:
-        print("\nRendering disabled.")
+        logger.info("Rendering disabled.")
 
     with open(os.path.join(run_dir, "results.json"), "w") as f:
         json.dump(metrics, f, indent=2)

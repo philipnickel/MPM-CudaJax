@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import itertools
 import json
+import logging
 import os
 import shlex
 import sys
@@ -21,6 +22,8 @@ from omegaconf import DictConfig, ListConfig, OmegaConf
 
 import mpm_jax.backends as backend_configs
 from mpm_jax.solver import MPMSolver
+
+logger = logging.getLogger(__name__)
 
 
 def _optional_module(name):
@@ -137,8 +140,7 @@ def _backend_choice_from_cfg(cfg: DictConfig):
 def _require_nsight():
     if nsight is None:
         raise RuntimeError(
-            "nsight-python is not installed. Run `pixi install` in the GPU "
-            "environment."
+            "nsight-python is not installed. Run `pixi install` in the GPU environment."
         )
     return nsight
 
@@ -304,9 +306,7 @@ def _nsight_configs(cfg: DictConfig):
         steps_per_frame = int(
             _variant_value(variant, "sim.steps_per_frame", base_steps)
         )
-        nsight_configs.append(
-            (backend_choice, n_particles, num_grids, steps_per_frame)
-        )
+        nsight_configs.append((backend_choice, n_particles, num_grids, steps_per_frame))
     return nsight_configs
 
 
@@ -662,15 +662,17 @@ def _nsight_plot_kwargs(cfg: DictConfig, run_dir: Path):
 
 def _write_results(results, run_dir: Path, write_json: bool):
     df = results.to_dataframe()
-    print("Nsight Python wrote raw and processed CSV files via output_csv=True.")
-    print(df)
+    logger.info(
+        "Nsight Python wrote raw and processed CSV files via output_csv=True.\n%s",
+        df,
+    )
 
     if write_json:
         out_json = run_dir / "nsight_results.json"
         out_json.write_text(
             json.dumps(json.loads(df.to_json(orient="records")), indent=2)
         )
-        print(f"Wrote {out_json}")
+        logger.info("Wrote %s", out_json)
 
 
 def _run_nsight_profile(profiled_func):
@@ -768,8 +770,7 @@ def main(cfg: DictConfig):
     if plot_kwargs is not None:
         profiled_variant = nsight.analyze.plot(**plot_kwargs)(profiled_variant)
 
-    print("Nsight profile config:")
-    print(OmegaConf.to_yaml(cfg.nsight))
+    logger.info("Nsight profile config:\n%s", OmegaConf.to_yaml(cfg.nsight))
     unexpected = set(cfg.nsight.keys()) - _SCRIPT_NSIGHT_KEYS
     if unexpected:
         keys = ", ".join(sorted(unexpected))
@@ -780,7 +781,7 @@ def main(cfg: DictConfig):
         results, run_dir, write_json=bool(cfg.nsight.get("write_json", True))
     )
     if plot_kwargs is not None:
-        print(f"Wrote {plot_kwargs['filename']}")
+        logger.info("Wrote %s", plot_kwargs["filename"])
 
 
 if __name__ == "__main__":
