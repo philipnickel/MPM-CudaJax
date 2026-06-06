@@ -37,71 +37,62 @@ ARENA_PARTICLE_TILE = 16  # particles per chunk (occupancy sweet spot)
 # ============================================================================
 # Shared tile-math helpers (metaprogramming: emit cuTile ops inline)
 # ============================================================================
-def _gather_particle(x, v, C, stress, p, active, inv_dx):
-    """Gather one chunk of P particles' state as (P,) tiles via real tile ops.
+def _vector_columns(tile, particle_tile):
+    columns = ()
+    for axis in ct.static_iter(range(3)):
+        column = ct.extract(tile, (0, axis), shape=(particle_tile, 1))
+        columns += (column,)
+    return columns
 
-    ``x``/``v`` are flat (3N,), ``C``/``stress`` flat (9N,). OOB/inactive lanes
-    return 0 (bounds-checked + ``mask``), matching a masked load. Returns 27 (P,)
-    tiles; the kernel reshapes them to (P,1) columns via ``_cols``.
-    """
-    px0 = ct.gather(x, p * 3 + 0, mask=active, padding_value=0.0) * inv_dx
-    px1 = ct.gather(x, p * 3 + 1, mask=active, padding_value=0.0) * inv_dx
-    px2 = ct.gather(x, p * 3 + 2, mask=active, padding_value=0.0) * inv_dx
-    b0 = ct.astype(ct.floor(px0 - 0.5), ct.int32)
-    b1 = ct.astype(ct.floor(px1 - 0.5), ct.int32)
-    b2 = ct.astype(ct.floor(px2 - 0.5), ct.int32)
-    fx0 = px0 - ct.astype(b0, ct.float32)
-    fx1 = px1 - ct.astype(b1, ct.float32)
-    fx2 = px2 - ct.astype(b2, ct.float32)
-    vp0 = ct.gather(v, p * 3 + 0, mask=active, padding_value=0.0)
-    vp1 = ct.gather(v, p * 3 + 1, mask=active, padding_value=0.0)
-    vp2 = ct.gather(v, p * 3 + 2, mask=active, padding_value=0.0)
-    C00 = ct.gather(C, p * 9 + 0, mask=active, padding_value=0.0)
-    C01 = ct.gather(C, p * 9 + 1, mask=active, padding_value=0.0)
-    C02 = ct.gather(C, p * 9 + 2, mask=active, padding_value=0.0)
-    C10 = ct.gather(C, p * 9 + 3, mask=active, padding_value=0.0)
-    C11 = ct.gather(C, p * 9 + 4, mask=active, padding_value=0.0)
-    C12 = ct.gather(C, p * 9 + 5, mask=active, padding_value=0.0)
-    C20 = ct.gather(C, p * 9 + 6, mask=active, padding_value=0.0)
-    C21 = ct.gather(C, p * 9 + 7, mask=active, padding_value=0.0)
-    C22 = ct.gather(C, p * 9 + 8, mask=active, padding_value=0.0)
-    s00 = ct.gather(stress, p * 9 + 0, mask=active, padding_value=0.0)
-    s01 = ct.gather(stress, p * 9 + 1, mask=active, padding_value=0.0)
-    s02 = ct.gather(stress, p * 9 + 2, mask=active, padding_value=0.0)
-    s10 = ct.gather(stress, p * 9 + 3, mask=active, padding_value=0.0)
-    s11 = ct.gather(stress, p * 9 + 4, mask=active, padding_value=0.0)
-    s12 = ct.gather(stress, p * 9 + 5, mask=active, padding_value=0.0)
-    s20 = ct.gather(stress, p * 9 + 6, mask=active, padding_value=0.0)
-    s21 = ct.gather(stress, p * 9 + 7, mask=active, padding_value=0.0)
-    s22 = ct.gather(stress, p * 9 + 8, mask=active, padding_value=0.0)
+
+def _matrix_columns(tile, particle_tile):
+    columns = ()
+    for row in ct.static_iter(range(3)):
+        for col in ct.static_iter(range(3)):
+            column = ct.extract(tile, (0, row, col), shape=(particle_tile, 1, 1))
+            columns += (ct.reshape(column, (particle_tile, 1)),)
+    return columns
+
+
+def _load_particle_columns(x, v, C, stress, p, active, inv_dx, particle_tile):
+    """Load one particle chunk using cuTile sparse-row + dense-slice loads."""
+    active_v = ct.reshape(active, (particle_tile, 1))
+    active_m = ct.reshape(active, (particle_tile, 1, 1))
+
+    x_p = ct.load_advanced_indexing(
+        x,
+        (p, ct.Slice(0, 4)),
+        padding_mode=ct.PaddingMode.ZERO,
+    )
+    v_p = ct.load_advanced_indexing(
+        v,
+        (p, ct.Slice(0, 4)),
+        padding_mode=ct.PaddingMode.ZERO,
+    )
+    C_p = ct.load_advanced_indexing(
+        C,
+        (p, ct.Slice(0, 4), ct.Slice(0, 4)),
+        padding_mode=ct.PaddingMode.ZERO,
+    )
+    stress_p = ct.load_advanced_indexing(
+        stress,
+        (p, ct.Slice(0, 4), ct.Slice(0, 4)),
+        padding_mode=ct.PaddingMode.ZERO,
+    )
+
+    x_p = ct.where(active_v, x_p, 0.0) * inv_dx
+    v_p = ct.where(active_v, v_p, 0.0)
+    C_p = ct.where(active_m, C_p, 0.0)
+    stress_p = ct.where(active_m, stress_p, 0.0)
+
+    b = ct.astype(ct.floor(x_p - 0.5), ct.int32)
+    fx = x_p - ct.astype(b, ct.float32)
     return (
-        b0,
-        b1,
-        b2,
-        fx0,
-        fx1,
-        fx2,
-        vp0,
-        vp1,
-        vp2,
-        C00,
-        C01,
-        C02,
-        C10,
-        C11,
-        C12,
-        C20,
-        C21,
-        C22,
-        s00,
-        s01,
-        s02,
-        s10,
-        s11,
-        s12,
-        s20,
-        s21,
-        s22,
+        *_vector_columns(b, particle_tile),
+        *_vector_columns(fx, particle_tile),
+        *_vector_columns(v_p, particle_tile),
+        *_matrix_columns(C_p, particle_tile),
+        *_matrix_columns(stress_p, particle_tile),
     )
 
 
@@ -192,72 +183,6 @@ def _node_contribution(pcols, node_rows, dt, vol, p_mass, inv_dx, dx):
     return mv0, mv1, mv2, mass, contributes
 
 
-def _cols(particle, tile):
-    """Reshape the 27 gathered (P,) tiles to (P,1) broadcast columns.
-
-    Explicit (no comprehension/generator — cuTile compiles the kernel AST and
-    rejects those).
-    """
-    (
-        b0,
-        b1,
-        b2,
-        fx0,
-        fx1,
-        fx2,
-        vp0,
-        vp1,
-        vp2,
-        C00,
-        C01,
-        C02,
-        C10,
-        C11,
-        C12,
-        C20,
-        C21,
-        C22,
-        s00,
-        s01,
-        s02,
-        s10,
-        s11,
-        s12,
-        s20,
-        s21,
-        s22,
-    ) = particle
-    return (
-        ct.reshape(b0, (tile, 1)),
-        ct.reshape(b1, (tile, 1)),
-        ct.reshape(b2, (tile, 1)),
-        ct.reshape(fx0, (tile, 1)),
-        ct.reshape(fx1, (tile, 1)),
-        ct.reshape(fx2, (tile, 1)),
-        ct.reshape(vp0, (tile, 1)),
-        ct.reshape(vp1, (tile, 1)),
-        ct.reshape(vp2, (tile, 1)),
-        ct.reshape(C00, (tile, 1)),
-        ct.reshape(C01, (tile, 1)),
-        ct.reshape(C02, (tile, 1)),
-        ct.reshape(C10, (tile, 1)),
-        ct.reshape(C11, (tile, 1)),
-        ct.reshape(C12, (tile, 1)),
-        ct.reshape(C20, (tile, 1)),
-        ct.reshape(C21, (tile, 1)),
-        ct.reshape(C22, (tile, 1)),
-        ct.reshape(s00, (tile, 1)),
-        ct.reshape(s01, (tile, 1)),
-        ct.reshape(s02, (tile, 1)),
-        ct.reshape(s10, (tile, 1)),
-        ct.reshape(s11, (tile, 1)),
-        ct.reshape(s12, (tile, 1)),
-        ct.reshape(s20, (tile, 1)),
-        ct.reshape(s21, (tile, 1)),
-        ct.reshape(s22, (tile, 1)),
-    )
-
-
 # ============================================================================
 # v6 — arena scatter via a single tile-coalesced atomic_store_add (no coloring)
 # ============================================================================
@@ -319,8 +244,8 @@ def _p2g_atomic_tile_kernel(
     while chunk_start < p_end:
         p = chunk_start + p_lane
         active = p < p_end
-        pcols = _cols(
-            _gather_particle(x, v, C, stress, p, active, inv_dx), particle_tile
+        pcols = _load_particle_columns(
+            x, v, C, stress, p, active, inv_dx, particle_tile
         )
         active_col = ct.reshape(active, (particle_tile, 1))
         mv0, mv1, mv2, mass, contributes = _node_contribution(
@@ -354,10 +279,6 @@ def cutile_p2g_atomic_tile(
     g3 = g**3
     gp = g + 2  # 1-node halo on each side
     gs = g // ARENA_SC
-    x_flat = x.reshape(-1)
-    v_flat = v.reshape(-1)
-    C_flat = C.reshape(-1)
-    stress_flat = stress.reshape(-1)
 
     grid_mv = jnp.zeros((gp, gp, gp, 3), dtype=jnp.float32)
     grid_m = jnp.zeros((gp, gp, gp), dtype=jnp.float32)
@@ -366,10 +287,10 @@ def cutile_p2g_atomic_tile(
         (gs, gs, gs),
         _p2g_atomic_tile_kernel,
         (
-            x_flat,
-            v_flat,
-            C_flat,
-            stress_flat,
+            x,
+            v,
+            C,
+            stress,
             cell_start,
             InputOutput(grid_mv),
             InputOutput(grid_m),
