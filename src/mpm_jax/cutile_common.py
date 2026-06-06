@@ -16,59 +16,100 @@ def _quad_dw(o, fx):
     return ct.where(o == 0, fx - 1.5, ct.where(o == 1, -2.0 * (fx - 1.0), fx - 0.5))
 
 
-def _component_axis(shape):
-    return ct.broadcast_to(ct.reshape(ct.arange(4, dtype=ct.int32), (1, 1, 4)), shape)
+def _vector_columns(tile, particle_tile):
+    columns = ()
+    for axis in ct.static_iter(range(3)):
+        column = ct.extract(tile, (0, axis), shape=(particle_tile, 1))
+        columns += (column,)
+    return columns
 
 
-def _node_xyz(gi, gj, gk, shape):
-    axis = _component_axis(shape)
-    return ct.where(
-        axis == 0,
-        ct.broadcast_to(gi, shape),
-        ct.where(axis == 1, ct.broadcast_to(gj, shape), ct.broadcast_to(gk, shape)),
+def _matrix_columns(tile, particle_tile):
+    columns = ()
+    for column_id in ct.static_iter(range(9)):
+        column = ct.extract(tile, (0, column_id), shape=(particle_tile, 1))
+        columns += (column,)
+    return columns
+
+
+def _load_particle_columns(x, v, C, stress, p, active, inv_dx, particle_tile):
+    active_v = ct.reshape(active, (particle_tile, 1))
+
+    x_p = ct.load_advanced_indexing(
+        x,
+        (p, ct.Slice(0, 4)),
+        padding_mode=ct.PaddingMode.ZERO,
+    )
+    v_p = ct.load_advanced_indexing(
+        v,
+        (p, ct.Slice(0, 4)),
+        padding_mode=ct.PaddingMode.ZERO,
+    )
+    C_p = ct.load_advanced_indexing(
+        C,
+        (p, ct.Slice(0, 16)),
+        padding_mode=ct.PaddingMode.ZERO,
+    )
+    stress_p = ct.load_advanced_indexing(
+        stress,
+        (p, ct.Slice(0, 16)),
+        padding_mode=ct.PaddingMode.ZERO,
     )
 
+    x_p = ct.where(active_v, x_p, 0.0) * inv_dx
+    v_p = ct.where(active_v, v_p, 0.0)
+    C_p = ct.where(active_v, C_p, 0.0)
+    stress_p = ct.where(active_v, stress_p, 0.0)
 
-def _node_contribution(
-    particles, node, dt, vol, p_mass, inv_dx, dx, particle_tile, node_tile
-):
-    """Per (particle, node, channel) MLS-MPM contribution tile."""
-    b, fx, velocity, C, stress = particles
-    channel = ct.reshape(ct.arange(4, dtype=ct.int32), (1, 1, 4))
-    component = channel < 3
-
-    base = ct.reshape(b, (particle_tile, 1, 4))
-    fx = ct.reshape(fx, (particle_tile, 1, 4))
-    offset = node - base
-
-    in_stencil = (offset >= 0) & (offset < 3)
-    valid_component = ct.where(component, ct.astype(in_stencil, ct.int32), 1)
-    contributes = ct.prod(valid_component, axis=2) != 0
-
-    w = ct.where(component, _quad_w(offset, fx), 1.0)
-    dw = ct.where(component, _quad_dw(offset, fx), 0.0)
-    weight = ct.prod(w, axis=2)
-    dweight = inv_dx * dw * ct.reshape(weight, (particle_tile, node_tile, 1)) / w
-    dpos = ct.where(component, (ct.astype(offset, ct.float32) - fx) * dx, 0.0)
-
-    velocity = ct.reshape(velocity, (particle_tile, 1, 4))
-    C = ct.reshape(C, (particle_tile, 1, 4, 4))
-    stress = ct.reshape(stress, (particle_tile, 1, 4, 4))
-    affine = velocity + ct.sum(
-        C * ct.reshape(dpos, (particle_tile, node_tile, 1, 4)),
-        axis=3,
-    )
-    stress_dw = ct.sum(
-        stress * ct.reshape(dweight, (particle_tile, node_tile, 1, 4)),
-        axis=3,
-    )
-
-    mv = (
-        -dt * vol * stress_dw
-        + p_mass * ct.reshape(weight, (particle_tile, node_tile, 1)) * affine
-    )
-    mass = p_mass * weight
+    b = ct.astype(ct.floor(x_p - 0.5), ct.int32)
+    fx = x_p - ct.astype(b, ct.float32)
     return (
-        ct.where(channel == 3, ct.reshape(mass, (particle_tile, node_tile, 1)), mv),
+        _vector_columns(b, particle_tile),
+        _vector_columns(fx, particle_tile),
+        _vector_columns(v_p, particle_tile),
+        _matrix_columns(C_p, particle_tile),
+        _matrix_columns(stress_p, particle_tile),
+    )
+
+
+def _node_contribution_columns(pcols, node_rows, dt, vol, p_mass, inv_dx, dx):
+    b, fx, velocity, C, stress = pcols
+    b0, b1, b2 = b
+    fx0, fx1, fx2 = fx
+    vp0, vp1, vp2 = velocity
+    C00, C01, C02, C10, C11, C12, C20, C21, C22 = C
+    s00, s01, s02, s10, s11, s12, s20, s21, s22 = stress
+    gi_row, gj_row, gk_row = node_rows
+
+    ox = gi_row - b0
+    oy = gj_row - b1
+    oz = gk_row - b2
+    contributes = (ox >= 0) & (ox < 3) & (oy >= 0) & (oy < 3) & (oz >= 0) & (oz < 3)
+
+    wx, wy, wz = _quad_w(ox, fx0), _quad_w(oy, fx1), _quad_w(oz, fx2)
+    dwx, dwy, dwz = _quad_dw(ox, fx0), _quad_dw(oy, fx1), _quad_dw(oz, fx2)
+
+    weight = wx * wy * wz
+    dw0 = inv_dx * dwx * wy * wz
+    dw1 = inv_dx * wx * dwy * wz
+    dw2 = inv_dx * wx * wy * dwz
+
+    dpos0 = (ct.astype(ox, ct.float32) - fx0) * dx
+    dpos1 = (ct.astype(oy, ct.float32) - fx1) * dx
+    dpos2 = (ct.astype(oz, ct.float32) - fx2) * dx
+
+    affine0 = vp0 + C00 * dpos0 + C01 * dpos1 + C02 * dpos2
+    affine1 = vp1 + C10 * dpos0 + C11 * dpos1 + C12 * dpos2
+    affine2 = vp2 + C20 * dpos0 + C21 * dpos1 + C22 * dpos2
+
+    stress_dw0 = s00 * dw0 + s01 * dw1 + s02 * dw2
+    stress_dw1 = s10 * dw0 + s11 * dw1 + s12 * dw2
+    stress_dw2 = s20 * dw0 + s21 * dw1 + s22 * dw2
+
+    return (
+        -dt * vol * stress_dw0 + p_mass * weight * affine0,
+        -dt * vol * stress_dw1 + p_mass * weight * affine1,
+        -dt * vol * stress_dw2 + p_mass * weight * affine2,
+        p_mass * weight,
         contributes,
     )

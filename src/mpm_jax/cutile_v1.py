@@ -5,43 +5,11 @@ import jax.numpy as jnp
 import cuda.tile as ct
 from cuda.tile.jax import InputOutput, cutile_call
 
-from mpm_jax.cutile_common import _node_contribution, _node_xyz
+from mpm_jax.cutile_common import _load_particle_columns, _node_contribution_columns
 
 
 DIRECT_STENCIL_TILE = 32
 DIRECT_PARTICLE_TILE = 16
-
-
-def _load_particle_chunk(x, v, C, stress, start, stop, inv_dx, particle_tile):
-    x_p = (
-        ct.load(
-            x.slice(0, start, stop),
-            (0, 0),
-            (particle_tile, 4),
-            padding_mode=ct.PaddingMode.ZERO,
-        )
-        * inv_dx
-    )
-    v_p = ct.load(
-        v.slice(0, start, stop),
-        (0, 0),
-        (particle_tile, 4),
-        padding_mode=ct.PaddingMode.ZERO,
-    )
-    C_p = ct.load(
-        C.slice(0, start, stop),
-        (0, 0, 0),
-        (particle_tile, 4, 4),
-        padding_mode=ct.PaddingMode.ZERO,
-    )
-    stress_p = ct.load(
-        stress.slice(0, start, stop),
-        (0, 0, 0),
-        (particle_tile, 4, 4),
-        padding_mode=ct.PaddingMode.ZERO,
-    )
-    b = ct.astype(ct.floor(x_p - 0.5), ct.int32)
-    return b, x_p - ct.astype(b, ct.float32), v_p, C_p, stress_p
 
 
 @ct.kernel
@@ -66,15 +34,8 @@ def _p2g_direct_kernel(
     chunk_start = block * particle_tile
     p = chunk_start + p_lane
     in_bounds = p < n_particles
-    particles = _load_particle_chunk(
-        x,
-        v,
-        C,
-        stress,
-        chunk_start,
-        n_particles,
-        inv_dx,
-        particle_tile,
+    pcols = _load_particle_columns(
+        x, v, C, stress, p, in_bounds, inv_dx, particle_tile
     )
 
     active_lane = ct.reshape(in_bounds, (particle_tile, 1))
@@ -82,44 +43,42 @@ def _p2g_direct_kernel(
     oi = offset // 9
     oj = (offset // 3) % 3
     ok = offset % 3
-    oi_vec = ct.reshape(oi, (1, stencil_tile, 1))
-    oj_vec = ct.reshape(oj, (1, stencil_tile, 1))
-    ok_vec = ct.reshape(ok, (1, stencil_tile, 1))
 
-    b = particles[0]
-    base = ct.reshape(b, (particle_tile, 1, 4))
-    node = _node_xyz(
-        ct.extract(base, (0, 0, 0), (particle_tile, 1, 1)) + oi_vec,
-        ct.extract(base, (0, 0, 1), (particle_tile, 1, 1)) + oj_vec,
-        ct.extract(base, (0, 0, 2), (particle_tile, 1, 1)) + ok_vec,
-        (particle_tile, stencil_tile, 4),
-    )
-    contrib, contributes = _node_contribution(
-        particles,
-        node,
-        dt,
-        vol,
-        p_mass,
-        inv_dx,
-        dx,
-        particle_tile,
-        stencil_tile,
+    b0, b1, b2 = pcols[0]
+    gi = b0 + oi
+    gj = b1 + oj
+    gk = b2 + ok
+    mv0, mv1, mv2, mass, contributes = _node_contribution_columns(
+        pcols, (gi, gj, gk), dt, vol, p_mass, inv_dx, dx
     )
 
     valid_stencil = offset < 27
     mask = contributes & active_lane & valid_stencil
-    flat = (
-        ct.extract(node, (0, 0, 0), (particle_tile, stencil_tile, 1))
-        * (G * G)
-        + ct.extract(node, (0, 0, 1), (particle_tile, stencil_tile, 1)) * G
-        + ct.extract(node, (0, 0, 2), (particle_tile, stencil_tile, 1))
-    )
-    flat = ct.reshape(flat, (particle_tile, stencil_tile))
+    flat = gi * (G * G) + gj * G + gk
     flat = ct.maximum(0, ct.minimum(flat, G * G * G - 1))
 
     channel = ct.reshape(ct.arange(4, dtype=ct.int32), (1, 1, 4))
     flat = ct.reshape(flat, (particle_tile, stencil_tile, 1))
     mask = ct.reshape(mask, (particle_tile, stencil_tile, 1))
+    contrib = ct.cat(
+        (
+            ct.cat(
+                (
+                    ct.reshape(mv0, (particle_tile, stencil_tile, 1)),
+                    ct.reshape(mv1, (particle_tile, stencil_tile, 1)),
+                ),
+                2,
+            ),
+            ct.cat(
+                (
+                    ct.reshape(mv2, (particle_tile, stencil_tile, 1)),
+                    ct.reshape(mass, (particle_tile, stencil_tile, 1)),
+                ),
+                2,
+            ),
+        ),
+        2,
+    )
     ct.atomic_add(grid, (flat, channel), ct.where(mask, contrib, 0.0))
 
 
@@ -129,6 +88,8 @@ def cutile_p2g_v1(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
     g = int(num_grids)
     g3 = g**3
     blocks = (n + DIRECT_PARTICLE_TILE - 1) // DIRECT_PARTICLE_TILE
+    C = C.reshape((n, 9))
+    stress = stress.reshape((n, 9))
 
     grid = jnp.zeros((g3, 4), dtype=jnp.float32)
     grid = cutile_call(
