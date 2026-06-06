@@ -2,40 +2,48 @@ import hydra
 import pytest
 from omegaconf import OmegaConf
 
-from mpm_jax.backends import KERNEL_NAMES, build_backend
-from mpm_jax.backends import Backend
+from mpm_jax.backends import (
+    CudaV1Backend,
+    CudaV2Backend,
+    CudaV3Backend,
+    CudaV4Backend,
+    JaxBackend,
+)
 from mpm_jax.solver import MPMSolver
 
 
-def test_kernel_names():
-    assert set(KERNEL_NAMES) == {
-        "jax_baseline",
-        "cutile_v6_atomic_tile",
-        "cuda_v1_inline",
-        "cuda_v2_inline",
-        "cuda_v3_inline",
-        "cuda_v4_inline",
-    }
-
-
-def test_build_backend_jax_baseline_no_gpu():
-    # jax_baseline has no availability/super-cell requirement, so it builds on CPU.
-    backend = build_backend("jax_baseline", 16)
-    assert isinstance(backend, Backend)
-    assert backend.name == "jax_baseline"
+def test_jax_backend_constructs_without_gpu():
+    backend = JaxBackend(num_grids=16)
+    assert backend.name == "jax"
     assert callable(backend.p2g) and callable(backend.g2p)
 
 
-def test_build_backend_rejects_unknown():
-    with pytest.raises(KeyError):
-        build_backend("not_a_kernel", 16)
+def test_cuda_backend_constructors_register_expected_kind(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "mpm_jax.backends.cuda.is_available", lambda kind: calls.append(kind)
+    )
+
+    CudaV1Backend(num_grids=16)
+    CudaV2Backend(num_grids=16)
+    CudaV3Backend(num_grids=16)
+    CudaV4Backend(num_grids=16)
+
+    assert calls == ["inline", "v2_inline", "v3_inline", "v4_inline"]
+
+
+def test_supercell_backend_validates_num_grids(monkeypatch):
+    monkeypatch.setattr("mpm_jax.backends.cuda.is_available", lambda kind: True)
+
+    with pytest.raises(RuntimeError, match="requires num_grids"):
+        CudaV4Backend(num_grids=18, super_cell_width=4)
 
 
 def test_hydra_instantiates_runtime_config_and_solver():
     cfg = OmegaConf.create(
         {
             "backend": {
-                "_target_": "mpm_jax.backends.Backend",
+                "_target_": "mpm_jax.backends.jax.JaxBackend",
                 "num_grids": 16,
             },
             "sim": {
@@ -53,7 +61,11 @@ def test_hydra_instantiates_runtime_config_and_solver():
                 "boundary_conditions": [],
             },
             "material": {
-                "elasticity": {"name": "StVKElasticityJacobi", "E": 2e6, "nu": 0.4},
+                "elasticity": {
+                    "_target_": "mpm_jax.constitutive.stvk_elasticity_jacobi",
+                    "E": 2e6,
+                    "nu": 0.4,
+                },
             },
         }
     )
@@ -65,5 +77,5 @@ def test_hydra_instantiates_runtime_config_and_solver():
     }
     solver = MPMSolver(hydra.utils.instantiate(cfg.solver))
     assert isinstance(solver, MPMSolver)
-    assert solver.backend.name == "jax_baseline"
+    assert solver.backend.name == "jax"
     solver.step()

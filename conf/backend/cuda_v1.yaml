@@ -1,7 +1,0 @@
-# cuda_v1_inline — minimal CUDA P2G scatter kernel that takes precomputed
-# stress from JAX and does inline weight + 27-stencil atomic scatter in
-# one launch (one thread per particle, register-resident state across the
-# stencil loop). Pair with material=jelly for the fast pure-JAX
-# StVK stress material path upstream. Wired into the per-frame path.
-_target_: mpm_jax.backends.CudaV1
-num_grids: ${sim.num_grids}

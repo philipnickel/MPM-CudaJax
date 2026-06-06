@@ -1,0 +1,18 @@
+defaults:
+  - config
+  - _self_
+
+benchmark: true
+
+nsight:
+  phase: p2g
+  write_json: true
+  sweep: null
+  configs: null
+  plot:
+    enabled: false
+    filename: nsight_plot.png
+  analyze:
+    runs: 1
+    metric_preset: time
+    derive_metric: throughput

@@ -14,16 +14,16 @@ optional IO callback.
 
 ## Quickstart
 
-You need [pixi](https://pixi.sh/). Everything else (Python, JAX, CUDA
-toolkit deps) is pinned in `pyproject.toml` and `pixi.lock` and managed
-by pixi — do **not** run `pip install` directly.
+You need [pixi](https://pixi.sh/) and an NVIDIA GPU on Linux. Everything else
+(Python, JAX, CUDA toolkit deps) is pinned in `pyproject.toml` and `pixi.lock`
+and managed by pixi — do **not** run `pip install` directly.
 
 ```bash
 git clone git@github.com:philipnickel/MPM-CudaJax.git
 cd MPM-CudaJax
 ```
 
-**No GPU?** Install the default (CPU) env and run a short simulation:
+Install the default GPU environment and run a short simulation:
 ```bash
 pixi install
 pixi run python simulate.py sim.num_frames=20
@@ -31,18 +31,17 @@ pixi run python simulate.py sim.num_frames=20
 A jelly block falls onto a sticky floor and renders to
 `output/jelly_jax_v1_5.gif`. With `sim.num_frames=20` it takes a few seconds.
 
-**Have an NVIDIA GPU (Linux)?** Install the `gpu` env (this also builds
-the custom CUDA kernels via CMake — `nvcc` and `gxx` ship from
-conda-forge inside the env, no system module load needed):
+The default environment also builds the custom CUDA kernels via CMake. `nvcc`
+and `gxx` ship from conda-forge inside the env, no system module load needed:
 ```bash
-pixi install -e gpu
-pixi run -e gpu python simulate.py backend=cuda_v3_inline material=jelly
+pixi install
+pixi run python simulate.py backend=cuda_v3 material=jelly
 ```
 
 To benchmark instead of rendering:
 ```bash
-pixi run -e gpu python simulate.py \
-    backend=cuda_v3_inline material=jelly \
+pixi run python simulate.py \
+    backend=cuda_v3 material=jelly \
     sim.n_particles=500000 sim.num_grids=64 sim.num_frames=15 \
     benchmark=true
 ```
@@ -64,46 +63,28 @@ git clone git@github.com:philipnickel/MPM-CudaJax.git
 cd MPM-CudaJax
 ```
 
-**Local (CPU only):**
+**Default GPU environment:**
 ```bash
 pixi install
 pixi run python simulate.py sim.num_frames=5
 ```
 
-**GPU (Linux):**
-```bash
-pixi install -e gpu        # builds CUDA kernels via CMake at install time
-pixi run -e gpu python simulate.py
-```
-
 CUDA kernels are built by [scikit-build-core](https://scikit-build-core.readthedocs.io/)
-+ CMake during `pixi install -e gpu`. Output `.so` files land in
++ CMake during `pixi install`. Output `.so` files land in
 `src/mpm_jax/cuda/_lib/` and are loaded at runtime via
-`jax.ffi.register_ffi_target`. The build is best-effort: when `nvcc` is
-missing (the default CPU env) CMake's `check_language(CUDA)` returns
-early, the wheel installs cleanly, and the JAX baseline still works.
+`jax.ffi.register_ffi_target`.
 
 Override the CUDA architecture at install time:
 ```bash
-MPM_CUDA_ARCH=sm_86 pixi install -e gpu     # Ampere
-MPM_CUDA_ARCH=sm_90 pixi install -e gpu     # Hopper
+MPM_CUDA_ARCH=sm_86 pixi install     # Ampere
+MPM_CUDA_ARCH=sm_90 pixi install     # Hopper
 # default is 'native' (CMake auto-detects the local GPU)
 ```
 
-**DTU HPC:** no `module load` is needed for the `gpu` env — conda-forge ships `cuda-nvcc`
-and `gxx` inside the `gpu` env. For clusters where the conda-forge CUDA
-lags the driver, use the `hpc` env with `module load` instead:
-```bash
-# gpu env (self-contained):
-MPM_CUDA_ARCH=sm_90 pixi install -e gpu
+**DTU HPC:** no `module load` is needed for this Pixi environment — conda-forge
+ships `cuda-nvcc`, `gxx`, and CUDA runtime libraries inside the default env.
 
-# hpc env (links against site-provided CUDA toolkit):
-module load nvhpc/24.1
-MPM_CUDA_ARCH=sm_90 pixi install -e hpc
-pixi run -e hpc python simulate.py ...
-```
-
-**Warp 1.14:** `warp-lang==1.14.0` is kept in the `gpu` env for the optional
+**Warp 1.14:** `warp-lang==1.14.0` is kept in the default env for the optional
 `warp_opengl` / `warp_usd` render backends (`warp.render`); it is no longer
 used for any P2G kernel. The `glibc 2.34` system-requirement lets both the
 `manylinux_2_34` aarch64 wheel (GH200) and the `manylinux_2_28` x86_64
@@ -113,33 +94,33 @@ wheel (H100/A100) resolve correctly.
 
 ```bash
 # Default run (renders GIF to ./output)
-pixi run -e gpu python simulate.py
+pixi run python simulate.py
 
 # Benchmark mode (no GIF, no per-frame state capture, wall-clock timing)
-pixi run -e gpu python simulate.py benchmark=true
+pixi run python simulate.py benchmark=true
 
 # Pick a kernel
-pixi run -e gpu python simulate.py backend=jax_baseline                                 # JAX/XLA baseline (scan P2G + MLS G2P)
-pixi run -e gpu python simulate.py backend=cuda_v1_inline material=jelly
-pixi run -e gpu python simulate.py backend=cuda_v2_inline material=jelly         # warp-shuffle coalescing
-pixi run -e gpu python simulate.py backend=cuda_v3_inline material=jelly         # Morton sort
-pixi run -e gpu python simulate.py backend=cuda_v4_inline material=jelly         # super-cell grid tile
-pixi run -e gpu python simulate.py backend=cutile_v6_atomic_tile material=jelly benchmark=true  # cuTile (tiled model)
+pixi run python simulate.py backend=jax                              # JAX/XLA baseline (scan P2G + MLS G2P)
+pixi run python simulate.py backend=cuda_v1 material=jelly
+pixi run python simulate.py backend=cuda_v2 material=jelly            # warp-shuffle coalescing
+pixi run python simulate.py backend=cuda_v3 material=jelly            # Morton sort
+pixi run python simulate.py backend=cuda_v4 material=jelly            # super-cell grid tile
+pixi run python simulate.py backend=cutile material=jelly benchmark=true  # cuTile (tiled model)
 
 # Override sim params
-pixi run -e gpu python simulate.py sim.n_particles=1000000 sim.num_grids=64
+pixi run python simulate.py sim.n_particles=1000000 sim.num_grids=64
 ```
 
 ## Kernel variants
 
 | `backend=` | What it does |
 |---|---|
-| `jax_baseline` | The JAX/XLA baseline: `lax.scan` over the 27 offsets for **both** P2G and G2P, unified MLS-MPM G2P (APIC affine `C` reused as ∇v), closed-form StVK stress. Every other kernel reuses this G2P, so only the P2G varies. |
-| `cuda_v1_inline` | CUDA inline-weight P2G (one thread/particle, global `atomicAdd`) + JAX baseline G2P. |
-| `cuda_v2_inline` | CUDA warp-shuffle coalesced inline P2G + JAX baseline G2P. |
-| `cuda_v3_inline` | CUDA Morton-sorted inline P2G + JAX baseline G2P. (XLA command-buffer / CUDA-Graph capture is on for every kernel via the gpu env's `XLA_FLAGS`.) |
-| `cuda_v4_inline` | CUDA super-cell-owned grid tile inline P2G + JAX baseline G2P. |
-| `cutile_v6_atomic_tile` | NVIDIA cuTile (tiled programming model) P2G + JAX baseline G2P: SPGrid-style arena scatter — sort by SC=2 home super-cell, reduce each super-cell into a 4³ L1 arena, write back with one tile-coalesced `atomic_store_add` (no coloring). Occupancy autotuned per-GPU. Requires `cuda-tile`. |
+| `jax` | The JAX/XLA baseline: `lax.scan` over the 27 offsets for **both** P2G and G2P, unified MLS-MPM G2P (APIC affine `C` reused as ∇v), closed-form StVK stress. Every other kernel reuses this G2P, so only the P2G varies. |
+| `cuda_v1` | CUDA inline-weight P2G (one thread/particle, global `atomicAdd`) + JAX baseline G2P. |
+| `cuda_v2` | CUDA warp-shuffle coalesced inline P2G + JAX baseline G2P. |
+| `cuda_v3` | CUDA Morton-sorted inline P2G + JAX baseline G2P. (XLA command-buffer / CUDA-Graph capture is on for every kernel via the default env's `XLA_FLAGS`.) |
+| `cuda_v4` | CUDA super-cell-owned grid tile inline P2G + JAX baseline G2P. |
+| `cutile` | NVIDIA cuTile (tiled programming model) P2G + JAX baseline G2P: SPGrid-style arena scatter — sort by SC=2 home super-cell, reduce each super-cell into a 4³ L1 arena, write back with one tile-coalesced `atomic_store_add` (no coloring). Requires `cuda-tile`. |
 
 ## Architecture
 
@@ -154,36 +135,36 @@ The solver is class-based:
 - **`MPMSolver`** is a plain Python class. Particle/grid state is mutated in place by the driver API; the backend, constitutive/boundary closures, and the compiled `_frame` are fixed for the solver's lifetime. `stepped()` returns a new solver with advanced state (shallow copy + new state); `step()` is the mutating driver and advances one frame by running `_frame(self.state)`. The frame runs `steps_per_frame` substeps as a single XLA program via `lax.fori_loop`.
 
 Construction (`RuntimeConfig` + `MPMSolver` in `src/mpm_jax/solver.py`):
-- Hydra instantiates `cfg.solver` into `RuntimeConfig`; each `backend` config has a `_target_` for its backend class and passes `num_grids` for validation. `simulate.py` / `profile_nsight.py` call `MPMSolver(hydra.utils.instantiate(cfg.solver))`.
-- `MPMSolver` reads the runtime config and builds params (with derived dx/vol/p_mass), particles, boundary closures, and initial state. The backend object is already instantiated by Hydra and owns CUDA/cuTile registration, grid-divisibility validation, and autotune setup.
-- `backends.py` is a small `Backend` class hierarchy (base = jax_baseline; one subclass per variant overriding `prepare()`/`p2g()`, with `g2p()` shared on the base). `KERNEL_NAMES` lists the valid names. The frame loop calls `backend.step()` (order + scatter) and `backend.g2p()`.
+- Hydra instantiates `cfg.solver` into `RuntimeConfig`; backend choices are Python-backed hydra-zen registrations in `src/mpm_jax/backends/`, with each backend passing `num_grids` for validation. `simulate.py` / `profile_nsight.py` import `mpm_jax.backends` before composition, then call `MPMSolver(hydra.utils.instantiate(cfg.solver))`.
+- `MPMSolver` reads the runtime config and builds params (with derived dx/vol/p_mass), particles, boundary closures, and initial state. The backend object is already instantiated by Hydra and owns CUDA/cuTile registration and grid-divisibility validation.
+- `src/mpm_jax/backends/` is a small backend hierarchy (base = `jax`; one subclass per variant overriding `prepare()`/`p2g()`, with `g2p()` shared on the base). The implementation modules register the user-facing Hydra choices (`jax`, `cuda_v1`, etc.) directly via hydra-zen. The frame loop calls `backend.step()` (order + scatter) and `backend.g2p()`.
 
-All solver variants now run through the same JAX-owned frame loop. The pure-JAX path compiles the entire frame (multiple substeps) as one XLA program. The inline CUDA variants (`cuda_v*_inline`) move per-particle stencil work into CUDA kernels so the `(N, 27, *)` intermediate tensors never materialize in HBM. The cuTile variant (`cutile_v6_atomic_tile`) launches a tiled-programming-model P2G kernel from inside that same JAX frame via the cuTile/JAX bridge.
+All solver variants now run through the same JAX-owned frame loop. The pure-JAX path compiles the entire frame (multiple substeps) as one XLA program. The CUDA variants (`cuda_v*`) move per-particle stencil work into CUDA kernels so the `(N, 27, *)` intermediate tensors never materialize in HBM. The cuTile variant (`cutile`) launches a tiled-programming-model P2G kernel from inside that same JAX frame via the cuTile/JAX bridge.
 
 ## Sweeps
 
 Pre-baked Hydra multirun sweeps:
 
 ```bash
-pixi run -e gpu python simulate.py -cn sweep_baseline    # JAX-only scaling
-pixi run -e gpu python simulate.py -cn sweep_all
-pixi run -e gpu python simulate.py -cn sweep_quick
-pixi run -e gpu python simulate.py -cn sweep_scaling
-pixi run -e gpu python simulate.py -cn sweep_profile
+pixi run python simulate.py -cn sweep_baseline    # JAX-only scaling
+pixi run python simulate.py -cn sweep_all
+pixi run python simulate.py -cn sweep_quick
+pixi run python simulate.py -cn sweep_scaling
+pixi run python simulate.py -cn sweep_profile
 ```
 
 Each combination gets its own `multirun/<date>/<run>/` subdir with a `results.json`. Sweeps
 should use Hydra multirun so log parsers see the expected directory structure.
 
-For an ad-hoc sweep: `pixi run -e gpu python simulate.py -m sim.n_particles=5000,50000,200000 backend=jax_baseline,cuda_v2_inline benchmark=true`.
+For an ad-hoc sweep: `pixi run python simulate.py -m sim.n_particles=5000,50000,200000 backend=jax,cuda_v2 benchmark=true`.
 
 ## Profiling
 
 **JAX profiler** (in-process, writes a TensorBoard trace):
 
 ```bash
-pixi run -e gpu python simulate.py profile=jax benchmark=true \
-    backend=cuda_v3_inline material=jelly
+pixi run python simulate.py profile=jax benchmark=true \
+    backend=cuda_v3 material=jelly
 ```
 
 The trace is written to `outputs/<YYYY-MM-DD>/<HH-MM-SS>/jax_trace/` and includes
@@ -192,7 +173,7 @@ The trace is written to `outputs/<YYYY-MM-DD>/<HH-MM-SS>/jax_trace/` and include
 View the trace with TensorBoard/XProf:
 
 ```bash
-pixi run -e gpu tensorboard \
+pixi run tensorboard \
     --logdir outputs/<YYYY-MM-DD>/<HH-MM-SS>/jax_trace \
     --port 6006 \
     --bind_all
@@ -206,7 +187,7 @@ running there and forward the port from your laptop:
 ssh -L 6006:localhost:6006 <user>@<remote-host>
 ```
 
-The `gpu` Pixi environment includes `tensorboard`, `xprof`, and a
+The default Pixi environment includes `tensorboard`, `xprof`, and a
 `setuptools<81` pin because TensorBoard 2.20 still imports `pkg_resources`.
 
 For single-frame traces where compilation should not dominate the timeline,
@@ -235,8 +216,8 @@ JAX/XLA custom calls plus their GPU kernels.
 **Nsight Python profiler** (per-stage kernel analysis, requires `nsight-python`):
 
 ```bash
-pixi run -e gpu python profile_nsight.py -cn nsight_profile \
-    backend=jax_baseline material=jelly nsight.phase=p2g sim.n_particles=4096
+pixi run python profile_nsight.py -cn nsight_profile \
+    backend=jax material=jelly nsight.phase=p2g sim.n_particles=4096
 ```
 
 ## Config
@@ -247,23 +228,16 @@ Hydra config groups in `conf/`:
 |---|---|---|
 | `material` | `jelly` (default) | Constitutive model |
 | `sim` | `default` | n_particles, num_grids, dt, BCs, ... |
-| `backend` | `jax_baseline` (default), `cuda_v*_inline`, `cutile_v6_atomic_tile` | P2G implementation (G2P shared) |
+| `backend` | `jax` (default), `cuda_v1`, `cuda_v2`, `cuda_v3`, `cuda_v4`, `cutile` | P2G implementation (G2P shared) |
 | `profile` | `none` (default), `jax` | Profiling backend |
 
 Top-level fields: `benchmark`, `tag`, `output_dir`. All overridable from CLI:
 
 ```bash
-pixi run -e gpu python simulate.py sim.n_particles=100000 backend=cuda_v3_inline benchmark=true
+pixi run python simulate.py sim.n_particles=100000 backend=cuda_v3 benchmark=true
 ```
 
-Kernel-specific knobs passed as top-level CLI overrides (merged into `cfg.backend`):
-
-```bash
-# autotune: cutile_v6 occupancy is tuned per-GPU and cached; disable with autotune=false
-pixi run -e gpu python simulate.py backend=cutile_v6_atomic_tile backend.autotune=false
-```
-
-(XLA command-buffer / CUDA-Graph capture is always on via `XLA_FLAGS` in the gpu env — no per-kernel flag.)
+XLA command-buffer / CUDA-Graph capture is always on via `XLA_FLAGS` in the default env — no per-kernel flag.
 
 ## Tests
 
@@ -274,7 +248,7 @@ pixi run test
 Run focused GPU checks:
 
 ```bash
-pixi run -e gpu pytest tests/test_cuda_ffi_loader.py tests/test_p2g_scan.py \
+pixi run pytest tests/test_cuda_ffi_loader.py tests/test_p2g_scan.py \
     tests/test_cuda_v2_inline_matches_v1.py -q
 ```
 
@@ -285,15 +259,14 @@ pixi run -e gpu pytest tests/test_cuda_ffi_loader.py tests/test_p2g_scan.py \
 MPM-CudaJax/
 ├── simulate.py              # Hydra entry + benchmark + GIF rendering
 ├── profile_nsight.py        # Nsight Python P2G profiler
-├── pyproject.toml           # scikit-build-core build + pixi cpu / gpu / hpc envs
-├── pixi.lock                # locked deps for all envs (commit this)
+├── pyproject.toml           # scikit-build-core build + default Pixi GPU env
+├── pixi.lock                # locked deps (commit this)
 ├── CMakeLists.txt           # CUDA kernel build (called by scikit-build-core)
 ├── conf/
 │   ├── config.yaml
 │   ├── nsight_profile.yaml
 │   ├── material/            # jelly.yaml
 │   ├── sim/default.yaml
-│   ├── backend/          # jax_baseline.yaml, cuda_v*.yaml, cutile_v6_atomic_tile.yaml
 │   ├── profile/             # none.yaml, jax.yaml
 │   └── sweep_*.yaml
 └── src/
@@ -304,9 +277,8 @@ MPM-CudaJax/
         ├── boundary.py      # sticky surface collider
         ├── grid.py          # grid_update + build_grid_x
         ├── sort.py          # morton_argsort, home_super_cell_id
-        ├── backends.py      # Backend interface + shared JAX-owned frame loop
+        ├── backends/        # backend implementations + hydra-zen registrations
         ├── cutile_p2g.py    # cuTile arena-scatter P2G kernel + jax bridge
-        ├── cutile_autotune.py  # per-GPU occupancy autotune for the cuTile kernel
         └── cuda/
             ├── p2g_cuda.py  # FFI registration + kernel wrappers
             ├── _lib/        # built .so files (gitignored)

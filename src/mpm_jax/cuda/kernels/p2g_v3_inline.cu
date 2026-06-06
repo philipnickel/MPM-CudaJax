@@ -1,6 +1,6 @@
-// Inline P2G scatter kernel with warp-shuffle atomic coalescing (cuda_v3_inline).
+// Inline P2G scatter kernel with warp-shuffle atomic coalescing used by cuda_v3.
 //
-// Same structure as p2g_inline.cu (cuda_v1_inline): one thread per particle,
+// Same structure as the cuda_v1 kernel (p2g_inline.cu): one thread per particle,
 // register-resident state, inline B-spline weights, 27-stencil scatter loop.
 //
 // Difference: before each atomicAdd into the grid, threads in the same warp

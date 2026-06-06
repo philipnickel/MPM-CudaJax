@@ -1,7 +1,7 @@
-// Cell-major inline P2G scatter kernel (cuda_v4_inline).
+// Cell-major inline P2G scatter kernel used by the cuda_v4 backend.
 //
 // Combines two ideas:
-//   * `p2g_inline.cu` (cuda_v1_inline): one thread per particle, inline
+//   * `p2g_inline.cu` (cuda_v1): one thread per particle, inline
 //     B-spline weights + 27-stencil scatter computed in registers. No
 //     (N, 27, *) tensor is ever materialised in HBM.
 //   * Particles are sorted by their home SUPER-cell on the JAX side; one

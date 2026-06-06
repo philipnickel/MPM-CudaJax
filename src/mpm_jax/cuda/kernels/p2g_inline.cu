@@ -1,4 +1,4 @@
-// Inline P2G scatter kernel (cuda_v1_inline).
+// Inline P2G scatter kernel used by the cuda_v1 backend.
 //
 // One thread per particle. Each thread:
 //   1. Loads x, v, C, stress into registers (stress is precomputed by JAX).

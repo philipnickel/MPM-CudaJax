@@ -1,4 +1,4 @@
-"""cuda_v2_inline must match cuda_v1_inline up to atomic-order f32 drift.
+"""cuda_v2 must match cuda_v1 up to atomic-order f32 drift.
 
 Both kernels are bit-identical in their per-particle math; only the scatter
 strategy differs (v2_inline adds a warp-shuffle reduction before each
@@ -15,9 +15,9 @@ import numpy as np
 import pytest
 from omegaconf import OmegaConf
 
-from mpm_jax.backends import build_backend
+from mpm_jax.backends import CudaV1Backend, CudaV2Backend
 from mpm_jax.boundary import build_boundary_fns
-from mpm_jax.constitutive import get_constitutive
+from mpm_jax.constitutive import stvk_elasticity_jacobi
 from mpm_jax.cuda.p2g_cuda import is_available
 from mpm_jax.solver import build_backend_frame
 from mpm_jax.types import MPMState, MPMParams
@@ -38,9 +38,9 @@ def _kernel_available(kind: str) -> bool:
 
 @pytest.mark.skipif(
     not (_kernel_available("inline") and _kernel_available("v2_inline")),
-    reason="cuda_v1_inline / cuda_v2_inline .so not built or no GPU",
+    reason="cuda_v1 / cuda_v2 .so not built or no GPU",
 )
-def test_cuda_v2_inline_matches_v1_inline():
+def test_cuda_v2_matches_v1():
     """Run a short sim under both inline kernels and compare final state."""
     n = 2000
     num_grids = 16
@@ -78,8 +78,7 @@ def test_cuda_v2_inline_matches_v1_inline():
 
     # jelly material (StVK elasticity, no plasticity): stress stays on the JAX
     # side without a cuSOLVER dependence.
-    e_cfg = OmegaConf.create({"name": "StVKElasticityJacobi", "E": 2e6, "nu": 0.4})
-    elasticity_fn = get_constitutive(e_cfg)
+    elasticity_fn = stvk_elasticity_jacobi(E=2e6, nu=0.4)
 
     state0 = MPMState(
         x=x0,
@@ -96,7 +95,7 @@ def test_cuda_v2_inline_matches_v1_inline():
         elasticity_fn,
         pre_fn,
         post_fn,
-        build_backend("cuda_v1_inline", num_grids),
+        CudaV1Backend(num_grids),
         steps_per_frame,
     )
     jit_v2 = build_backend_frame(
@@ -104,7 +103,7 @@ def test_cuda_v2_inline_matches_v1_inline():
         elasticity_fn,
         pre_fn,
         post_fn,
-        build_backend("cuda_v2_inline", num_grids),
+        CudaV2Backend(num_grids),
         steps_per_frame,
     )
 

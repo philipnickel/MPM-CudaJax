@@ -19,7 +19,7 @@ import jax
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
-from mpm_jax.backends import BACKEND_TARGETS, KERNEL_NAMES
+import mpm_jax.backends as backend_configs
 from mpm_jax.solver import MPMSolver
 
 
@@ -34,8 +34,7 @@ nsight = _optional_module("nsight")
 
 _UNSUPPORTED_ANALYZE_CONFIG_KEYS = {"configs"}
 _SCRIPT_NSIGHT_KEYS = {"phase", "write_json", "plot", "sweep", "configs", "analyze"}
-_P2G_KERNELS = set(KERNEL_NAMES)  # the supported P2G variants (single source of truth)
-_TARGET_TO_KERNEL = {target: name for name, target in BACKEND_TARGETS.items()}
+_PROFILE_BACKEND_CHOICE_KEY = "_profile_backend_choice"
 _SPEED_OF_LIGHT_METRICS = [
     "gpu__time_duration.sum",
     "sm__throughput.avg.pct_of_peak_sustained_elapsed",
@@ -91,22 +90,55 @@ _METRIC_PRESETS = {
 }
 
 
-def _backend_name_from_cfg(cfg: DictConfig):
-    target = cfg.get("backend", {}).get("_target_", None)
-    if target in _TARGET_TO_KERNEL:
-        return _TARGET_TO_KERNEL[target]
+def _backend_choices() -> tuple[str, ...]:
+    return backend_configs.backend_choices()
+
+
+def _normalize_backend_choice(value) -> str:
+    if not isinstance(value, str):
+        raise RuntimeError("Backend choices must be Hydra config-group names.")
+    choice = value.strip()
+    supported = _backend_choices()
+    if choice not in supported:
+        raise RuntimeError(
+            f"Unsupported backend choice {value!r}. "
+            "Use Hydra backend choices: " + ", ".join(supported)
+        )
+    return choice
+
+
+def _backend_config(choice: str) -> DictConfig:
+    return backend_configs.backend_config(_normalize_backend_choice(choice))
+
+
+def _backend_choice_from_backend_cfg(backend_cfg) -> str:
+    target = backend_cfg.get("_target_", None)
+    for choice in _backend_choices():
+        if target == _backend_config(choice).get("_target_", None):
+            return choice
+    raise RuntimeError(
+        "Could not infer backend choice from cfg.backend. "
+        "Use one of: " + ", ".join(_backend_choices())
+    )
+
+
+def _backend_choice_from_cfg(cfg: DictConfig):
+    if _PROFILE_BACKEND_CHOICE_KEY in cfg:
+        return _normalize_backend_choice(cfg[_PROFILE_BACKEND_CHOICE_KEY])
     try:
-        return HydraConfig.get().runtime.choices.get("backend", "jax_baseline")
+        return _normalize_backend_choice(HydraConfig.get().runtime.choices["backend"])
     except ValueError:
-        return "jax_baseline"
+        pass
+    except KeyError:
+        pass
+    return _backend_choice_from_backend_cfg(cfg.get("backend", {}))
 
 
 def _require_nsight():
     if nsight is None:
         raise RuntimeError(
-            "nsight-python is not installed. Run `pixi install -e gpu`, or "
-            "`pixi run -e gpu python -m pip install nsight-python` for a "
-            "one-off local install."
+            "nsight-python is not installed. Run `pixi install` in the GPU "
+            "environment."
         )
     return nsight
 
@@ -119,10 +151,6 @@ def _build_p2g_stage(cfg: DictConfig):
     backend.p2g (scatter) on the solver's own params/state/fns — no duplicated
     construction.
     """
-    kernel_name = _backend_name_from_cfg(cfg)
-    if kernel_name not in KERNEL_NAMES:
-        raise RuntimeError(f"Unsupported P2G kernel={kernel_name!r}.")
-
     solver = MPMSolver(hydra.utils.instantiate(cfg.solver))
     params, backend = solver.params, solver.backend
     pre_fn, elasticity_fn = solver.pre_fn, solver.elasticity_fn
@@ -138,12 +166,12 @@ def _build_p2g_stage(cfg: DictConfig):
 
     warmup = jit_p2g_stage(state)
     jax.block_until_ready(warmup)
-    return jit_p2g_stage, state
+    return jit_p2g_stage, state, backend.name
 
 
 def _p2g_runner(cfg: DictConfig, nsight):
-    jit_p2g_stage, state = _build_p2g_stage(cfg)
-    annotation_name = f"{_backend_name_from_cfg(cfg)}_p2g"
+    jit_p2g_stage, state, backend_name = _build_p2g_stage(cfg)
+    annotation_name = f"{backend_name}_p2g"
 
     def run_p2g_once():
         with nsight.annotate(annotation_name):
@@ -172,57 +200,63 @@ def _sweep_values(mapping: Mapping, key: str, default):
 def _merge_variant_cfg(
     base_cfg: DictConfig,
     *,
-    kernel_name: str,
+    backend_choice: str,
     n_particles: int,
     num_grids: int,
     steps_per_frame: int,
 ):
     variant_cfg = OmegaConf.create(
-        deepcopy(OmegaConf.to_container(base_cfg, resolve=True))
+        deepcopy(OmegaConf.to_container(base_cfg, resolve=False))
     )
-    variant_cfg.backend._target_ = BACKEND_TARGETS[str(kernel_name)]
+    backend_choice = _normalize_backend_choice(backend_choice)
     variant_cfg.sim.n_particles = int(n_particles)
     variant_cfg.sim.num_grids = int(num_grids)
-    variant_cfg.backend.num_grids = int(num_grids)
     variant_cfg.sim.steps_per_frame = int(steps_per_frame)
+    variant_cfg.backend = _backend_config(backend_choice)
+    variant_cfg[_PROFILE_BACKEND_CHOICE_KEY] = backend_choice
+    variant_cfg.solver.material = "${material}"
+    variant_cfg.solver.sim = "${sim}"
+    variant_cfg.solver.backend = "${backend}"
     return variant_cfg
 
 
-def _sweep_kernel_names(cfg: DictConfig):
-    base_kernel = _backend_name_from_cfg(cfg)
+def _sweep_backend_choices(cfg: DictConfig):
+    base_backend = _backend_choice_from_cfg(cfg)
     sweep = cfg.nsight.get("sweep", None)
     if sweep is not None:
         sweep_dict = OmegaConf.to_container(sweep, resolve=True)
         if not isinstance(sweep_dict, Mapping):
             raise RuntimeError("nsight.sweep must be a mapping of parameter lists.")
         return [
-            str(value) for value in _sweep_values(sweep_dict, "kernels", [base_kernel])
+            _normalize_backend_choice(value)
+            for value in _sweep_values(sweep_dict, "kernels", [base_backend])
         ]
 
     configs = cfg.nsight.get("configs", None)
     if configs is not None:
-        kernels = []
+        backend_choices = []
         for variant in OmegaConf.to_container(configs, resolve=True):
             if not isinstance(variant, Mapping):
                 raise RuntimeError(
                     "Each nsight.configs entry must be a mapping of Hydra overrides."
                 )
-            kernel_name = _variant_value(variant, "backend", None)
-            if kernel_name is None:
-                kernel_name = base_kernel
-            if not isinstance(kernel_name, str):
+            backend_choice = _variant_value(variant, "backend", None)
+            if backend_choice is None:
+                backend_choice = base_backend
+            if not isinstance(backend_choice, str):
                 raise RuntimeError(
                     "nsight.configs backend overrides must be config-group names."
                 )
-            kernel_name = str(kernel_name)
-            if kernel_name not in kernels:
-                kernels.append(kernel_name)
-        return kernels or [base_kernel]
+            backend_choice = _normalize_backend_choice(backend_choice)
+            if backend_choice not in backend_choices:
+                backend_choices.append(backend_choice)
+        return backend_choices or [base_backend]
 
-    return [str(base_kernel)]
+    return [base_backend]
 
 
 def _nsight_configs(cfg: DictConfig):
+    base_backend = _backend_choice_from_cfg(cfg)
     base_n = int(cfg.sim.n_particles)
     base_g = int(cfg.sim.num_grids)
     base_steps = int(cfg.sim.steps_per_frame)
@@ -242,11 +276,15 @@ def _nsight_configs(cfg: DictConfig):
             int(value)
             for value in _sweep_values(sweep_dict, "steps_per_frame", [base_steps])
         ]
-        return list(itertools.product(n_particles, num_grids, steps_per_frame))
+        return list(
+            itertools.product(
+                _sweep_backend_choices(cfg), n_particles, num_grids, steps_per_frame
+            )
+        )
 
     configs = cfg.nsight.get("configs", None)
     if configs is None:
-        return None
+        return [(base_backend, base_n, base_g, base_steps)]
     if not isinstance(configs, ListConfig | list):
         raise RuntimeError("nsight.configs must be a list of Hydra override mappings.")
     nsight_configs = []
@@ -255,12 +293,20 @@ def _nsight_configs(cfg: DictConfig):
             raise RuntimeError(
                 "Each nsight.configs entry must be a mapping of Hydra overrides."
             )
+        backend_choice = _variant_value(variant, "backend", base_backend)
+        if not isinstance(backend_choice, str):
+            raise RuntimeError(
+                "nsight.configs backend overrides must be config-group names."
+            )
+        backend_choice = _normalize_backend_choice(backend_choice)
         n_particles = int(_variant_value(variant, "sim.n_particles", base_n))
         num_grids = int(_variant_value(variant, "sim.num_grids", base_g))
         steps_per_frame = int(
             _variant_value(variant, "sim.steps_per_frame", base_steps)
         )
-        nsight_configs.append((n_particles, num_grids, steps_per_frame))
+        nsight_configs.append(
+            (backend_choice, n_particles, num_grids, steps_per_frame)
+        )
     return nsight_configs
 
 
@@ -558,7 +604,7 @@ def _combine_kernel_metrics(name):
     )
 
 
-def _nsight_analyze_kwargs(cfg: DictConfig, run_dir: Path, kernel_name: str):
+def _nsight_analyze_kwargs(cfg: DictConfig, run_dir: Path, backend_choice: str):
     analyze_cfg = cfg.nsight.get("analyze", {})
     kwargs = OmegaConf.to_container(analyze_cfg, resolve=True)
     if kwargs is None:
@@ -587,7 +633,7 @@ def _nsight_analyze_kwargs(cfg: DictConfig, run_dir: Path, kernel_name: str):
     )
     kwargs.setdefault("output", "progress")
     kwargs.setdefault("output_csv", True)
-    kwargs.setdefault("output_prefix", str(run_dir / f"nsight_{kernel_name}_p2g_"))
+    kwargs.setdefault("output_prefix", str(run_dir / f"nsight_{backend_choice}_p2g_"))
     kwargs.setdefault("configs", _nsight_configs(cfg))
     return kwargs
 
@@ -696,37 +742,27 @@ def _disable_editable_pth_for_nsight():
 @hydra.main(version_base=None, config_path="conf", config_name="nsight_profile")
 def main(cfg: DictConfig):
     nsight = _require_nsight()
-    kernel_name = _backend_name_from_cfg(cfg)
-    phase = str(cfg.nsight.get("phase", "backend"))
-    if phase != "backend":
+    backend_choice = _backend_choice_from_cfg(cfg)
+    phase = str(cfg.nsight.get("phase", "p2g"))
+    if phase != "p2g":
         raise RuntimeError("profile_nsight.py now supports only nsight.phase=p2g.")
-
-    configured_kernels = set(_sweep_kernel_names(cfg))
-    unsupported = configured_kernels - _P2G_KERNELS
-    if unsupported:
-        supported = ", ".join(sorted(_P2G_KERNELS))
-        raise RuntimeError(
-            f"Unsupported P2G kernels: {', '.join(sorted(unsupported))}. "
-            f"Supported kernels: {supported}"
-        )
 
     run_dir = Path(HydraConfig.get().runtime.output_dir).resolve()
     _prepare_nsight_child_python(run_dir)
-    analyze_kwargs = _nsight_analyze_kwargs(cfg, run_dir, kernel_name)
+    analyze_kwargs = _nsight_analyze_kwargs(cfg, run_dir, backend_choice)
     plot_enabled = bool(cfg.nsight.get("plot", {}).get("enabled", False))
     plot_kwargs = _nsight_plot_kwargs(cfg, run_dir) if plot_enabled else None
 
-    def profiled_variant(n_particles, num_grids, steps_per_frame):
-        for variant_kernel in _sweep_kernel_names(cfg):
-            profile_cfg = _merge_variant_cfg(
-                cfg,
-                kernel_name=variant_kernel,
-                n_particles=n_particles,
-                num_grids=num_grids,
-                steps_per_frame=steps_per_frame,
-            )
-            launcher = _p2g_runner(profile_cfg, nsight)
-            launcher()
+    def profiled_variant(variant_backend, n_particles, num_grids, steps_per_frame):
+        profile_cfg = _merge_variant_cfg(
+            cfg,
+            backend_choice=variant_backend,
+            n_particles=n_particles,
+            num_grids=num_grids,
+            steps_per_frame=steps_per_frame,
+        )
+        launcher = _p2g_runner(profile_cfg, nsight)
+        launcher()
 
     profiled_variant = nsight.analyze.kernel(**analyze_kwargs)(profiled_variant)
     if plot_kwargs is not None:

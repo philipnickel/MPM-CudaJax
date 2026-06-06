@@ -1,7 +1,10 @@
+from types import SimpleNamespace
+
 import jax.numpy as jnp
 from omegaconf import OmegaConf
 from mpm_jax.solver import MPMSolver, RuntimeConfig
-from mpm_jax.backends import Backend
+from mpm_jax.backends import JaxBackend
+from mpm_jax.constitutive import stvk_elasticity_jacobi
 
 
 def _make_solver(steps_per_frame=2, n=64, G=16):
@@ -21,13 +24,9 @@ def _make_solver(steps_per_frame=2, n=64, G=16):
             "boundary_conditions": [],
         }
     )
-    material = OmegaConf.create(
-        {
-            "elasticity": {"name": "StVKElasticityJacobi"},
-        }
-    )
+    material = SimpleNamespace(elasticity=stvk_elasticity_jacobi())
     return MPMSolver(
-        RuntimeConfig(material=material, sim=sim, backend=Backend())
+        RuntimeConfig(material=material, sim=sim, backend=JaxBackend())
     )
 
 
@@ -70,6 +69,6 @@ def test_stepped_returns_new_solver():
 
 def test_solver_exposes_backend_and_constitutive():
     s = _make_solver()
-    assert s.backend.name == "jax_baseline"
+    assert s.backend.name == "jax"
     assert callable(s.elasticity_fn)
     assert s.state.x is not None and s.state.v is not None

@@ -13,7 +13,7 @@ MPM-CudaJax is a 3D MLS-MPM benchmark and investigation project comparing:
 
 - pure JAX/XLA solver paths,
 - hand-written CUDA kernels registered through JAX FFI, and
-- NVIDIA Warp kernels called from the shared JAX-owned frame loop.
+- NVIDIA cuTile kernels called from the shared JAX-owned frame loop.
 
 The main entry points are:
 
@@ -22,28 +22,27 @@ The main entry points are:
 - `profile_nsight.py` - Nsight Python profiling for per-stage and per-kernel
   analysis.
 - `src/mpm_jax/solver.py` - Equinox-based `MPMSolver`.
-- `src/mpm_jax/backends.py` - shared backend interface and JAX-owned frame
-  loop.
+- `src/mpm_jax/backends/` - Hydra-registered backend implementations.
 - `src/mpm_jax/grid.py`, `sort.py` - pure-math helpers (grid update; Morton +
   super-cell sorting).
-- `src/mpm_jax/warp_p2g.py` - Warp tiled kernel bridge helpers.
+- `src/mpm_jax/cutile_p2g.py` - cuTile tiled kernel bridge helpers.
 - `src/mpm_jax/cuda/` - JAX FFI CUDA loading plus CUDA kernel sources.
 - `conf/` - Hydra config groups for simulation, materials, kernels, profiling,
   and sweeps.
 - `tests/` - pytest coverage for solver behavior, CUDA equivalence, backends,
-  Warp paths, boundaries, and constitutive models.
+  cuTile paths, boundaries, and constitutive models.
 
 ## Working Rules
 
 - Use `pixi` for installs, tests, linting, and running commands. Do not use
   system Python or direct `pip install` workflows.
-- Prefer `pixi run test` for the full test suite and `pixi run -e gpu ...` for
-  GPU/CUDA/Warp runs.
-- CUDA kernels are built through scikit-build-core and CMake. CPU-only installs
-  intentionally skip CUDA when `nvcc` is unavailable.
-- Kernel selection is Hydra-target-driven. Add or change kernel variants through
-  `src/mpm_jax/backends.py` and the relevant `_target_` config files rather
-  than adding dispatch logic to `simulate.py`.
+- Prefer `pixi run test` for the full test suite and plain `pixi run ...` for
+  GPU/CUDA/cuTile runs. The default Pixi environment is the GPU environment.
+- CUDA kernels are built through scikit-build-core and CMake during
+  `pixi install`.
+- Kernel selection is Hydra-target-driven. Backend implementation modules under
+  `src/mpm_jax/backends/` register their own Hydra config-group choices via
+  hydra-zen; do not add dispatch logic to `simulate.py`.
 - Preserve the benchmark methodology described in `.claude/CLAUDE.md`,
   especially the standard 8-particles-per-cell setup and the JAX trace -> Nsight
   Compute -> `nsight-python` profiling order.
@@ -52,14 +51,13 @@ The main entry points are:
 
 ```bash
 pixi install
-pixi install -e gpu
 pixi run test
 pixi run lint
 pixi run python simulate.py sim.num_frames=5
-pixi run -e gpu python simulate.py benchmark=true
-pixi run -e gpu python simulate.py backend=jax_baseline
-pixi run -e gpu python simulate.py backend=cuda_v3_inline material=jelly
-pixi run -e gpu python simulate.py -cn sweep_quick
+pixi run python simulate.py benchmark=true
+pixi run python simulate.py backend=jax
+pixi run python simulate.py backend=cuda_v3 material=jelly
+pixi run python simulate.py -cn sweep_quick
 ```
 
 For fuller command examples, kernel descriptions, environment details, and the

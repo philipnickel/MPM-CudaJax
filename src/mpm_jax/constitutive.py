@@ -31,14 +31,3 @@ def stvk_elasticity_jacobi(E=2e6, nu=0.4):
         return 2.0 * mu * (F @ E_strain) + la * J * (J - 1.0) * I
 
     return jax.vmap(stress_single)
-
-
-# Config name -> constitutive factory; only jelly's StVK stress is wired up.
-# (StVK, not neo-Hookean: the latter's 1/J stress blows up at fine grids on impact.)
-REGISTRY = {"StVKElasticityJacobi": stvk_elasticity_jacobi}
-
-
-def get_constitutive(cfg):
-    """Build a constitutive fn from a ``{name, **kwargs}`` config node."""
-    params = dict(cfg)
-    return REGISTRY[params.pop("name")](**params)

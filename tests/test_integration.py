@@ -2,9 +2,9 @@ import jax.numpy as jnp
 import jax
 from omegaconf import OmegaConf
 from mpm_jax.types import MPMState, MPMParams
-from mpm_jax.backends import Backend
+from mpm_jax.backends import JaxBackend
 from mpm_jax.solver import build_backend_frame
-from mpm_jax.constitutive import get_constitutive
+from mpm_jax.constitutive import stvk_elasticity_jacobi
 from mpm_jax.boundary import build_boundary_fns
 
 
@@ -48,9 +48,7 @@ def test_elastic_simulation_10_frames():
         },
     ]
     pre_fn, post_fn = build_boundary_fns(bc_configs, grid_x, params.dx)
-    elasticity_fn = get_constitutive(
-        OmegaConf.create({"name": "StVKElasticityJacobi", "E": 2e6, "nu": 0.4})
-    )
+    elasticity_fn = stvk_elasticity_jacobi(E=2e6, nu=0.4)
     state = MPMState(
         x=x0,
         v=jnp.broadcast_to(jnp.array([0.0, 0.0, -0.5]), (N, 3)).copy(),
@@ -62,7 +60,7 @@ def test_elastic_simulation_10_frames():
         elasticity_fn,
         pre_fn,
         post_fn,
-        Backend(),
+        JaxBackend(),
         steps_per_frame=5,
     )
     for _ in range(10):
@@ -91,9 +89,7 @@ def test_outer_frame_jit_runs_multiple_frames():
         },
     ]
     pre_fn, post_fn = build_boundary_fns(bc_configs, grid_x, params.dx)
-    elasticity_fn = get_constitutive(
-        OmegaConf.create({"name": "StVKElasticityJacobi", "E": 2e6, "nu": 0.4})
-    )
+    elasticity_fn = stvk_elasticity_jacobi(E=2e6, nu=0.4)
 
     state = MPMState(
         x=x0,
@@ -106,7 +102,7 @@ def test_outer_frame_jit_runs_multiple_frames():
         elasticity_fn,
         pre_fn,
         post_fn,
-        Backend(),
+        JaxBackend(),
         steps_per_frame,
     )
     state = jit_frame(state)

@@ -1,12 +1,10 @@
+from pathlib import Path
+
+import hydra
 import jax.numpy as jnp
-import pytest
 from omegaconf import OmegaConf
 
-from mpm_jax.constitutive import (
-    REGISTRY,
-    get_constitutive,
-    stvk_elasticity_jacobi,
-)
+from mpm_jax.constitutive import stvk_elasticity_jacobi
 
 
 def _make_F_batch(N=10):
@@ -27,19 +25,9 @@ def test_stvk_jacobi_stretched_F_gives_nonzero_stress():
     assert not jnp.allclose(stress, 0.0)
 
 
-def test_registry_is_jelly_only():
-    assert REGISTRY == {"StVKElasticityJacobi": stvk_elasticity_jacobi}
-
-
-def test_get_constitutive_elasticity():
-    cfg = OmegaConf.create({"name": "StVKElasticityJacobi", "E": 1e4, "nu": 0.4})
-    fn = get_constitutive(cfg)
+def test_jelly_material_config_builds_constitutive():
+    cfg = OmegaConf.load(Path("conf/material/jelly.yaml"))
+    fn = hydra.utils.instantiate(cfg.elasticity)
     stress = fn(_make_F_batch(5))
     assert stress.shape == (5, 3, 3)
-
-
-def test_removed_material_names_raise_keyerror():
-    # Drucker-Prager plasticity was removed with the SVD/sand path.
-    cfg = OmegaConf.create({"name": "DruckerPragerPlasticityJacobi"})
-    with pytest.raises(KeyError):
-        get_constitutive(cfg)
+    assert jnp.allclose(stress, 0.0, atol=1e-3)

@@ -13,6 +13,7 @@ from tqdm import tqdm
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
 
+import mpm_jax.backends  # noqa: F401 - registers Hydra backend config choices
 from mpm_jax.solver import MPMSolver
 
 
@@ -407,7 +408,7 @@ def main(cfg: DictConfig):
     frames, elapsed, total_steps, summary, _frame_metrics = run(
         cfg, trace_dir=jax_trace_dir, profile_opts=profile_opts
     )
-    kernel_name = HydraConfig.get().runtime.choices.get("backend", "jax_baseline")
+    kernel_name = HydraConfig.get().runtime.choices.get("backend", "jax")
 
     # Print timing summary
     steps_per_sec = total_steps / elapsed
@@ -490,9 +491,7 @@ def main(cfg: DictConfig):
     # and post-hoc aggregation can pick up the per-run numbers. One file per
     # run, fixed shape.
     run_dir = os.path.abspath(HydraConfig.get().runtime.output_dir)
-    mat_name = cfg.get("material", {}).get("elasticity", {}).get(
-        "name", None
-    ) or cfg.get("material", {}).get("name", "unknown")
+    mat_name = HydraConfig.get().runtime.choices.get("material", "unknown")
     results = {
         "kernel": kernel_name,
         "material_elasticity": mat_name,

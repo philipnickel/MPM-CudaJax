@@ -8,7 +8,14 @@ import jax.numpy as jnp
 
 from omegaconf import OmegaConf
 
-from mpm_jax.backends import Backend, build_backend
+from mpm_jax.backends import (
+    CudaV1Backend,
+    CudaV2Backend,
+    CudaV3Backend,
+    CudaV4Backend,
+    CutileBackend,
+    JaxBackend,
+)
 from mpm_jax.cuda.p2g_cuda import is_available
 from mpm_jax.types import MPMState, MPMParams
 
@@ -87,15 +94,14 @@ def _p2g_output(backend, params, state, stress):
 )
 def test_cuda_p2g_variants_match_jax_scan():
     params, state, stress = _inputs()
-    ref_mv, ref_m = _p2g_output(Backend(), params, state, stress)
+    ref_mv, ref_m = _p2g_output(JaxBackend(), params, state, stress)
 
-    for name in (
-        "cuda_v1_inline",
-        "cuda_v2_inline",
-        "cuda_v3_inline",
-        "cuda_v4_inline",
+    for backend in (
+        CudaV1Backend(params.num_grids),
+        CudaV2Backend(params.num_grids),
+        CudaV3Backend(params.num_grids),
+        CudaV4Backend(params.num_grids),
     ):
-        backend = build_backend(name, params.num_grids)
         grid_mv, grid_m = _p2g_output(backend, params, state, stress)
         np.testing.assert_allclose(
             np.asarray(grid_mv), np.asarray(ref_mv), atol=1e-5, rtol=1e-5
@@ -110,26 +116,32 @@ def test_cuda_p2g_variants_match_jax_scan():
 
 @pytest.mark.skipif(
     not _cuda_kernels_available("v4_inline"),
-    reason="cuda_v4_inline kernel not built or no GPU backend available",
+    reason="cuda_v4 kernel not built or no GPU backend available",
 )
 def test_cuda_v4_supercell_widths_match_jax_scan():
     # cuda_v4 is templated + dispatched over SUPPORTED_SC; every compiled
     # super-cell width must scatter identically to the JAX baseline.
-    from mpm_jax.backends import CudaV4
+    from mpm_jax.backends import CudaV4Backend
     from mpm_jax.cuda.p2g_cuda import SUPPORTED_SC
 
     params, state, stress = _inputs()  # num_grids=16, divisible by 2/4/8
-    ref_mv, ref_m = _p2g_output(Backend(), params, state, stress)
+    ref_mv, ref_m = _p2g_output(JaxBackend(), params, state, stress)
 
     for sc in SUPPORTED_SC:
-        backend = CudaV4(num_grids=params.num_grids, super_cell_width=sc)
+        backend = CudaV4Backend(num_grids=params.num_grids, super_cell_width=sc)
         grid_mv, grid_m = _p2g_output(backend, params, state, stress)
         np.testing.assert_allclose(
-            np.asarray(grid_mv), np.asarray(ref_mv), atol=1e-5, rtol=1e-5,
+            np.asarray(grid_mv),
+            np.asarray(ref_mv),
+            atol=1e-5,
+            rtol=1e-5,
             err_msg=f"SC={sc}",
         )
         np.testing.assert_allclose(
-            np.asarray(grid_m), np.asarray(ref_m), atol=1e-5, rtol=1e-5,
+            np.asarray(grid_m),
+            np.asarray(ref_m),
+            atol=1e-5,
+            rtol=1e-5,
             err_msg=f"SC={sc}",
         )
 
@@ -140,11 +152,9 @@ def test_cuda_v4_supercell_widths_match_jax_scan():
 )
 def test_cutile_p2g_matches_jax_scan():
     params, state, stress = _inputs()
-    ref_mv, ref_m = _p2g_output(Backend(), params, state, stress)
+    ref_mv, ref_m = _p2g_output(JaxBackend(), params, state, stress)
 
-    for backend in (
-        build_backend("cutile_v6_atomic_tile", params.num_grids),
-    ):
+    for backend in (CutileBackend(params.num_grids),):
         grid_mv, grid_m = _p2g_output(backend, params, state, stress)
 
         np.testing.assert_allclose(

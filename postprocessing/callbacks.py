@@ -5,7 +5,7 @@ directory, collects every per-run ``results.json`` that ``simulate.py``
 dumped, and produces two seaborn plots into the multirun root:
 
   scaling_ms_per_step.png     ms/step vs N, one line per kernel (log-log)
-  scaling_speedup.png         speedup vs `jax_baseline`, one line per kernel
+  scaling_speedup.png         speedup vs `jax`, one line per kernel
 
 Plus ``results.csv`` (long-form pandas dataframe) for downstream tooling.
 
@@ -19,7 +19,7 @@ Usage in a Hydra sweep config:
       callbacks:
         scaling_plot:
           _target_: postprocessing.callbacks.ScalingPlotCallback
-          baseline_kernel: jax_baseline  # which kernel's ms/step is the denominator
+          baseline_kernel: jax  # which kernel's ms/step is the denominator
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ plt.switch_backend("Agg")
 class ScalingPlotCallback(Callback):
     """Aggregate per-run results.json files into a scaling plot."""
 
-    def __init__(self, baseline_kernel: str = "jax_baseline"):
+    def __init__(self, baseline_kernel: str = "jax"):
         self.baseline_kernel = baseline_kernel
 
     def on_multirun_end(self, config: DictConfig, **kwargs: Any) -> None:

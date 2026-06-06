@@ -3,7 +3,7 @@
 # StVK stress is polynomial in F (no 1/J singularity), so it stays stable at fine
 # grids under impact -- unlike a neo-Hookean log(J) stress, which blows up there.
 elasticity:
-  name: StVKElasticityJacobi
+  _target_: mpm_jax.constitutive.stvk_elasticity_jacobi
   E: 1e4
   nu: 0.4
 color: hotpink

@@ -1,8 +1,0 @@
-# cutile_v6_atomic_tile -- one-launch arena P2G via a tile-coalesced atomic.
-# Each block reduces its SC=2 super-cell into a 4^3 L1 arena, then writes back
-# with a SINGLE TiledView.atomic_store_add (a 1-node halo pad aligns the arena's
-# apron to an overlapping tiled view, so shared apron nodes are reconciled by the
-# atomics). No coloring, no parity, one launch. Requires num_grids divisible by 2.
-# Occupancy is left to the cuTile compiler default.
-_target_: mpm_jax.backends.CutileV6
-num_grids: ${sim.num_grids}

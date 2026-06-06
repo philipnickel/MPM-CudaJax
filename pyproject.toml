@@ -9,6 +9,7 @@ requires-python = ">=3.10"
 description = "MLS-MPM benchmark: JAX/XLA vs hand-written CUDA"
 dependencies = [
     "hydra-core>=1.3",
+    "hydra-zen",
     "omegaconf",
     "matplotlib",
     "tqdm",
@@ -39,11 +40,12 @@ testpaths = ["tests"]
 [tool.pixi.workspace]
 name = "mpm-cudajax"
 channels = ["conda-forge"]
-platforms = ["linux-64", "linux-aarch64", "osx-arm64"]
+platforms = ["linux-64", "linux-aarch64"]
 
 [tool.pixi.dependencies]
 python = ">=3.10,<3.13"
 hydra-core = ">=1.3"
+hydra-zen = "*"
 omegaconf = "*"
 matplotlib = "*"
 tqdm = "*"
@@ -56,9 +58,8 @@ pandas = ">=3.0.3,<4"
 pyvista = "*"
 imageio = "*"
 # NOTE: `warp-lang` is intentionally NOT here. The conda-forge build pulls
-# `jax` as a hard runtime dep, which would conflict with the hpc env's
-# pypi-side `jax[cuda12-local]` (pixi can't apply pypi extras to a
-# conda-installed jax). warp-lang is added per-feature below.
+# `jax` as a hard runtime dep, which would conflict with the PyPI-side
+# `jax[cuda13]` package used by the default GPU environment below.
 
 [tool.pixi.pypi-dependencies]
 mpm-cudajax = { path = ".", editable = true }
@@ -68,11 +69,6 @@ mpm-cudajax = { path = ".", editable = true }
 # of a temporary isolated build env. This is required for
 # editable.rebuild=true to run incremental CMake rebuilds reliably on import.
 no-build-isolation = ["mpm-cudajax"]
-
-[tool.pixi.feature.cpu.dependencies]
-jax = ">=0.4.20"
-jaxlib = ">=0.4.20"
-warp-lang = "*"
 
 [tool.pixi.feature.dev.dependencies]
 pytest = "*"
@@ -102,7 +98,7 @@ JAX_PLATFORMS = "cuda"
 # Enable XLA command-buffer (CUDA Graph) capture for the whole frame loop:
 # FUSION + CUSTOM_CALL (the FFI/cuTile scatters & fused G2P) + WHILE (the substep
 # lax loop) are replayed as one graph per substep. Was an opt-in per-kernel flag
-# (cuda_v3 cuda_graph=true); now on for every kernel in the gpu env.
+# (cuda_v3 cuda_graph=true); now on for every kernel in the default env.
 XLA_FLAGS = "--xla_gpu_enable_command_buffer=FUSION,CUSTOM_CALL,WHILE"
 JAX_COMPILATION_CACHE_DIR = "$PIXI_PROJECT_ROOT/.jax_cache"
 JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS = "0"
@@ -115,79 +111,27 @@ cuda = "12.0"
 # x86_64 wheel (H100). Declare the glibc floor so uv accepts the aarch64 wheel.
 libc = { family = "glibc", version = "2.34" }
 
-# HPC / module-system environment. Unlike `gpu` (which bundles a full
-# conda-forge CUDA 12 stack), `hpc` brings NO CUDA libs of its own and
-# instead relies on a site-provided CUDA toolkit loaded via `module load`
-# (e.g. `module load nvhpc/24.1` on DTU). jax is installed from PyPI with
-# the `cuda12-local` extras, which link against whatever libcuda /
-# libcudart are on LD_LIBRARY_PATH at runtime. This avoids the common HPC
-# failure mode where conda-forge ships CUDA 12.9 but the node's driver
-# only supports 12.3, producing CUDA_ERROR_INVALID_IMAGE on the first jit.
-#
-# Workflow on the HPC node:
-#     module load nvhpc/24.1            # provides nvcc + libcuda matched to driver
-#     pixi install -e hpc               # builds .cu kernels with module's nvcc
-#     pixi run -e hpc python simulate.py ...
-[tool.pixi.feature.hpc]
-platforms = ["linux-64", "linux-aarch64"]
-
-[tool.pixi.feature.hpc.dependencies]
-gxx = "*"
-
-[tool.pixi.feature.hpc.pypi-dependencies]
-jax = { version = ">=0.4.20", extras = ["cuda12-local"] }
-warp-lang = "*"
-# cuDNN is not in NVHPC 24.1's tree on DTU's gracy, and jax[cuda12-local]
-# checks for it at initialize() time. Pull the wheel from PyPI; it
-# unpacks libcudnn.so.* into site-packages/nvidia/cudnn/lib/ and adds
-# itself to the dlopen path automatically. Removes one site-specific
-# LD_LIBRARY_PATH dance.
-nvidia-cudnn-cu12 = "*"
-
 [tool.pixi.environments]
-default = { features = ["cpu", "dev"], solve-group = "cpu" }
-gpu = { features = ["gpu", "dev"], solve-group = "gpu" }
-hpc = { features = ["hpc", "dev"], solve-group = "hpc" }
-rendering = { features = ["gpu", "rendering", "dev"], solve-group = "rendering" }
+default = { features = ["gpu", "dev"], solve-group = "default" }
 
 [tool.pixi.tasks]
 test = "pytest tests/ -v"
 lint = "ruff check ."
 clean = { cmd = "rm -f src/mpm_jax/cuda/_lib/*.so src/mpm_jax/cuda/kernels/*.so && rm -rf build multirun outputs output && rm -f *.sqlite && find . -type d -name __pycache__ -exec rm -rf {} +" }
+sim = "python simulate.py"
+sweep = "python simulate.py -cn sweep_baseline"
+sweep-quick = "python simulate.py -cn sweep_quick"
+sweep-all = "python simulate.py -cn sweep_all"
 
 # Push the working tree to a remote host (e.g. `pixi run sync lambda`).
 # Excludes generated dirs (.pixi, build, outputs, etc.) and arch-specific
-# CUDA .so files — the remote rebuilds those on its own `pixi install -e gpu`.
+# CUDA .so files — the remote rebuilds those on its own `pixi install`.
 sync = { args = [{ arg = "host" }], cmd = "rsync -ahz --info=stats1,name0 --exclude=.pixi --exclude=.venv --exclude=build --exclude=outputs --exclude=multirun --exclude=output --exclude=src/mpm_jax/cuda/_lib --exclude=__pycache__ --exclude='*.sqlite' --exclude='*.egg-info' --exclude=.pytest_cache ./ {{ host }}:~/MPM-CudaJax/" }
 
 # Pull Hydra run outputs back from a remote host (e.g. `pixi run sync-results lambda`).
 # One rsync with include/exclude rules so missing source dirs are silently skipped.
 sync-results = { args = [{ arg = "host" }], cmd = "rsync -ahz --info=stats1,name0 --include='outputs/' --include='outputs/**' --include='multirun/' --include='multirun/**' --include='output/' --include='output/**' --exclude='*' {{ host }}:~/MPM-CudaJax/ ./" }
 
-[tool.pixi.feature.gpu.tasks]
-sim = "python simulate.py"
-sweep = "python simulate.py -cn sweep_baseline"
-sweep-quick = "python simulate.py -cn sweep_quick"
-sweep-all = "python simulate.py -cn sweep_all"
-
 [tool.pixi.feature.gpu.target.linux-64.pypi-dependencies]
 pyglet = ">=2.0"
 usd-core = ">=26.5, <27"
-
-[tool.pixi.feature.rendering]
-platforms = ["linux-64"]
-
-[tool.pixi.feature.rendering.dependencies]
-imageio-ffmpeg = "*"
-
-[tool.pixi.feature.rendering.system-requirements]
-libc = { family = "glibc", version = "2.35" }
-
-[tool.pixi.feature.hpc.tasks]
-sim = "python simulate.py"
-sweep = "python simulate.py -cn sweep_baseline"
-sweep-quick = "python simulate.py -cn sweep_quick"
-sweep-all = "python simulate.py -cn sweep_all"
-
-[tool.pixi.feature.rendering.target.linux-64.pypi-dependencies]
-ovrtx = "==0.3.0.312915"

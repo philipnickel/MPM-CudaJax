@@ -79,7 +79,7 @@ def _register(name: str, so_name: str, symbol: str) -> bool:
         if so_path is None:
             logger.warning(
                 "CUDA kernel %s not found in package resources. Run "
-                "`pixi install -e gpu` in an environment where nvcc is on PATH.",
+                "`pixi install` in an environment where nvcc is on PATH.",
                 so_name,
             )
             _REGISTERED[name] = False
@@ -132,7 +132,7 @@ def is_available(kernel="inline"):
 
 
 def cuda_p2g_inline(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
-    """Inline-scatter CUDA P2G via JAX FFI (cuda_v1_inline).
+    """Inline-scatter CUDA P2G via JAX FFI (backend: cuda_v1).
 
     Takes per-particle state including precomputed stress (from the JAX-side
     StVK elasticity). One CUDA kernel launch, one thread per particle, with a
@@ -172,7 +172,7 @@ def cuda_p2g_inline(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
 
 
 def cuda_p2g_v2_inline(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
-    """Inline-scatter CUDA P2G with warp-shuffle reduction (cuda_v2_inline).
+    """Inline-scatter CUDA P2G with warp-shuffle reduction (backend: cuda_v2).
 
     Same FFI signature as ``cuda_p2g_inline`` — only the C++ symbol is
     different. The kernel inserts a ``__match_any_sync`` + ``__shfl_sync``
@@ -211,7 +211,7 @@ def cuda_p2g_v2_inline(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
 
 
 def cuda_p2g_v3_inline(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
-    """Inline-scatter CUDA P2G with warp-shuffle atomic coalescing (cuda_v3_inline).
+    """Inline-scatter CUDA P2G with warp-shuffle atomic coalescing (backend: cuda_v3).
 
     Identical kernel-side reduction as ``cuda_p2g_v2_inline``. Designed to
     be called on Morton-sorted particles (see
@@ -248,7 +248,7 @@ def cuda_p2g_v3_inline(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
     return grid_mv, grid_m
 
 
-# Super-cell width for cuda_v4_inline. With SC=k the kernel launches (G/SC)^3
+# Super-cell width for the cuda_v4 backend. With SC=k the kernel launches (G/SC)^3
 # blocks (vs G^3) and each block aggregates particles from SC^3 cells into a
 # (SC+2)^3 shared-memory tile. The kernel is a template on SC; the FFI handler
 # dispatches to the instantiated values in SUPPORTED_SC by a runtime switch, so
@@ -273,7 +273,7 @@ def cuda_p2g_v4_inline(
     dx,
     super_cell=V4_SUPER_CELL_WIDTH,
 ):
-    """Cell-major inline P2G via JAX FFI (cuda_v4_inline).
+    """Cell-major inline P2G via JAX FFI (backend: cuda_v4).
 
     The Python wrapper assumes the inputs are already sorted by home
     *super*-cell and that ``cell_start`` is the CSR boundary array of length

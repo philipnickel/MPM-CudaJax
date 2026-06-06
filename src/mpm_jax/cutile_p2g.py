@@ -1,11 +1,11 @@
 """cuTile P2G kernel called from the shared JAX-owned frame loop.
 
-A single variant (``cutile_v6_atomic_tile``), sharing the JAX baseline G2P
-(only P2G varies). It uses genuine tile primitives (``gather`` loads,
+A single variant (``cutile``), sharing the JAX baseline G2P (only P2G varies).
+It uses genuine tile primitives (``gather`` loads,
 broadcast + ``where`` + ``sum`` reductions, a tile-coalesced ``atomic_store_add``
 write-back) — no raw ``get_raw_memory``.
 
-``cutile_v6_atomic_tile`` — SPGrid-style arena scatter. Each block sorts by home
+``cutile`` — SPGrid-style arena scatter. Each block sorts by home
 super-cell (SC=2), reduces its OWN super-cell's particles (read once, no gather
 redundancy) into a small L1-resident arena (4**3 = 64 nodes), then writes the
 arena back to the global grid with a SINGLE tile-coalesced ``atomic_store_add``

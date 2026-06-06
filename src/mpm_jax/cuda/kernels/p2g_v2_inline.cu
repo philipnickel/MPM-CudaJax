@@ -1,6 +1,6 @@
-// Inline P2G scatter kernel with warp-shuffle reduction (cuda_v2_inline).
+// Inline P2G scatter kernel with warp-shuffle reduction used by the cuda_v2 backend.
 //
-// Identical to cuda_v1_inline (p2g_inline.cu) for the per-particle setup —
+// Identical to the cuda_v1 backend kernel (p2g_inline.cu) for the per-particle setup —
 // one thread per particle, register-resident state, inline B-spline weights,
 // no (N, 27, *) materialisation in HBM. The ONLY difference is the 27-stencil
 // scatter: before each atomicAdd, lanes inside the warp that target the same
@@ -8,7 +8,7 @@
 // and only the leader lane issues the atomic.
 //
 // Question this kernel answers: now that the (N, 27, *) materialisation is
-// gone (cuda_v1_inline structure), does warp-shuffle reduction on top of
+// gone (cuda_v1 structure), does warp-shuffle reduction on top of
 // atomicAdd help, hurt, or wash?
 //
 // Requires sm_70+ for __match_any_sync (the A10 / sm_86 is fine).

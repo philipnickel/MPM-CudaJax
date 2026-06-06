@@ -8,7 +8,6 @@ import numpy as np
 
 from mpm_jax.grid import build_grid_x, grid_update
 from mpm_jax.boundary import build_boundary_fns
-from mpm_jax.constitutive import get_constitutive
 from mpm_jax.types import MPMParams, MPMState
 
 
@@ -117,7 +116,12 @@ class MPMSolver:
         self.steps_per_frame = int(sim.steps_per_frame)
         self._init_state = init_state
         self.state = init_state
-        self.elasticity_fn = get_constitutive(mat.elasticity)
+        self.elasticity_fn = mat.elasticity
+        if not callable(self.elasticity_fn):
+            raise TypeError(
+                "material.elasticity must be a Hydra-instantiated callable. "
+                "Use an `_target_` in conf/material/<name>.yaml."
+            )
         self.pre_fn = pre_fn
         self.post_fn = post_fn
         self.backend = backend

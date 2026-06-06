@@ -1,21 +1,17 @@
 # Full comparison sweep: JAX variants vs inline CUDA kernels.
 #
-# Usage: pixi run -e gpu python simulate.py -cn sweep_all
+# Usage: pixi run python simulate.py -cn sweep_all
 #
-# Build CUDA kernels first: pixi install -e gpu
+# Build CUDA kernels first: pixi install
 defaults:
-  - config
-  - _self_
+    - config
+    - _self_
 
 hydra:
-  mode: MULTIRUN
-  sweeper:
-    params:
-      sim.n_particles: 8000000      
-      backend: jax,cuda_v1,cuda_v3,cuda_v4,cutile
+    mode: MULTIRUN
+    sweeper:
+        params:
+            backend: jax,cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile
 
 benchmark: true
 tag: sweep_all
-sim:
-  num_frames: 1
-  num_grids: 64

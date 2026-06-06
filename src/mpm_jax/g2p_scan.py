@@ -13,9 +13,8 @@ This module mirrors ``p2g_scan``: ``lax.scan`` over the 27 offsets, gather one
 Peak intermediate is ``(N, 3, 3)``; the ``(N, 27, 3, 3)`` never materialises.
 Weights are recomputed inline (the standard quadratic B-spline math), so
 ``prepare`` need not build the ``(N, 27, *)`` weight arrays either.
-``_g2p_scan_mls`` is the G2P shared by every registered kernel (jax_baseline,
-the CUDA variants, and the cuTile arena P2G), so across the registry only the
-P2G implementation varies.
+``_g2p_scan_mls`` is the G2P shared by every backend (jax, the CUDA variants,
+and the cuTile arena P2G), so only the P2G implementation varies.
 """
 
 import jax
