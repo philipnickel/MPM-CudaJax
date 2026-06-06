@@ -1,8 +1,10 @@
 defaults:
   - config
+  - override /sim: benchmark
   - _self_
 
-benchmark: true
+render:
+  enabled: false
 
 nsight:
   phase: p2g

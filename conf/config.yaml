@@ -1,6 +1,6 @@
 defaults:
   - material: jelly
-  - sim: benchmark
+  - sim: default
   - backend: jax
   - _self_
 
@@ -12,8 +12,8 @@ solver:
   backend: ${backend}
 
 tag: jelly
-benchmark: false  # skip GIF rendering and frame saving when true
 render:
+  enabled: true
   fps: 30
   point_radius: 0.008
   width: 960

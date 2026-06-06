@@ -37,7 +37,7 @@ All performance comparisons use one fixed, well-resolved configuration (adapted 
 ```bash
 # sim=benchmark encodes 8M particles, num_grids=124, ∆t=5e-5, center/size, sticky floor
 pixi run python simulate.py -cn config sim=benchmark \
-    backend=<k> material=jelly benchmark=true
+    backend=<k> material=jelly render.enabled=false
 ```
 
 ## Package manager: pixi
@@ -147,11 +147,11 @@ Material baseline:
 ## Common commands
 
 ```bash
-# Default run (renders GIF to ./output)
+# Default run (renders GIF in the Hydra run directory)
 pixi run python simulate.py
 
-# Benchmark mode (timing only, no GIF)
-pixi run python simulate.py benchmark=true
+# Timing run (no GIF)
+pixi run python simulate.py sim=benchmark render.enabled=false
 
 # Switch kernel
 pixi run python simulate.py backend=jax                              # JAX/XLA baseline (scan P2G + MLS G2P)
@@ -159,7 +159,7 @@ pixi run python simulate.py backend=cuda_v1 material=jelly            # CUDA inl
 pixi run python simulate.py backend=cuda_v2 material=jelly            # warp-shuffle CUDA
 pixi run python simulate.py backend=cuda_v3 material=jelly            # Morton-sorted CUDA
 pixi run python simulate.py backend=cuda_v4 material=jelly            # super-cell grid tile CUDA
-pixi run python simulate.py backend=cutile material=jelly benchmark=true  # cuTile tiled P2G
+pixi run python simulate.py backend=cutile material=jelly sim=benchmark render.enabled=false  # cuTile tiled P2G
 
 # Override sim params
 pixi run python simulate.py sim.n_particles=50000 sim.num_grids=64
@@ -197,7 +197,7 @@ CMake auto-detects the local GPU arch when `MPM_CUDA_ARCH` is unset.
 
 ## Conventions
 
-- **Sweeps must use Hydra multirun**, never a bash `for` loop. Either use a pre-baked sweep config (`-cn sweep_*`) or pass axes inline: `pixi run python simulate.py -m sim.n_particles=5000,50000,200000 backend=jax,cuda_v1,cuda_v2 benchmark=true`. Add new sweep configs under `conf/sweep_<name>.yaml`. Hydra puts each combination in its own `multirun/<date>/<run>/` subdir.
+- **Sweeps must use Hydra multirun**, never a bash `for` loop. Either use a pre-baked sweep config (`-cn sweep_*`) or pass axes inline: `pixi run python simulate.py -m sim.n_particles=5000,50000,200000 backend=jax,cuda_v1,cuda_v2 render.enabled=false`. Add new sweep configs under `conf/sweep_<name>.yaml`. Hydra puts each combination in its own `multirun/<date>/<run>/` subdir.
 - **Default to short benchmarks.** Steady-state ms/step is stable after the first frame (warmup), so `sim.num_frames=5` (50 substeps) gives reliable timings.
 - Single-particle functions vectorise via `jax.vmap` (e.g. `constitutive.stvk_elasticity_jacobi` is `jax.vmap` of a single-3×3 stress). Don't write batched code by hand — vmap is the contract.
 - **Adding a new CUDA P2G kernel** (e.g. `cuda_vX`) — only the P2G varies; G2P stays the JAX baseline:
@@ -209,7 +209,7 @@ CMake auto-detects the local GPU arch when `MPM_CUDA_ARCH` is unset.
   6. Rebuild the editable package metadata after module/package shape changes: `pixi reinstall mpm-cudajax`.
 - **Adding a new cuTile-in-JAX kernel:** put the cuTile kernel + `cutile_call` bridge in a dedicated module (see `cutile_p2g.py`), add a backend implementation under `src/mpm_jax/backends/`, and decorate it with `hydra_zen.store(..., group="backend")`.
 - Constitutive models are Hydra-instantiated (`material.elasticity._target_`); the sticky floor boundary is fixed in `solver.py`.
-- **No `block_until_ready` inside the timed region in benchmark mode.** Both timing modes dispatch all frames back-to-back and sync exactly once after the loop; elapsed/num_frames is the average. Per-stage breakdown comes from `profile_nsight.py`, not from `simulate.py`'s output.
+- **No `block_until_ready` inside the timed region when `render.enabled=false`.** Timing-only runs dispatch all frames back-to-back and sync exactly once after the loop; elapsed/num_frames is the average. Per-stage breakdown comes from `profile_nsight.py`, not from `simulate.py`'s output.
 - XLA command-buffer / CUDA-Graph capture is enabled for **all** kernels via `XLA_FLAGS` in the GPU activation block (`--xla_gpu_enable_command_buffer=FUSION,CUSTOM_CALL,WHILE`), so it is always on under `pixi run`. There is no per-kernel `cuda_graph` flag anymore.
 - Lint with ruff (config in `ruff.toml`); `I` is allowed as a variable name (identity matrix), and `tests/*` skips E402/F401.
 

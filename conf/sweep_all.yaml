@@ -5,6 +5,7 @@
 # Build CUDA kernels first: pixi install
 defaults:
     - config
+    - override /sim: benchmark
     - _self_
 
 hydra:
@@ -13,5 +14,6 @@ hydra:
         params:
             backend: jax,cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile
 
-benchmark: true
+render:
+    enabled: false
 tag: sweep_all

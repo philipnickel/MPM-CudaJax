@@ -43,8 +43,7 @@ To benchmark instead of rendering:
 ```bash
 pixi run python simulate.py \
     backend=cuda_v3 material=jelly \
-    sim.n_particles=500000 sim.num_grids=64 sim.num_frames=15 \
-    benchmark=true
+    sim=benchmark render.enabled=false
 ```
 Prints `total_steps`, `elapsed_s`, `steps_per_sec`, and average
 `ms/step`. No GIF, no per-frame state capture — just wall-clock timing.
@@ -94,11 +93,11 @@ wheel (H100/A100) resolve correctly.
 ## Usage
 
 ```bash
-# Default run (renders GIF to ./output)
+# Default run (renders GIF in the Hydra run directory)
 pixi run python simulate.py
 
-# Benchmark mode (no GIF, no per-frame state capture, wall-clock timing)
-pixi run python simulate.py benchmark=true
+# Timing run (no GIF, no per-frame state capture)
+pixi run python simulate.py sim=benchmark render.enabled=false
 
 # Pick a kernel
 pixi run python simulate.py backend=jax                              # JAX/XLA baseline (scan P2G + MLS G2P)
@@ -106,7 +105,7 @@ pixi run python simulate.py backend=cuda_v1 material=jelly
 pixi run python simulate.py backend=cuda_v2 material=jelly            # warp-shuffle coalescing
 pixi run python simulate.py backend=cuda_v3 material=jelly            # Morton sort
 pixi run python simulate.py backend=cuda_v4 material=jelly            # super-cell grid tile
-pixi run python simulate.py backend=cutile material=jelly benchmark=true  # cuTile (tiled model)
+pixi run python simulate.py backend=cutile material=jelly sim=benchmark render.enabled=false  # cuTile (tiled model)
 
 # Override sim params
 pixi run python simulate.py sim.n_particles=1000000 sim.num_grids=64
@@ -154,11 +153,11 @@ pixi run python simulate.py -cn sweep_scaling
 ```
 
 Each combination gets its own `multirun/<date>/<run>/` subdir with a `results.json`.
-Non-benchmark runs also place `render.gif` in that same run directory and record
-its path as `render_path`. Sweeps should use Hydra multirun so log parsers see
-the expected directory structure.
+Runs with `render.enabled=true` also place `render.gif` in that same run
+directory and record its path as `render_path`. Sweeps should use Hydra
+multirun so log parsers see the expected directory structure.
 
-For an ad-hoc sweep: `pixi run python simulate.py -m sim.n_particles=5000,50000,200000 backend=jax,cuda_v2 benchmark=true`.
+For an ad-hoc sweep: `pixi run python simulate.py -m sim.n_particles=5000,50000,200000 backend=jax,cuda_v2 render.enabled=false`.
 
 ## Profiling
 
@@ -179,10 +178,10 @@ Hydra config groups in `conf/`:
 | `sim` | `default` | n_particles, num_grids, dt, BCs, ... |
 | `backend` | `jax` (default), `cuda_v1`, `cuda_v2`, `cuda_v3`, `cuda_v4`, `cutile` | P2G implementation (G2P shared) |
 
-Top-level fields: `benchmark`, `tag`, `render`. All overridable from CLI:
+Top-level fields: `tag`, `render`. All overridable from CLI:
 
 ```bash
-pixi run python simulate.py sim.n_particles=100000 backend=cuda_v3 benchmark=true
+pixi run python simulate.py sim.n_particles=100000 backend=cuda_v3 render.enabled=false
 ```
 
 XLA command-buffer / CUDA-Graph capture is always on via `XLA_FLAGS` in the default env — no per-kernel flag.

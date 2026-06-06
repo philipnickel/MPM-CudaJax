@@ -20,9 +20,9 @@ from mpm_jax.solver import MPMSolver
 
 
 def _run_solver(solver, cfg: DictConfig):
-    """Drive an MPMSolver: warmup, then benchmark or frame-capture loop."""
+    """Drive an MPMSolver, capturing frames only when rendering is enabled."""
     sim = cfg.sim
-    capture_frames = not cfg.get("benchmark", False)
+    render_enabled = bool(cfg.render.get("enabled", True))
 
     solver.step()
     jax.block_until_ready(solver.state.x)
@@ -32,12 +32,12 @@ def _run_solver(solver, cfg: DictConfig):
 
     t0 = time.perf_counter()
     for _ in tqdm(range(sim.num_frames), desc="simulate"):
-        if capture_frames:
+        if render_enabled:
             frames.append(np.array(solver.state.x))
         solver.step()
-        if capture_frames:
+        if render_enabled:
             jax.block_until_ready(solver.state.x)
-    if not capture_frames:
+    if not render_enabled:
         jax.block_until_ready(solver.state.x)
     elapsed = time.perf_counter() - t0
 
@@ -91,9 +91,9 @@ def main(cfg: DictConfig):
             f"  {stage:15s}: {stats['mean_ms']:8.3f} ms/frame ({pct:5.1f}%  std={stats['std_ms']:.3f}  n={stats['count']})"
         )
 
-    # Render GIF (skip in benchmark mode)
     export_path = None
-    if not cfg.get("benchmark", False) and frames:
+    render_enabled = bool(cfg.render.get("enabled", True))
+    if render_enabled and frames:
         render_cfg = cfg.get("render", {})
         fps = int(render_cfg.get("fps", 30))
         radius = float(render_cfg.get("point_radius", 0.008))
@@ -108,8 +108,8 @@ def main(cfg: DictConfig):
             width=int(render_cfg.get("width", 960)),
             height=int(render_cfg.get("height", 720)),
         )
-    elif cfg.get("benchmark", False):
-        print("\nBenchmark mode: skipping GIF rendering.")
+    elif not render_enabled:
+        print("\nRendering disabled.")
 
     # Dump a small results.json into the Hydra run dir so multirun callbacks
     # and post-hoc aggregation can pick up the per-run numbers. One file per
@@ -126,6 +126,7 @@ def main(cfg: DictConfig):
         "elapsed_s": float(elapsed),
         "ms_per_step": float(ms_per_step),
         "steps_per_sec": float(steps_per_sec),
+        "render_enabled": render_enabled,
         "render_path": export_path,
     }
     with open(os.path.join(run_dir, "results.json"), "w") as f:
