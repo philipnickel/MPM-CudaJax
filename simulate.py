@@ -22,7 +22,7 @@ from mpm_jax.solver import MPMSolver
 def _run_solver(solver, cfg: DictConfig):
     """Drive an MPMSolver: warmup, then benchmark or frame-capture loop."""
     sim = cfg.sim
-    bench = cfg.get("benchmark", False)
+    capture_frames = not cfg.get("benchmark", False)
 
     solver.step()
     jax.block_until_ready(solver.state.x)
@@ -30,20 +30,16 @@ def _run_solver(solver, cfg: DictConfig):
 
     frames = []
 
-    if bench:
-        t0 = time.perf_counter()
-        for _ in tqdm(range(sim.num_frames), desc="simulate"):
-            solver.step()
-        jax.block_until_ready(solver.state.x)
-        elapsed = time.perf_counter() - t0
-    else:
-        t0 = time.perf_counter()
-        for _ in tqdm(range(sim.num_frames), desc="simulate"):
-            # capture current state BEFORE advancing (frame 0 == initial config)
+    t0 = time.perf_counter()
+    for _ in tqdm(range(sim.num_frames), desc="simulate"):
+        if capture_frames:
             frames.append(np.array(solver.state.x))
-            solver.step()
+        solver.step()
+        if capture_frames:
             jax.block_until_ready(solver.state.x)
-        elapsed = time.perf_counter() - t0
+    if not capture_frames:
+        jax.block_until_ready(solver.state.x)
+    elapsed = time.perf_counter() - t0
 
     total_steps = sim.num_frames * solver.steps_per_frame
     avg_frame_ms = elapsed / sim.num_frames * 1000
