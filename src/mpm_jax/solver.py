@@ -29,9 +29,7 @@ def _instantiate_target(value):
     return value
 
 
-def build_backend_frame(
-    params, elasticity_fn, pre_fn, post_fn, backend, steps_per_frame
-):
+def build_backend_frame(params, elasticity_fn, post_fn, backend, steps_per_frame):
     """Build one JIT-compiled frame from a backend object.
 
     The frame owns the common MPM control flow (boundary conditions, elasticity,
@@ -43,10 +41,6 @@ def build_backend_frame(
     @jax.jit
     def jit_frame(state):
         def step_body(state):
-            with jax.named_scope("pre_particle"):
-                x, v = pre_fn(state.x, state.v, 0.0)
-            state = state._replace(x=x, v=v)
-
             with jax.named_scope("elasticity"):
                 stress = elasticity_fn(state.F)
 
@@ -109,7 +103,7 @@ class MPMSolver:
             get_particles(n, center=list(sim.center), size=list(sim.size)),
             dtype=jnp.float32,
         )
-        pre_fn, post_fn = bind_boundaries(
+        post_fn = bind_boundaries(
             boundaries,
             build_grid_x(g),
             params.dx,
@@ -132,13 +126,11 @@ class MPMSolver:
                 "material.elasticity must be a Hydra-instantiated callable. "
                 "Use an `_target_` in conf/material/<name>.yaml."
             )
-        self.pre_fn = pre_fn
         self.post_fn = post_fn
         self.backend = backend
         self._frame = build_backend_frame(
             params,
             self.elasticity_fn,
-            pre_fn,
             post_fn,
             backend,
             self.steps_per_frame,

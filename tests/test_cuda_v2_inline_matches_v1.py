@@ -70,7 +70,7 @@ def test_cuda_v2_matches_v1():
             end_time=1e3,
         )
     ]
-    pre_fn, post_fn = bind_boundaries(bcs, grid_x, params.dx)
+    post_fn = bind_boundaries(bcs, grid_x, params.dx)
 
     # jelly material (StVK elasticity, no plasticity): stress stays on the JAX
     # side without a cuSOLVER dependence.
@@ -89,7 +89,6 @@ def test_cuda_v2_matches_v1():
     jit_v1 = build_backend_frame(
         params,
         elasticity_fn,
-        pre_fn,
         post_fn,
         CudaV1Backend(num_grids),
         steps_per_frame,
@@ -97,7 +96,6 @@ def test_cuda_v2_matches_v1():
     jit_v2 = build_backend_frame(
         params,
         elasticity_fn,
-        pre_fn,
         post_fn,
         CudaV2Backend(num_grids),
         steps_per_frame,

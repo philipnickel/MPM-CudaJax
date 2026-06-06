@@ -21,7 +21,7 @@ def test_sticky_boundary_zeroes_velocity_below_surface():
             end_time=1e3,
         ),
     ]
-    pre_fn, post_fn = bind_boundaries(bc_configs, grid_x, dx)
+    post_fn = bind_boundaries(bc_configs, grid_x, dx)
     grid_mv = jnp.ones((num_grids**3, 3))
     grid_m = jnp.ones((num_grids**3,))
     result = post_fn(grid_mv, grid_m, 0.0)
@@ -37,9 +37,7 @@ def test_noop_when_no_bcs():
     num_grids = 5
     dx = 1.0 / num_grids
     grid_x = _make_grid_x(num_grids)
-    pre_fn, post_fn = bind_boundaries([], grid_x, dx)
-    x = jnp.ones((10, 3)) * 0.5
-    v = jnp.ones((10, 3))
-    x2, v2 = pre_fn(x, v, 0.0)
-    assert jnp.allclose(x2, x)
-    assert jnp.allclose(v2, v)
+    post_fn = bind_boundaries([], grid_x, dx)
+    grid_mv = jnp.ones((num_grids**3, 3))
+    grid_m = jnp.ones((num_grids**3,))
+    assert jnp.allclose(post_fn(grid_mv, grid_m, 0.0), grid_mv)

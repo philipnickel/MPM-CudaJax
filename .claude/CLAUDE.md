@@ -123,7 +123,7 @@ Three embarrassingly parallel phases per substep:
 
 `MPMSolver` (in `src/mpm_jax/solver.py`) is a plain Python class wrapping the functional JAX core:
 
-- Built once from `params`, an `elasticity_fn`, boundary functions `pre_fn`/`post_fn`, a `Backend`, and `steps_per_frame`. Array state is mutated in place by the driver API; the backend, closures, and the compiled `_frame` are fixed for the solver's lifetime. The solver is never a JAX argument — only `state` (an `MPMState` pytree) is traced — so it needs no pytree machinery.
+- Built once from `params`, an `elasticity_fn`, a post-grid boundary function, a `Backend`, and `steps_per_frame`. Array state is mutated in place by the driver API; the backend, closures, and the compiled `_frame` are fixed for the solver's lifetime. The solver is never a JAX argument — only `state` (an `MPMState` pytree) is traced — so it needs no pytree machinery.
 - `stepped()` returns a new solver with advanced state. `step()` keeps the existing mutating driver API and advances one frame (= `steps_per_frame` substeps) by calling `_frame(self.state)`.
 - `solve(num_frames, on_frame=None)` loops `step()` with an optional IO callback.
 - The `steps_per_frame` substeps run inside `build_backend_frame` as a single `lax.fori_loop`.

@@ -45,7 +45,7 @@ def test_elastic_simulation_10_frames():
             end_time=1e3,
         ),
     ]
-    pre_fn, post_fn = bind_boundaries(bc_configs, grid_x, params.dx)
+    post_fn = bind_boundaries(bc_configs, grid_x, params.dx)
     elasticity_fn = stvk_elasticity_jacobi(E=2e6, nu=0.4)
     state = MPMState(
         x=x0,
@@ -56,7 +56,6 @@ def test_elastic_simulation_10_frames():
     frame = build_backend_frame(
         params,
         elasticity_fn,
-        pre_fn,
         post_fn,
         JaxBackend(),
         steps_per_frame=5,
@@ -84,7 +83,7 @@ def test_outer_frame_jit_runs_multiple_frames():
             end_time=1e3,
         ),
     ]
-    pre_fn, post_fn = bind_boundaries(bc_configs, grid_x, params.dx)
+    post_fn = bind_boundaries(bc_configs, grid_x, params.dx)
     elasticity_fn = stvk_elasticity_jacobi(E=2e6, nu=0.4)
 
     state = MPMState(
@@ -96,7 +95,6 @@ def test_outer_frame_jit_runs_multiple_frames():
     jit_frame = build_backend_frame(
         params,
         elasticity_fn,
-        pre_fn,
         post_fn,
         JaxBackend(),
         steps_per_frame,

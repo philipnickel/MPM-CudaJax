@@ -3,10 +3,6 @@ from dataclasses import dataclass
 import jax.numpy as jnp
 
 
-def _identity_particles(x, v, time):
-    return x, v
-
-
 @dataclass(frozen=True)
 class StickyPlane:
     point: tuple[float, float, float]
@@ -28,7 +24,7 @@ class StickyPlane:
 
 
 def bind_boundaries(boundaries, grid_x, dx):
-    """Bind configured sticky planes to the current grid."""
+    """Bind configured sticky planes to a post-grid callback."""
     post_grid_fns = [boundary.bind_grid(grid_x, dx) for boundary in boundaries]
 
     def post_grid_fn(grid_mv, grid_m, time):
@@ -36,4 +32,4 @@ def bind_boundaries(boundaries, grid_x, dx):
             grid_mv = fn(grid_mv, grid_m, time)
         return grid_mv
 
-    return _identity_particles, post_grid_fn
+    return post_grid_fn
