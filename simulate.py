@@ -137,14 +137,14 @@ def main(cfg: DictConfig):
             "and profile=jax are supported."
         )
 
+    run_dir = os.path.abspath(HydraConfig.get().runtime.output_dir)
+
     # JAX profiler: resolve the trace dir + options here, but let the solver
     # driver start/stop the trace around the steady-state loop only, so warmup /
     # JIT compile / autotuning is excluded from the window.
     jax_trace_dir = None
     profile_opts = None
     if profile_name == "jax":
-        # Hydra >=1.2 doesn't chdir, so use the output dir from HydraConfig.
-        run_dir = os.path.abspath(HydraConfig.get().runtime.output_dir)
         jax_trace_dir = os.path.join(run_dir, "jax_trace")
         profile_opts = _build_profile_options(cfg.get("profile", {}))
 
@@ -173,13 +173,10 @@ def main(cfg: DictConfig):
     # Render GIF (skip in benchmark mode)
     export_path = None
     if not cfg.get("benchmark", False) and frames:
-        orig_cwd = hydra.utils.get_original_cwd()
-        output_dir = os.path.join(orig_cwd, cfg.output_dir)
-        os.makedirs(output_dir, exist_ok=True)
         render_cfg = cfg.get("render", {})
         fps = int(render_cfg.get("fps", 30))
         radius = float(render_cfg.get("point_radius", 0.008))
-        export_path = os.path.join(output_dir, f"{cfg.tag}_{kernel_name}.gif")
+        export_path = os.path.join(run_dir, "render.gif")
         print(f"\nRendering with Warp OpenGL to {export_path}...")
         render_warp_opengl(
             frames,
@@ -196,7 +193,6 @@ def main(cfg: DictConfig):
     # Dump a small results.json into the Hydra run dir so multirun callbacks
     # and post-hoc aggregation can pick up the per-run numbers. One file per
     # run, fixed shape.
-    run_dir = os.path.abspath(HydraConfig.get().runtime.output_dir)
     mat_name = HydraConfig.get().runtime.choices.get("material", "unknown")
     results = {
         "kernel": kernel_name,
@@ -209,6 +205,7 @@ def main(cfg: DictConfig):
         "elapsed_s": float(elapsed),
         "ms_per_step": float(ms_per_step),
         "steps_per_sec": float(steps_per_sec),
+        "render_path": export_path,
     }
     with open(os.path.join(run_dir, "results.json"), "w") as f:
         json.dump(results, f, indent=2)

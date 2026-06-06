@@ -29,7 +29,8 @@ pixi install
 pixi run python simulate.py sim.num_frames=20
 ```
 A jelly block falls onto a sticky floor and renders to
-`output/jelly_jax_v1_5.gif`. With `sim.num_frames=20` it takes a few seconds.
+`render.gif` inside the Hydra run directory. With `sim.num_frames=20` it takes
+a few seconds.
 
 The default environment also builds the custom CUDA kernels via CMake. `nvcc`
 and `gxx` ship from conda-forge inside the env, no system module load needed:
@@ -49,8 +50,7 @@ Prints `total_steps`, `elapsed_s`, `steps_per_sec`, and average
 `ms/step`. No GIF, no per-frame state capture — just wall-clock timing.
 
 Outputs:
-- GIF renders → `output/<tag>_<kernel>.gif`
-- Hydra logs / config snapshots → `outputs/<date>/<run>/`
+- GIF renders, `results.json`, Hydra logs, config snapshots → `outputs/<date>/<run>/`
 - Multirun sweep results → `multirun/<date>/<run>/`
 - Native CUDA extension → `mpm_jax.cuda._p2g_ffi` (rebuilds on native-source edit via `editable.rebuild=true`)
 
@@ -154,8 +154,10 @@ pixi run python simulate.py -cn sweep_scaling
 pixi run python simulate.py -cn sweep_profile
 ```
 
-Each combination gets its own `multirun/<date>/<run>/` subdir with a `results.json`. Sweeps
-should use Hydra multirun so log parsers see the expected directory structure.
+Each combination gets its own `multirun/<date>/<run>/` subdir with a `results.json`.
+Non-benchmark runs also place `render.gif` in that same run directory and record
+its path as `render_path`. Sweeps should use Hydra multirun so log parsers see
+the expected directory structure.
 
 For an ad-hoc sweep: `pixi run python simulate.py -m sim.n_particles=5000,50000,200000 backend=jax,cuda_v2 benchmark=true`.
 
@@ -232,7 +234,7 @@ Hydra config groups in `conf/`:
 | `backend` | `jax` (default), `cuda_v1`, `cuda_v2`, `cuda_v3`, `cuda_v4`, `cutile` | P2G implementation (G2P shared) |
 | `profile` | `none` (default), `jax` | Profiling backend |
 
-Top-level fields: `benchmark`, `tag`, `output_dir`. All overridable from CLI:
+Top-level fields: `benchmark`, `tag`, `render`. All overridable from CLI:
 
 ```bash
 pixi run python simulate.py sim.n_particles=100000 backend=cuda_v3 benchmark=true
