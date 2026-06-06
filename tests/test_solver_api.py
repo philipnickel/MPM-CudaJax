@@ -63,7 +63,7 @@ def test_step_returns_and_mutates_state():
 def test_solve_equals_n_steps_and_fires_hook():
     s = _make_solver()
     calls = []
-    s.solve(3, on_frame=lambda i, st: calls.append(i))
+    s.solve(3, on_frame=lambda i, _state: calls.append(i))
     assert calls == [0, 1, 2]
 
 

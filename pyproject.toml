@@ -37,6 +37,14 @@ cmake.build-type = "Release"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
+[tool.vulture]
+paths = ["src", "simulate.py", "profile_nsight.py", "tests"]
+ignore_names = [
+    "camera_position",
+    "host_tracer_level",
+    "python_tracer_level",
+]
+
 [tool.pixi.workspace]
 name = "mpm-cudajax"
 channels = ["conda-forge"]
@@ -74,6 +82,7 @@ no-build-isolation = ["mpm-cudajax"]
 [tool.pixi.feature.dev.dependencies]
 pytest = "*"
 ruff = "*"
+vulture = ">=2.16,<3"
 
 [tool.pixi.feature.gpu]
 platforms = ["linux-64", "linux-aarch64"]
@@ -118,6 +127,7 @@ default = { features = ["gpu", "dev"], solve-group = "default" }
 [tool.pixi.tasks]
 test = "pytest tests/ -v"
 lint = "ruff check ."
+dead-code = "vulture"
 clean = { cmd = "rm -f src/mpm_jax/cuda/_p2g_ffi*.so *.sqlite *.nsys-rep && rm -rf multirun outputs output traces dist .pytest_cache .ruff_cache .jax_cache *.egg-info src/*.egg-info && find . -path ./.pixi -prune -o -type d -name __pycache__ -print0 | xargs -0 rm -rf" }
 sim = "python simulate.py"
 sweep = "python simulate.py -cn sweep_baseline"

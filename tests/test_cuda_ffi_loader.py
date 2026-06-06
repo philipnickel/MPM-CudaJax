@@ -89,7 +89,11 @@ def test_register_is_cached(monkeypatch):
         "import_module",
         lambda name: (imported.append(name), fake_module)[1],
     )
-    monkeypatch.setattr(p2g_cuda.jax.ffi, "register_ffi_target", lambda *a, **k: None)
+    monkeypatch.setattr(
+        p2g_cuda.jax.ffi,
+        "register_ffi_target",
+        lambda *_args, **_kwargs: None,
+    )
     _isolate_registry(monkeypatch)
 
     name = "unit_test_cache_check"
