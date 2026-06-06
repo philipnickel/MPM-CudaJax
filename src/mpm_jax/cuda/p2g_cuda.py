@@ -227,7 +227,7 @@ def cuda_p2g_v3_inline(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
 # SC is config-selectable (backend.super_cell_width) without recompiling — but
 # only among the instantiated widths. SC=4 is the default: 4^3 cells, ~512
 # particles/block at the 8-particles/cell benchmark, and a 6^3 grid scratchpad.
-SUPPORTED_SC = (2, 4, 8)  # template instantiations compiled into the .so
+SUPPORTED_SC = (2, 4, 8)  # template instantiations compiled into the extension
 V4_SUPER_CELL_WIDTH = 4  # default super-cell width
 
 

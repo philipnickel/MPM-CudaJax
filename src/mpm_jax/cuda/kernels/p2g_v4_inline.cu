@@ -6,8 +6,8 @@
 //     (N, 27, *) tensor is ever materialised in HBM.
 //   * Particles are sorted by their home SUPER-cell on the JAX side; one
 //     CUDA block per super-cell aggregates
-//     its particles' contributions into a 6x6x6 shared-memory tile via fast
-//     shmem atomics, then flushes the tile to global memory with one
+//     its particles' contributions into a (SC+2)^3 shared-memory tile via
+//     fast shmem atomics, then flushes the tile to global memory with one
 //     atomicAdd per node.
 //
 // Super-cells (Approach B from the v4 fix plan):
@@ -51,8 +51,6 @@
 
 #include "p2g_common.cuh"
 
-#define BLOCK_SIZE 256  // threads per super-cell block
-
 // Super-cell width SC is a compile-time TEMPLATE parameter: TILE_DIM/TILE_SIZE
 // derive from it and statically size the __shared__ tile, so each instantiation
 // stays fully optimised. The FFI handler dispatches to the instantiated SC by a
@@ -72,8 +70,8 @@ namespace ffi = xla::ffi;
 //   - loop over 27 stencil offsets, atomicAdd momentum + mass into the
 //     shared-memory tile (or fall back to global atomicAdd when the stencil
 //     clips outside the tile — only happens at grid boundary).
-// After all threads finish, the block flushes the TILE_SIZE = (SC+2)^3 = 216
-// tile entries to global memory with one atomicAdd per (mv, m).
+// After all threads finish, the block flushes the TILE_SIZE = (SC+2)^3 tile
+// entries to global memory with one atomicAdd per (mv, m).
 
 template <int SC>
 __global__ void p2g_v4_inline_kernel(
@@ -123,8 +121,7 @@ __global__ void p2g_v4_inline_kernel(
     int tile_j = base_cj - 1;
     int tile_k = base_ck - 1;
 
-    // Shared-memory tile: 216 nodes, each (mv_x, mv_y, mv_z, mass).
-    // 864 floats = 3.4 KB.
+    // Shared-memory tile: (SC+2)^3 nodes, each (mv_x, mv_y, mv_z, mass).
     __shared__ float tile[TILE_SIZE * 4];
 
     // Cooperatively zero the tile.
@@ -180,10 +177,7 @@ __global__ void p2g_v4_inline_kernel(
                 // only triggers near the grid boundary (cells where the
                 // stencil clips). The body of the simulation never falls here.
                 int grid_idx = gi * G * G + gj * G + gk;
-                atomicAdd(&grid_mv[grid_idx * 3 + 0], mv[0]);
-                atomicAdd(&grid_mv[grid_idx * 3 + 1], mv[1]);
-                atomicAdd(&grid_mv[grid_idx * 3 + 2], mv[2]);
-                atomicAdd(&grid_m[grid_idx], m_contrib);
+                p2g_atomic_add_grid(grid_mv, grid_m, grid_idx, mv, m_contrib);
             }
         }
     }
@@ -212,10 +206,7 @@ __global__ void p2g_v4_inline_kernel(
             continue;
 
         int gid = gi * G * G + gj * G + gk;
-        atomicAdd(&grid_mv[gid * 3 + 0], smv0);
-        atomicAdd(&grid_mv[gid * 3 + 1], smv1);
-        atomicAdd(&grid_mv[gid * 3 + 2], smv2);
-        atomicAdd(&grid_m[gid],          sm);
+        p2g_atomic_add_grid(grid_mv, grid_m, gid, smv0, smv1, smv2, sm);
     }
 }
 
@@ -236,6 +227,10 @@ ffi::Error P2GV4InlineImpl(
     int32_t SC,
     float dt, float vol, float p_mass, float inv_dx, float dx
 ) {
+    if (SC != 2 && SC != 4 && SC != 8) {
+        return ffi::Error(ffi::ErrorCode::kInvalidArgument,
+                          "unsupported SC; kernel is built for SC in {2, 4, 8}");
+    }
     if (G % SC != 0) {
         return ffi::Error(ffi::ErrorCode::kInvalidArgument,
                           "G must be divisible by SC (super-cell width)");
@@ -250,22 +245,13 @@ ffi::Error P2GV4InlineImpl(
                           "cell_start size does not match (G/SC)^3 + 1");
     }
 
-    int G3 = G * G * G;
-    int grid_mv_size = G3 * 3;
-    int grid_m_size = G3;
-
-    // Zero the grid (the kernel only adds into it). f32 +0.0 is all-zero bits,
-    // so a byte memset is exactly correct and uses the driver's tuned fill path.
-    cudaMemsetAsync(grid_mv->typed_data(), 0,
-                    (size_t)grid_mv_size * sizeof(float), stream);
-    cudaMemsetAsync(grid_m->typed_data(), 0,
-                    (size_t)grid_m_size * sizeof(float), stream);
+    p2g_zero_grid(grid_mv->typed_data(), grid_m->typed_data(), G, stream);
 
     // One block per super-cell. SC selects the template instantiation (each has
     // its own statically-sized shared tile); keep these cases in sync with
     // SUPPORTED_SC in p2g_cuda.py.
 #define MPM_LAUNCH_V4(SCVAL)                                                  \
-    p2g_v4_inline_kernel<SCVAL><<<Gs3, BLOCK_SIZE, 0, stream>>>(              \
+    p2g_v4_inline_kernel<SCVAL><<<Gs3, P2G_BLOCK_SIZE, 0, stream>>>(          \
         x.typed_data(), v.typed_data(), C.typed_data(), stress.typed_data(), \
         reinterpret_cast<const int*>(cell_start.typed_data()),               \
         grid_mv->typed_data(), grid_m->typed_data(),                         \
@@ -274,17 +260,11 @@ ffi::Error P2GV4InlineImpl(
         case 2: MPM_LAUNCH_V4(2); break;
         case 4: MPM_LAUNCH_V4(4); break;
         case 8: MPM_LAUNCH_V4(8); break;
-        default:
-            return ffi::Error(ffi::ErrorCode::kInvalidArgument,
-                              "unsupported SC; kernel is built for SC in {2, 4, 8}");
+        default: break;
     }
 #undef MPM_LAUNCH_V4
 
-    cudaError_t err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        return ffi::Error(ffi::ErrorCode::kInternal, cudaGetErrorString(err));
-    }
-    return ffi::Error::Success();
+    return p2g_last_launch_error();
 }
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(

@@ -9,6 +9,70 @@
 // are __device__ __forceinline__, so codegen is unchanged vs. the inline form.
 #pragma once
 
+#include <cstddef>
+
+#include "cuda_runtime_api.h"
+#include "xla/ffi/api/ffi.h"
+
+constexpr int P2G_BLOCK_SIZE = 256;
+constexpr unsigned P2G_FULL_MASK = 0xFFFFFFFFu;
+
+inline int p2g_grid_nodes(int G) {
+    return G * G * G;
+}
+
+inline int p2g_launch_blocks(int n_particles) {
+    return (n_particles + P2G_BLOCK_SIZE - 1) / P2G_BLOCK_SIZE;
+}
+
+inline void p2g_zero_grid(
+    float* grid_mv,
+    float* grid_m,
+    int G,
+    cudaStream_t stream
+) {
+    int nodes = p2g_grid_nodes(G);
+    // f32 +0.0 is all-zero bits, so byte memset is exactly correct.
+    cudaMemsetAsync(grid_mv, 0, static_cast<size_t>(nodes) * 3 * sizeof(float), stream);
+    cudaMemsetAsync(grid_m, 0, static_cast<size_t>(nodes) * sizeof(float), stream);
+}
+
+inline xla::ffi::Error p2g_last_launch_error() {
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        return xla::ffi::Error(
+            xla::ffi::ErrorCode::kInternal,
+            cudaGetErrorString(err)
+        );
+    }
+    return xla::ffi::Error::Success();
+}
+
+__device__ __forceinline__ void p2g_atomic_add_grid(
+    float* __restrict__ grid_mv,
+    float* __restrict__ grid_m,
+    int grid_idx,
+    float mv0,
+    float mv1,
+    float mv2,
+    float m_contrib
+) {
+    atomicAdd(&grid_mv[grid_idx * 3 + 0], mv0);
+    atomicAdd(&grid_mv[grid_idx * 3 + 1], mv1);
+    atomicAdd(&grid_mv[grid_idx * 3 + 2], mv2);
+    atomicAdd(&grid_m[grid_idx],          m_contrib);
+}
+
+__device__ __forceinline__ void p2g_atomic_add_grid(
+    float* __restrict__ grid_mv,
+    float* __restrict__ grid_m,
+    int grid_idx,
+    const float mv[3],
+    float m_contrib
+) {
+    p2g_atomic_add_grid(grid_mv, grid_m, grid_idx, mv[0], mv[1], mv[2], m_contrib);
+}
+
 // Load one particle's AoS state into registers (read ONCE, reused 27x).
 __device__ __forceinline__ void p2g_load_particle(
     const float* __restrict__ x, const float* __restrict__ v,

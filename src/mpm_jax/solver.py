@@ -94,11 +94,12 @@ class MPMSolver:
         n, g = int(sim.n_particles), int(sim.num_grids)
 
         params = MPMParams(sim)
+        backend = config.backend
+        backend.validate_num_grids(params.num_grids)
         particles = jnp.asarray(
             get_particles(n, center=list(sim.center), size=list(sim.size)),
             dtype=jnp.float32,
         )
-        backend = config.backend
         pre_fn, post_fn = build_boundary_fns(
             list(sim.boundary_conditions),
             build_grid_x(g),

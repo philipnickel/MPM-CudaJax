@@ -29,9 +29,6 @@
 
 #include "p2g_common.cuh"
 
-#define BLOCK_SIZE 256
-#define FULL_MASK 0xFFFFFFFFu
-
 namespace ffi = xla::ffi;
 
 __global__ void p2g_v3_inline_kernel(
@@ -90,7 +87,7 @@ __global__ void p2g_v3_inline_kernel(
         // Find all lanes (in this 32-lane warp) targeting the same grid node.
         // Inactive lanes use match_key = -1, so they cluster together and
         // their (zeroed) contributions don't pollute real groups.
-        unsigned peers = __match_any_sync(FULL_MASK, match_key);
+        unsigned peers = __match_any_sync(P2G_FULL_MASK, match_key);
 
         mv0 = p2g_warp_reduce_masked(mv0, peers);
         mv1 = p2g_warp_reduce_masked(mv1, peers);
@@ -99,10 +96,8 @@ __global__ void p2g_v3_inline_kernel(
 
         int leader = __ffs(peers) - 1;
         if (active && lane == leader) {
-            atomicAdd(&grid_mv[grid_idx * 3 + 0], mv0);
-            atomicAdd(&grid_mv[grid_idx * 3 + 1], mv1);
-            atomicAdd(&grid_mv[grid_idx * 3 + 2], mv2);
-            atomicAdd(&grid_m[grid_idx],          m_contrib);
+            p2g_atomic_add_grid(grid_mv, grid_m, grid_idx,
+                                mv0, mv1, mv2, m_contrib);
         }
     }
 }
@@ -123,18 +118,9 @@ ffi::Error P2GV3InlineImpl(
     int32_t G,
     float dt, float vol, float p_mass, float inv_dx, float dx
 ) {
-    int grid_mv_size = G * G * G * 3;
-    int grid_m_size = G * G * G;
+    p2g_zero_grid(grid_mv->typed_data(), grid_m->typed_data(), G, stream);
 
-    // Zero the grid (the kernel only adds into it). f32 +0.0 is all-zero bits,
-    // so a byte memset is exactly correct and uses the driver's tuned fill path.
-    cudaMemsetAsync(grid_mv->typed_data(), 0,
-                    (size_t)grid_mv_size * sizeof(float), stream);
-    cudaMemsetAsync(grid_m->typed_data(), 0,
-                    (size_t)grid_m_size * sizeof(float), stream);
-
-    int blocks = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    p2g_v3_inline_kernel<<<blocks, BLOCK_SIZE, 0, stream>>>(
+    p2g_v3_inline_kernel<<<p2g_launch_blocks(N), P2G_BLOCK_SIZE, 0, stream>>>(
         x.typed_data(),
         v.typed_data(),
         C.typed_data(),
@@ -145,11 +131,7 @@ ffi::Error P2GV3InlineImpl(
         dt, vol, p_mass, inv_dx, dx
     );
 
-    cudaError_t err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        return ffi::Error(ffi::ErrorCode::kInternal, cudaGetErrorString(err));
-    }
-    return ffi::Error::Success();
+    return p2g_last_launch_error();
 }
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(

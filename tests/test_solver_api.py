@@ -1,10 +1,12 @@
 from types import SimpleNamespace
 
 import jax.numpy as jnp
+import pytest
 from omegaconf import OmegaConf
-from mpm_jax.solver import MPMSolver, RuntimeConfig
 from mpm_jax.backends import JaxBackend
+from mpm_jax.backends.cuda import CudaV4Backend
 from mpm_jax.constitutive import stvk_elasticity_jacobi
+from mpm_jax.solver import MPMSolver, RuntimeConfig
 
 
 def _make_solver(steps_per_frame=2, n=64, G=16):
@@ -28,6 +30,32 @@ def _make_solver(steps_per_frame=2, n=64, G=16):
     return MPMSolver(
         RuntimeConfig(material=material, sim=sim, backend=JaxBackend())
     )
+
+
+def test_solver_validates_backend_against_runtime_num_grids(monkeypatch):
+    monkeypatch.setattr("mpm_jax.backends.cuda.register_p2g_v4_inline", lambda: True)
+
+    sim = OmegaConf.create(
+        {
+            "n_particles": 64,
+            "num_grids": 18,
+            "dt": 3e-4,
+            "steps_per_frame": 1,
+            "clip_bound": 0.5,
+            "damping": 1.0,
+            "gravity": [0.0, 0.0, -9.8],
+            "rho": 1000.0,
+            "size": [0.5, 0.5, 0.5],
+            "initial_velocity": [0.0, 0.0, 0.0],
+            "center": [0.5, 0.5, 0.5],
+            "boundary_conditions": [],
+        }
+    )
+    material = SimpleNamespace(elasticity=stvk_elasticity_jacobi())
+    backend = CudaV4Backend(num_grids=None, super_cell_width=4)
+
+    with pytest.raises(RuntimeError, match="requires num_grids"):
+        MPMSolver(RuntimeConfig(material=material, sim=sim, backend=backend))
 
 
 def test_step_returns_and_mutates_state():
