@@ -2,8 +2,8 @@
 
 from hydra_zen import store
 
-from mpm_jax.backends.common import BaseBackend, morton_order, supercell_order
-from mpm_jax.cuda.p2g_cuda import (
+from mpm_jax.p2g.backends.common import P2GBackend, morton_order, supercell_order
+from mpm_jax.p2g.cuda.p2g_cuda import (
     SUPPORTED_SC,
     V4_SUPER_CELL_WIDTH,
     CudaP2GKernel,
@@ -14,7 +14,7 @@ from mpm_jax.cuda.p2g_cuda import (
 )
 
 
-class CudaP2GBackend(BaseBackend):
+class CudaP2GBackend(P2GBackend):
     """Backend backed by a callable CUDA P2G FFI target."""
 
     kernel_type: type[CudaP2GKernel]
@@ -23,7 +23,7 @@ class CudaP2GBackend(BaseBackend):
         self.kernel = self.kernel_type()
         super().__init__(num_grids=num_grids)
 
-    def p2g(self, params, prepared):
+    def scatter(self, params, prepared):
         return self.kernel(
             prepared.x,
             prepared.v,
@@ -65,7 +65,7 @@ class CudaV3Backend(CudaP2GBackend):
     num_grids="${sim.num_grids}",
     super_cell_width=4,
 )
-class CudaV4Backend(BaseBackend):
+class CudaV4Backend(P2GBackend):
     name = "cuda_v4"
 
     def __init__(self, num_grids=None, super_cell_width=None):
@@ -84,13 +84,13 @@ class CudaV4Backend(BaseBackend):
     def prepare(self, params, state, stress):
         return supercell_order(params, state, stress, self.super_cell)
 
-    def p2g(self, params, prepared):
+    def scatter(self, params, prepared):
         return self.kernel(
             prepared.x,
             prepared.v,
             prepared.C,
             prepared.stress,
-            prepared.cell_start,
+            prepared.bucket_start,
             params.num_grids,
             params.dt,
             params.vol,

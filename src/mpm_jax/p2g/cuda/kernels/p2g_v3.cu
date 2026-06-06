@@ -1,7 +1,7 @@
-// Inline P2G scatter kernel with warp-shuffle atomic coalescing used by cuda_v3.
+// P2G scatter kernel with warp-shuffle atomic coalescing used by cuda_v3.
 //
-// Same structure as the cuda_v1 kernel (p2g_inline.cu): one thread per particle,
-// register-resident state, inline B-spline weights, 27-stencil scatter loop.
+// Same structure as the cuda_v1 kernel (p2g_v1.cu): one thread per particle,
+// register-resident state, B-spline weights, 27-stencil scatter loop.
 //
 // Difference: before each atomicAdd into the grid, threads in the same warp
 // that happen to target the SAME grid node detect each other with
@@ -31,7 +31,7 @@
 
 namespace ffi = xla::ffi;
 
-__global__ void p2g_v3_inline_kernel(
+__global__ void p2g_v3_kernel(
     const float* __restrict__ x,        // (N, 3)
     const float* __restrict__ v,        // (N, 3)
     const float* __restrict__ C,        // (N, 9) row-major
@@ -106,7 +106,7 @@ __global__ void p2g_v3_inline_kernel(
 // XLA FFI handler
 // ---------------------------------------------------------------------------
 
-ffi::Error P2GV3InlineImpl(
+ffi::Error P2GV3Impl(
     cudaStream_t stream,
     ffi::Buffer<ffi::F32> x,
     ffi::Buffer<ffi::F32> v,
@@ -120,7 +120,7 @@ ffi::Error P2GV3InlineImpl(
 ) {
     p2g_zero_grid(grid_mv->typed_data(), grid_m->typed_data(), G, stream);
 
-    p2g_v3_inline_kernel<<<p2g_launch_blocks(N), P2G_BLOCK_SIZE, 0, stream>>>(
+    p2g_v3_kernel<<<p2g_launch_blocks(N), P2G_BLOCK_SIZE, 0, stream>>>(
         x.typed_data(),
         v.typed_data(),
         C.typed_data(),
@@ -135,7 +135,7 @@ ffi::Error P2GV3InlineImpl(
 }
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
-    P2GV3Inline, P2GV3InlineImpl,
+    P2GV3, P2GV3Impl,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
         .Arg<ffi::Buffer<ffi::F32>>()   // x

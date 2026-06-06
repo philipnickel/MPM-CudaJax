@@ -54,13 +54,13 @@ endif()
 message(STATUS "JAX FFI include: ${JAX_FFI_INCLUDE}")
 message(STATUS "CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
 
-set(KERNEL_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/mpm_jax/cuda/kernels)
+set(KERNEL_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/mpm_jax/p2g/cuda/kernels)
 set(P2G_FFI_SOURCES
     ${KERNEL_SRC_DIR}/p2g_ffi_module.cc
-    ${KERNEL_SRC_DIR}/p2g_inline.cu
-    ${KERNEL_SRC_DIR}/p2g_v2_inline.cu
-    ${KERNEL_SRC_DIR}/p2g_v3_inline.cu
-    ${KERNEL_SRC_DIR}/p2g_v4_inline.cu
+    ${KERNEL_SRC_DIR}/p2g_v1.cu
+    ${KERNEL_SRC_DIR}/p2g_v2.cu
+    ${KERNEL_SRC_DIR}/p2g_v3.cu
+    ${KERNEL_SRC_DIR}/p2g_v4.cu
 )
 
 nanobind_add_module(_p2g_ffi NB_STATIC NOMINSIZE ${P2G_FFI_SOURCES})
@@ -79,4 +79,4 @@ target_compile_options(_p2g_ffi PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:-diag-suppress=940,2473>
 )
 
-install(TARGETS _p2g_ffi LIBRARY DESTINATION mpm_jax/cuda)
+install(TARGETS _p2g_ffi LIBRARY DESTINATION mpm_jax/p2g/cuda)

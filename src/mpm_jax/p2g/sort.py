@@ -5,7 +5,7 @@ curve clusters spatially close particles next to each other in memory. When
 those particles are then processed by the same CUDA warp (32 lanes ->
 32 consecutive after-sort particles), more warp lanes target the same
 27-stencil grid node, so a warp-shuffle reduction (`__match_any_sync` +
-`__shfl_sync`) coalesces more atomics into one. See p2g_v3_inline.cu.
+`__shfl_sync`) coalesces more atomics into one. See p2g_v3.cu.
 
 The bit-interleave handles up to 10 bits per axis (`num_grids` <= 1024),
 which more than covers the project's typical G in [32, 256].
@@ -66,8 +66,8 @@ def home_super_cell_id(x, inv_dx, num_grids, super_cell_width):
     """Super-cell id for the quadratic B-spline home node.
 
     A particle's quadratic B-spline stencil is centered on ``floor(x / dx - 0.5) + 1``.
-    CUDA v4 and the cuTile arena P2G both sort particles by the super-cell containing
-    that home node before building CSR-style ``cell_start`` boundaries.
+    CUDA v4 sorts particles by the super-cell containing that home node before
+    building CSR-style ``bucket_start`` boundaries.
     """
     px = x * inv_dx
     base = jnp.floor(px - 0.5).astype(jnp.int32)
@@ -77,3 +77,20 @@ def home_super_cell_id(x, inv_dx, num_grids, super_cell_width):
     sj = home[:, 1] // super_cell_width
     sk = home[:, 2] // super_cell_width
     return (si * (super_grids * super_grids) + sj * super_grids + sk).astype(jnp.int32)
+
+
+def home_cell_id(x, inv_dx, num_grids):
+    """Cell id for the unclipped quadratic B-spline home node.
+
+    The one-cell cuTile backend owns the exact ``base + {0,1,2}`` stencil, so it
+    uses ``base + 1`` as the home cell and allows the upper boundary home ``G``.
+    """
+    px = x * inv_dx
+    base = jnp.floor(px - 0.5).astype(jnp.int32)
+    home = jnp.clip(base + 1, 0, num_grids)
+    cells_per_axis = num_grids + 1
+    return (
+        home[:, 0] * (cells_per_axis * cells_per_axis)
+        + home[:, 1] * cells_per_axis
+        + home[:, 2]
+    ).astype(jnp.int32)

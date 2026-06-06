@@ -1,6 +1,6 @@
 """CUDA P2G kernels, integrated via JAX FFI.
 
-The native ``mpm_jax.cuda._p2g_ffi`` extension is built by scikit-build-core +
+The native ``mpm_jax.p2g.cuda._p2g_ffi`` extension is built by scikit-build-core +
 CMake (see CMakeLists.txt). In editable Pixi environments,
 ``editable.rebuild=true`` lets scikit-build-core incrementally rebuild changed
 CUDA or binding sources when the extension module is imported.
@@ -16,14 +16,14 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-_FFI_MODULE = "mpm_jax.cuda._p2g_ffi"
+_FFI_MODULE = "mpm_jax.p2g.cuda._p2g_ffi"
 _REGISTERED: set[str] = set()
 _REGISTER_LOCK = Lock()
 
-_P2G_TARGET = "p2g_inline_cuda"
-_P2G_V2_TARGET = "p2g_v2_inline_cuda"
-_P2G_V3_TARGET = "p2g_v3_inline_cuda"
-_P2G_V4_TARGET = "p2g_v4_inline_cuda"
+_P2G_TARGET = "p2g_v1_cuda"
+_P2G_V2_TARGET = "p2g_v2_cuda"
+_P2G_V3_TARGET = "p2g_v3_cuda"
+_P2G_V4_TARGET = "p2g_v4_cuda"
 
 
 class CudaP2GKernel:
@@ -70,21 +70,21 @@ class CudaV1P2G(CudaP2GKernel):
     """One CUDA thread per particle with global atomics."""
 
     target = _P2G_TARGET
-    capsule_factory = "p2g_inline"
+    capsule_factory = "p2g_v1"
 
 
 class CudaV2P2G(CudaP2GKernel):
     """Warp-shuffle coalesced scatter."""
 
     target = _P2G_V2_TARGET
-    capsule_factory = "p2g_v2_inline"
+    capsule_factory = "p2g_v2"
 
 
 class CudaV3P2G(CudaP2GKernel):
     """Warp-shuffle coalesced scatter for Morton-sorted particles."""
 
     target = _P2G_V3_TARGET
-    capsule_factory = "p2g_v3_inline"
+    capsule_factory = "p2g_v3"
 
 
 def _p2g_ffi_call(
@@ -146,7 +146,7 @@ class CudaV4P2G(CudaP2GKernel):
     """Super-cell-owned grid tile scatter."""
 
     target = _P2G_V4_TARGET
-    capsule_factory = "p2g_v4_inline"
+    capsule_factory = "p2g_v4"
 
     def __init__(self, super_cell=V4_SUPER_CELL_WIDTH):
         self.super_cell = int(super_cell)
@@ -158,7 +158,7 @@ class CudaV4P2G(CudaP2GKernel):
         v_sorted,
         C_sorted,
         stress_sorted,
-        cell_start,
+        bucket_start,
         num_grids,
         dt,
         vol,
@@ -172,7 +172,7 @@ class CudaV4P2G(CudaP2GKernel):
             v_sorted,
             C_sorted,
             stress_sorted,
-            cell_start,
+            bucket_start,
             num_grids=num_grids,
             dt=dt,
             vol=vol,

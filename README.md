@@ -51,7 +51,7 @@ per-frame state capture — just wall-clock timing.
 Outputs:
 - GIF renders, `results.json`, Hydra logs, config snapshots → `outputs/<date>/<run>/`
 - Multirun sweep results → `multirun/<date>/<run>/`
-- Native CUDA extension → `mpm_jax.cuda._p2g_ffi` (rebuilds on native-source edit via `editable.rebuild=true`)
+- Native CUDA extension → `mpm_jax.p2g.cuda._p2g_ffi` (rebuilds on native-source edit via `editable.rebuild=true`)
 
 ## Setup
 
@@ -70,7 +70,7 @@ pixi run python simulate.py sim.num_frames=5
 
 CUDA kernels are built by [scikit-build-core](https://scikit-build-core.readthedocs.io/)
 + CMake during `pixi install` into one nanobind extension module:
-`mpm_jax.cuda._p2g_ffi`. `p2g_cuda.py` imports that module, gets PyCapsule
+`mpm_jax.p2g.cuda._p2g_ffi`. `p2g_cuda.py` imports that module, gets PyCapsule
 handlers for the CUDA FFI targets, and registers them with
 `jax.ffi.register_ffi_target`.
 
@@ -105,7 +105,7 @@ pixi run python simulate.py backend=cuda_v1 material=jelly
 pixi run python simulate.py backend=cuda_v2 material=jelly            # warp-shuffle coalescing
 pixi run python simulate.py backend=cuda_v3 material=jelly            # Morton sort
 pixi run python simulate.py backend=cuda_v4 material=jelly            # super-cell grid tile
-pixi run python simulate.py backend=cutile material=jelly sim=benchmark render.enabled=false  # cuTile (tiled model)
+pixi run python simulate.py backend=cutile_v3 material=jelly sim=benchmark render.enabled=false  # cuTile (tiled model)
 
 # Override sim params
 pixi run python simulate.py sim.n_particles=1000000 sim.num_grids=64
@@ -116,11 +116,12 @@ pixi run python simulate.py sim.n_particles=1000000 sim.num_grids=64
 | `backend=` | What it does |
 |---|---|
 | `jax` | The JAX/XLA baseline: `lax.scan` over the 27 offsets for **both** P2G and G2P, unified MLS-MPM G2P (APIC affine `C` reused as ∇v), closed-form StVK stress. Every other kernel reuses this G2P, so only the P2G varies. |
-| `cuda_v1` | CUDA inline-weight P2G (one thread/particle, global `atomicAdd`) + JAX baseline G2P. |
-| `cuda_v2` | CUDA warp-shuffle coalesced inline P2G + JAX baseline G2P. |
-| `cuda_v3` | CUDA Morton-sorted inline P2G + JAX baseline G2P. (XLA command-buffer / CUDA-Graph capture is on for every kernel via the default env's `XLA_FLAGS`.) |
-| `cuda_v4` | CUDA super-cell-owned grid tile inline P2G + JAX baseline G2P. |
-| `cutile` | NVIDIA cuTile (tiled programming model) P2G + JAX baseline G2P: SPGrid-style arena scatter — sort by SC=2 home super-cell, reduce each super-cell into a 4³ L1 arena, write back with one tile-coalesced `atomic_store_add` (no coloring). Requires `cuda-tile`. |
+| `cuda_v1` | CUDA P2G (one thread/particle, global `atomicAdd`) + JAX baseline G2P. |
+| `cuda_v2` | CUDA warp-shuffle coalesced P2G + JAX baseline G2P. |
+| `cuda_v3` | CUDA Morton-sorted P2G + JAX baseline G2P. (XLA command-buffer / CUDA-Graph capture is on for every kernel via the default env's `XLA_FLAGS`.) |
+| `cuda_v4` | CUDA super-cell-owned grid tile P2G + JAX baseline G2P. |
+| `cutile_v1` | cuTile direct 27-stencil scatter comparison backend. |
+| `cutile_v3` | cuTile home-cell tiled P2G with local 27-node reduction + JAX baseline G2P. Requires `cuda-tile`. |
 
 ## Architecture
 
@@ -139,9 +140,9 @@ The solver is class-based:
   `steps_per_frame` substeps as a single XLA program via `lax.fori_loop`.
 
 Construction (`RuntimeConfig` + `MPMSolver` in `src/mpm_jax/solver.py`):
-- Hydra instantiates `cfg.solver` into `RuntimeConfig`; backend choices are Python-backed hydra-zen registrations in `src/mpm_jax/backends/`, with each backend passing `num_grids` for validation. `simulate.py` / `profile_nsight.py` import `mpm_jax.backends` before composition, then call `MPMSolver(hydra.utils.instantiate(cfg.solver))`.
+- Hydra instantiates `cfg.solver` into `RuntimeConfig`; backend choices are Python-backed hydra-zen registrations in `src/mpm_jax/p2g/backends/`, with each backend passing `num_grids` for validation. `simulate.py` / `profile_nsight.py` import `mpm_jax.p2g.backends` before composition, then call `MPMSolver(hydra.utils.instantiate(cfg.solver))`.
 - `MPMSolver` reads the runtime config and builds params (with derived dx/vol/p_mass), particles, and initial state. The backend object is already instantiated by Hydra and owns CUDA/cuTile registration and grid-divisibility validation; the sticky floor is fixed in the solver frame.
-- `src/mpm_jax/backends/` is a small backend hierarchy (base = `jax`; one subclass per variant overriding `prepare()`/`p2g()`, with `g2p()` shared on the base). The implementation modules register the user-facing Hydra choices (`jax`, `cuda_v1`, etc.) directly via hydra-zen. The frame loop calls `backend.step()` (order + scatter) and `backend.g2p()`.
+- `src/mpm_jax/p2g/backends/` is a small P2G backend hierarchy. Variants override `prepare()` when they need ordering and `scatter()` for the P2G kernel. The implementation modules register the user-facing Hydra choices (`jax`, `cuda_v1`, etc.) directly via hydra-zen. The frame loop calls `backend.prepare()`, `backend.scatter()`, then the shared `g2p_mls()` path.
 
 All solver variants now run through the same JAX-owned frame loop. The pure-JAX path compiles the entire frame (multiple substeps) as one XLA program. The CUDA variants (`cuda_v*`) move per-particle stencil work into CUDA kernels so the `(N, 27, *)` intermediate tensors never materialize in HBM. The cuTile variant (`cutile`) launches a tiled-programming-model P2G kernel from inside that same JAX frame via the cuTile/JAX bridge.
 
@@ -180,7 +181,7 @@ Hydra config groups in `conf/`:
 |---|---|---|
 | `material` | `jelly` (default) | Constitutive model |
 | `sim` | `default` | n_particles, num_grids, dt, BCs, ... |
-| `backend` | `jax` (default), `cuda_v1`, `cuda_v2`, `cuda_v3`, `cuda_v4`, `cutile` | P2G implementation (G2P shared) |
+| `backend` | `jax` (default), `cuda_v1`, `cuda_v2`, `cuda_v3`, `cuda_v4`, `cutile_v1`, `cutile_v3` | P2G implementation (G2P shared) |
 
 Top-level fields: `tag`, `render`. All overridable from CLI:
 
@@ -200,7 +201,7 @@ Run focused GPU checks:
 
 ```bash
 pixi run pytest tests/test_cuda_ffi_loader.py tests/test_p2g_scan.py \
-    tests/test_cuda_v2_inline_matches_v1.py -q
+    tests/test_cuda_v2_matches_v1.py -q
 ```
 
 
@@ -225,14 +226,15 @@ MPM-CudaJax/
         ├── solver.py        # MPMSolver
         ├── constitutive.py  # StVK elastic stress (jelly material)
         ├── grid.py          # grid_update + build_grid_x
-        ├── sort.py          # morton_argsort, home_super_cell_id
-        ├── backends/        # backend implementations + hydra-zen registrations
-        ├── cutile_p2g.py    # cuTile arena-scatter P2G kernel + jax bridge
-        └── cuda/
-            ├── p2g_cuda.py  # FFI capsule registration + kernel objects
-            └── kernels/     # p2g_ffi_module.cc plus p2g_inline.cu,
-                             # p2g_v2_inline.cu, p2g_v3_inline.cu,
-                             # p2g_v4_inline.cu
+        └── p2g/
+            ├── scan.py      # JAX scan P2G
+            ├── sort.py      # morton_argsort, home_super_cell_id, home_cell_id
+            ├── backends/    # backend implementations + hydra-zen registrations
+            ├── cutile/      # cuTile P2G kernels + jax bridges
+            └── cuda/
+                ├── p2g_cuda.py  # FFI capsule registration + kernel objects
+                └── kernels/     # p2g_ffi_module.cc plus p2g_v1.cu,
+                                 # p2g_v2.cu, p2g_v3.cu, p2g_v4.cu
 ```
 
 ## References

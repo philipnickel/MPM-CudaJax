@@ -4,16 +4,16 @@ from hydra.core.config_store import ConfigStore
 from hydra_zen import store
 from omegaconf import OmegaConf
 
-from mpm_jax.backends.common import BaseBackend, PreparedSubstep
-from mpm_jax.backends.cuda import (
+from mpm_jax.p2g.backends.common import P2GBackend, PreparedP2G
+from mpm_jax.p2g.backends.cuda import (
     CudaP2GBackend,
     CudaV1Backend,
     CudaV2Backend,
     CudaV3Backend,
     CudaV4Backend,
 )
-from mpm_jax.backends.cutile import CutileV1Backend, CutileV2Backend
-from mpm_jax.backends.jax import JaxBackend
+from mpm_jax.p2g.backends.cutile import CutileV1Backend, CutileV3Backend
+from mpm_jax.p2g.backends.jax import JaxBackend
 
 store.add_to_hydra_store(overwrite_ok=True)
 
@@ -38,16 +38,16 @@ def backend_config(choice: str):
 
 
 __all__ = [
-    "BaseBackend",
     "CudaP2GBackend",
     "CudaV1Backend",
     "CudaV2Backend",
     "CudaV3Backend",
     "CudaV4Backend",
     "CutileV1Backend",
-    "CutileV2Backend",
+    "CutileV3Backend",
     "JaxBackend",
-    "PreparedSubstep",
+    "P2GBackend",
+    "PreparedP2G",
     "backend_choices",
     "backend_config",
 ]

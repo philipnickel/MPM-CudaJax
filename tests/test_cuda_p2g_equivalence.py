@@ -8,16 +8,16 @@ import jax.numpy as jnp
 
 from omegaconf import OmegaConf
 
-from mpm_jax.backends import (
+from mpm_jax.p2g.backends import (
     CudaV1Backend,
     CudaV2Backend,
     CudaV3Backend,
     CudaV4Backend,
     CutileV1Backend,
-    CutileV2Backend,
+    CutileV3Backend,
     JaxBackend,
 )
-from mpm_jax.cuda.p2g_cuda import (
+from mpm_jax.p2g.cuda.p2g_cuda import (
     CudaV1P2G,
     CudaV2P2G,
     CudaV3P2G,
@@ -96,7 +96,7 @@ def _p2g_output(backend, params, state, stress):
     @jax.jit
     def run(state, stress):
         prepared = backend.prepare(params, state, stress)
-        return backend.p2g(params, prepared)
+        return backend.scatter(params, prepared)
 
     out = run(state, stress)
     jax.block_until_ready(out)
@@ -135,8 +135,8 @@ def test_cuda_v4_supercell_widths_match_jax_scan():
     _require_cuda_kernels(CudaV4P2G)
     # cuda_v4 is templated + dispatched over SUPPORTED_SC; every compiled
     # super-cell width must scatter identically to the JAX baseline.
-    from mpm_jax.backends import CudaV4Backend
-    from mpm_jax.cuda.p2g_cuda import SUPPORTED_SC
+    from mpm_jax.p2g.backends import CudaV4Backend
+    from mpm_jax.p2g.cuda.p2g_cuda import SUPPORTED_SC
 
     params, state, stress = _inputs()  # num_grids=16, divisible by 2/4/8
     ref_mv, ref_m = _p2g_output(JaxBackend(), params, state, stress)
@@ -167,7 +167,7 @@ def test_cutile_p2g_matches_jax_scan():
 
     for backend in (
         CutileV1Backend(params.num_grids),
-        CutileV2Backend(params.num_grids),
+        CutileV3Backend(params.num_grids),
     ):
         grid_mv, grid_m = _p2g_output(backend, params, state, stress)
 

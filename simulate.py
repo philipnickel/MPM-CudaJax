@@ -6,7 +6,7 @@ import hydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
 
-import mpm_jax.backends  # noqa: F401 - registers Hydra backend config choices
+import mpm_jax.p2g.backends  # noqa: F401 - registers Hydra backend config choices
 from mpm_jax.rendering import render_warp_opengl
 from mpm_jax.solver import MPMSolver
 

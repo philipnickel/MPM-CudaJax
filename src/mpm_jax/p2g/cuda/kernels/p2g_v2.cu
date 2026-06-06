@@ -1,7 +1,7 @@
-// Inline P2G scatter kernel with warp-shuffle reduction used by the cuda_v2 backend.
+// P2G scatter kernel with warp-shuffle reduction used by the cuda_v2 backend.
 //
-// Identical to the cuda_v1 backend kernel (p2g_inline.cu) for the per-particle setup —
-// one thread per particle, register-resident state, inline B-spline weights,
+// Identical to the cuda_v1 backend kernel (p2g_v1.cu) for the per-particle setup —
+// one thread per particle, register-resident state, B-spline weights,
 // no (N, 27, *) materialisation in HBM. The ONLY difference is the 27-stencil
 // scatter: before each atomicAdd, lanes inside the warp that target the same
 // grid_idx reduce their contributions via __match_any_sync + __shfl_sync,
@@ -13,7 +13,7 @@
 //
 // Requires sm_70+ for __match_any_sync (the A10 / sm_86 is fine).
 //
-// Inputs/outputs identical to p2g_inline.cu — see that file for layout.
+// Inputs/outputs identical to p2g_v1.cu — see that file for layout.
 
 #include "xla/ffi/api/ffi.h"
 
@@ -21,7 +21,7 @@
 
 namespace ffi = xla::ffi;
 
-__global__ void p2g_v2_inline_kernel(
+__global__ void p2g_v2_kernel(
     const float* __restrict__ x,        // (N, 3)
     const float* __restrict__ v,        // (N, 3)
     const float* __restrict__ C,        // (N, 9) row-major
@@ -95,7 +95,7 @@ __global__ void p2g_v2_inline_kernel(
 // XLA FFI handler
 // ---------------------------------------------------------------------------
 
-ffi::Error P2GV2InlineImpl(
+ffi::Error P2GV2Impl(
     cudaStream_t stream,
     ffi::Buffer<ffi::F32> x,
     ffi::Buffer<ffi::F32> v,
@@ -109,7 +109,7 @@ ffi::Error P2GV2InlineImpl(
 ) {
     p2g_zero_grid(grid_mv->typed_data(), grid_m->typed_data(), G, stream);
 
-    p2g_v2_inline_kernel<<<p2g_launch_blocks(N), P2G_BLOCK_SIZE, 0, stream>>>(
+    p2g_v2_kernel<<<p2g_launch_blocks(N), P2G_BLOCK_SIZE, 0, stream>>>(
         x.typed_data(),
         v.typed_data(),
         C.typed_data(),
@@ -124,7 +124,7 @@ ffi::Error P2GV2InlineImpl(
 }
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
-    P2GV2Inline, P2GV2InlineImpl,
+    P2GV2, P2GV2Impl,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
         .Arg<ffi::Buffer<ffi::F32>>()   // x

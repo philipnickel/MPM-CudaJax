@@ -46,7 +46,7 @@ def test_backend_choices_come_from_registered_hydra_configs():
         "cuda_v3",
         "cuda_v4",
         "cutile_v1",
-        "cutile_v2",
+        "cutile_v3",
     }
 
 
@@ -54,7 +54,7 @@ def test_nsight_profile_config_composes():
     cfg = _compose_config("nsight_profile")
 
     assert cfg.nsight.phase == "p2g"
-    assert cfg.backend._target_ == "mpm_jax.backends.jax.JaxBackend"
+    assert cfg.backend._target_ == "mpm_jax.p2g.backends.jax.JaxBackend"
     assert profile_nsight._nsight_configs(cfg) == [("jax", 8, 16, 1)]
 
 
@@ -89,7 +89,7 @@ def test_sweep_backend_choices_are_hydra_choices():
 
 def test_runtime_backend_names_are_rejected_as_profile_choices():
     cfg = _compose_config()
-    cfg.nsight.sweep = {"kernels": ["cuda_v3_inline"]}
+    cfg.nsight.sweep = {"kernels": ["CudaV3Backend"]}
 
     with pytest.raises(RuntimeError, match="Hydra backend choices"):
         profile_nsight._sweep_backend_choices(cfg)
@@ -123,11 +123,11 @@ def test_merge_variant_cfg_loads_registered_backend_config_into_solver_reference
     )
 
     assert profile_nsight._backend_choice_from_cfg(variant) == "cuda_v3"
-    assert variant.backend._target_ == "mpm_jax.backends.cuda.CudaV3Backend"
+    assert variant.backend._target_ == "mpm_jax.p2g.backends.cuda.CudaV3Backend"
     resolved_solver_backend = OmegaConf.to_container(
         variant.solver.backend, resolve=True
     )
-    assert resolved_solver_backend["_target_"] == "mpm_jax.backends.cuda.CudaV3Backend"
+    assert resolved_solver_backend["_target_"] == "mpm_jax.p2g.backends.cuda.CudaV3Backend"
     assert resolved_solver_backend["num_grids"] == 40
 
 

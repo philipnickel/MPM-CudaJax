@@ -2,7 +2,7 @@ import hydra
 import pytest
 from omegaconf import OmegaConf
 
-from mpm_jax.backends import (
+from mpm_jax.p2g.backends import (
     CudaV1Backend,
     CudaV2Backend,
     CudaV3Backend,
@@ -15,25 +15,25 @@ from mpm_jax.solver import MPMSolver
 def test_jax_backend_constructs_without_gpu():
     backend = JaxBackend(num_grids=16)
     assert backend.name == "jax"
-    assert callable(backend.p2g) and callable(backend.g2p)
+    assert callable(backend.prepare) and callable(backend.scatter)
 
 
 def test_cuda_backend_constructors_register_expected_kind(monkeypatch):
     calls = []
     monkeypatch.setattr(
-        "mpm_jax.cuda.p2g_cuda.CudaV1P2G.register",
+        "mpm_jax.p2g.cuda.p2g_cuda.CudaV1P2G.register",
         lambda self: calls.append("cuda_v1"),
     )
     monkeypatch.setattr(
-        "mpm_jax.cuda.p2g_cuda.CudaV2P2G.register",
+        "mpm_jax.p2g.cuda.p2g_cuda.CudaV2P2G.register",
         lambda self: calls.append("cuda_v2"),
     )
     monkeypatch.setattr(
-        "mpm_jax.cuda.p2g_cuda.CudaV3P2G.register",
+        "mpm_jax.p2g.cuda.p2g_cuda.CudaV3P2G.register",
         lambda self: calls.append("cuda_v3"),
     )
     monkeypatch.setattr(
-        "mpm_jax.cuda.p2g_cuda.CudaV4P2G.register",
+        "mpm_jax.p2g.cuda.p2g_cuda.CudaV4P2G.register",
         lambda self: calls.append("cuda_v4"),
     )
 
@@ -54,7 +54,7 @@ def test_hydra_instantiates_runtime_config_and_solver():
     cfg = OmegaConf.create(
         {
             "backend": {
-                "_target_": "mpm_jax.backends.jax.JaxBackend",
+                "_target_": "mpm_jax.p2g.backends.jax.JaxBackend",
                 "num_grids": 16,
             },
             "sim": {

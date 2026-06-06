@@ -2,8 +2,8 @@ from types import SimpleNamespace
 
 import jax.numpy as jnp
 import pytest
-from mpm_jax.backends import JaxBackend
-from mpm_jax.backends.cuda import CudaV4Backend
+from mpm_jax.p2g.backends import JaxBackend
+from mpm_jax.p2g.backends.cuda import CudaV4Backend
 from mpm_jax.constitutive import stvk_elasticity_jacobi
 from mpm_jax.solver import MPMSolver, RuntimeConfig
 
@@ -27,7 +27,7 @@ def _make_solver(steps_per_frame=2, n=64, G=16):
 
 
 def test_solver_validates_backend_against_runtime_num_grids(monkeypatch):
-    monkeypatch.setattr("mpm_jax.cuda.p2g_cuda.CudaV4P2G.register", lambda self: True)
+    monkeypatch.setattr("mpm_jax.p2g.cuda.p2g_cuda.CudaV4P2G.register", lambda self: True)
 
     sim = SimpleNamespace(
         n_particles=64,

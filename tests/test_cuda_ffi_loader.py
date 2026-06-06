@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from mpm_jax.cuda import p2g_cuda
+from mpm_jax.p2g.cuda import p2g_cuda
 
 
 def _isolate_registry(monkeypatch):
@@ -23,18 +23,18 @@ def test_register_missing_extension_raises(monkeypatch):
 @pytest.mark.parametrize(
     ("kernel_type", "factory"),
     [
-        (p2g_cuda.CudaV1P2G, "p2g_inline"),
-        (p2g_cuda.CudaV2P2G, "p2g_v2_inline"),
-        (p2g_cuda.CudaV3P2G, "p2g_v3_inline"),
-        (p2g_cuda.CudaV4P2G, "p2g_v4_inline"),
+        (p2g_cuda.CudaV1P2G, "p2g_v1"),
+        (p2g_cuda.CudaV2P2G, "p2g_v2"),
+        (p2g_cuda.CudaV3P2G, "p2g_v3"),
+        (p2g_cuda.CudaV4P2G, "p2g_v4"),
     ],
 )
 def test_kernel_class_imports_expected_capsule(monkeypatch, kernel_type, factory):
     capsules = {
-        "p2g_inline": object(),
-        "p2g_v2_inline": object(),
-        "p2g_v3_inline": object(),
-        "p2g_v4_inline": object(),
+        "p2g_v1": object(),
+        "p2g_v2": object(),
+        "p2g_v3": object(),
+        "p2g_v4": object(),
     }
     calls = []
 
@@ -71,7 +71,7 @@ def test_register_is_cached(monkeypatch):
     capsule = object()
     imported = []
 
-    fake_module = SimpleNamespace(p2g_inline=lambda: capsule)
+    fake_module = SimpleNamespace(p2g_v1=lambda: capsule)
     monkeypatch.setattr(
         p2g_cuda.importlib,
         "import_module",

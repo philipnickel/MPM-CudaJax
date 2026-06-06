@@ -1,19 +1,18 @@
 """cuTile P2G backend implementation."""
 
 from hydra_zen import store
-import jax.numpy as jnp
 
-from mpm_jax.backends.common import BaseBackend, supercell_order
+from mpm_jax.p2g.backends.common import P2GBackend, home_cell_order
 
 
 def _cutile_module():
-    from mpm_jax import cutile_p2g
+    from mpm_jax.p2g import cutile
 
-    return cutile_p2g
+    return cutile
 
 
 @store(name="cutile_v1", group="backend", num_grids="${sim.num_grids}")
-class CutileV1Backend(BaseBackend):
+class CutileV1Backend(P2GBackend):
     """cuTile direct 27-stencil scatter with global atomics."""
 
     name = "cutile_v1"
@@ -23,7 +22,7 @@ class CutileV1Backend(BaseBackend):
         self.kernel = cutile.cutile_p2g_v1
         super().__init__(num_grids=num_grids)
 
-    def p2g(self, params, prepared):
+    def scatter(self, params, prepared):
         return self.kernel(
             prepared.x,
             prepared.v,
@@ -38,36 +37,27 @@ class CutileV1Backend(BaseBackend):
         )
 
 
-@store(name="cutile_v2", group="backend", num_grids="${sim.num_grids}")
-class CutileV2Backend(BaseBackend):
-    """cuTile arena scatter; occupancy is left to the cuTile compiler default."""
+@store(name="cutile_v3", group="backend", num_grids="${sim.num_grids}")
+class CutileV3Backend(P2GBackend):
+    """cuTile one-home-cell scatter with a locally reduced 27-node stencil."""
 
-    name = "cutile_v2"
+    name = "cutile_v3"
 
     def __init__(self, num_grids=None):
         cutile = _cutile_module()
-        self.super_cell = cutile.ARENA_SC
-        self.kernel = cutile.cutile_p2g_v2
+        self.kernel = cutile.cutile_p2g_v3
         super().__init__(num_grids=num_grids)
 
     def prepare(self, params, state, stress):
-        prepared = supercell_order(params, state, stress, self.super_cell)
-        grids_per_super_cell = params.num_grids // self.super_cell
-        starts = prepared.cell_start[:-1].reshape(
-            (grids_per_super_cell, grids_per_super_cell, grids_per_super_cell)
-        )
-        ends = prepared.cell_start[1:].reshape(
-            (grids_per_super_cell, grids_per_super_cell, grids_per_super_cell)
-        )
-        return prepared._replace(cell_start=jnp.stack((starts, ends), axis=-1))
+        return home_cell_order(params, state, stress)
 
-    def p2g(self, params, prepared):
+    def scatter(self, params, prepared):
         return self.kernel(
             prepared.x,
             prepared.v,
             prepared.C,
             prepared.stress,
-            prepared.cell_start,
+            prepared.bucket_bounds,
             params.num_grids,
             params.dt,
             params.vol,
@@ -75,6 +65,3 @@ class CutileV2Backend(BaseBackend):
             params.inv_dx,
             params.dx,
         )
-
-    def grid_divisor(self):
-        return self.super_cell

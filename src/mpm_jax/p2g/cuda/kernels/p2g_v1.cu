@@ -1,4 +1,4 @@
-// Inline P2G scatter kernel used by the cuda_v1 backend.
+// P2G scatter kernel used by the cuda_v1 backend.
 //
 // One thread per particle. Each thread:
 //   1. Loads x, v, C, stress into registers (stress is precomputed by JAX).
@@ -31,7 +31,7 @@
 
 namespace ffi = xla::ffi;
 
-__global__ void p2g_inline_kernel(
+__global__ void p2g_v1_kernel(
     const float* __restrict__ x,        // (N, 3)
     const float* __restrict__ v,        // (N, 3)
     const float* __restrict__ C,        // (N, 9) row-major
@@ -77,7 +77,7 @@ __global__ void p2g_inline_kernel(
 // XLA FFI handler
 // ---------------------------------------------------------------------------
 
-ffi::Error P2GInlineImpl(
+ffi::Error P2GV1Impl(
     cudaStream_t stream,
     ffi::Buffer<ffi::F32> x,
     ffi::Buffer<ffi::F32> v,
@@ -91,7 +91,7 @@ ffi::Error P2GInlineImpl(
 ) {
     p2g_zero_grid(grid_mv->typed_data(), grid_m->typed_data(), G, stream);
 
-    p2g_inline_kernel<<<p2g_launch_blocks(N), P2G_BLOCK_SIZE, 0, stream>>>(
+    p2g_v1_kernel<<<p2g_launch_blocks(N), P2G_BLOCK_SIZE, 0, stream>>>(
         x.typed_data(),
         v.typed_data(),
         C.typed_data(),
@@ -106,7 +106,7 @@ ffi::Error P2GInlineImpl(
 }
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
-    P2GInline, P2GInlineImpl,
+    P2GV1, P2GV1Impl,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
         .Arg<ffi::Buffer<ffi::F32>>()   // x

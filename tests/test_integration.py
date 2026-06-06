@@ -2,7 +2,7 @@ import jax.numpy as jnp
 import jax
 from omegaconf import OmegaConf
 from mpm_jax.types import MPMState, MPMParams
-from mpm_jax.backends import JaxBackend
+from mpm_jax.p2g.backends import JaxBackend
 from mpm_jax.solver import build_backend_frame
 from mpm_jax.constitutive import stvk_elasticity_jacobi
 

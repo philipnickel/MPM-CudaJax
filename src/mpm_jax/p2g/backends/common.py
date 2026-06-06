@@ -1,25 +1,26 @@
-"""Shared backend interface and math helpers."""
+"""Shared P2G backend interface and ordering helpers."""
 
 from typing import Any, NamedTuple
 
 import jax.numpy as jnp
 
 from mpm_jax.g2p_scan import _g2p_scan_mls
-from mpm_jax.p2g_scan import _p2g_scan
-from mpm_jax.sort import home_super_cell_id, morton_argsort
+from mpm_jax.p2g.scan import _p2g_scan
+from mpm_jax.p2g.sort import home_cell_id, home_super_cell_id, morton_argsort
 
 
-class PreparedSubstep(NamedTuple):
+class PreparedP2G(NamedTuple):
     x: Any
     v: Any
     C: Any
     F: Any
     stress: Any
-    cell_start: Any = None
+    bucket_start: Any = None
+    bucket_bounds: Any = None
 
 
-class BaseBackend:
-    """Interface consumed by the shared JAX-owned frame loop."""
+class P2GBackend:
+    """Particle-to-grid strategy consumed by the shared solver frame."""
 
     name: str
 
@@ -35,47 +36,64 @@ class BaseBackend:
             )
 
     def prepare(self, params, state, stress):
-        return PreparedSubstep(state.x, state.v, state.C, state.F, stress)
+        return PreparedP2G(state.x, state.v, state.C, state.F, stress)
 
-    def p2g(self, params, prepared):
+    def scatter(self, params, prepared):
         raise NotImplementedError
-
-    def step(self, params, state, stress):
-        prepared = self.prepare(params, state, stress)
-        grid_mv, grid_m = self.p2g(params, prepared)
-        return prepared, grid_mv, grid_m
-
-    def g2p(self, params, prepared, grid_v):
-        return jax_scan_g2p_mls(params, prepared, grid_v)
 
     def grid_divisor(self):
         return None
 
 
+def _bucket_start(bucket_id, bucket_count):
+    counts = jnp.bincount(bucket_id, length=bucket_count).astype(jnp.int32)
+    return jnp.concatenate(
+        [jnp.zeros((1,), dtype=jnp.int32), jnp.cumsum(counts).astype(jnp.int32)]
+    )
+
+
+def _bucket_bounds(bucket_start, bucket_shape):
+    starts = bucket_start[:-1].reshape(bucket_shape)
+    ends = bucket_start[1:].reshape(bucket_shape)
+    return jnp.stack((starts, ends), axis=-1)
+
+
 def morton_order(params, state, stress):
     order = morton_argsort(state.x, params.inv_dx, params.num_grids)
-    return PreparedSubstep(
+    return PreparedP2G(
         state.x[order], state.v[order], state.C[order], state.F[order], stress[order]
     )
 
 
 def supercell_order(params, state, stress, super_cell_width):
-    super_id = home_super_cell_id(
+    bucket_id = home_super_cell_id(
         state.x, params.inv_dx, params.num_grids, super_cell_width
     )
-    order = jnp.argsort(super_id)
+    order = jnp.argsort(bucket_id)
     grids_per_super_cell = params.num_grids // super_cell_width
-    counts = jnp.bincount(super_id, length=grids_per_super_cell**3).astype(jnp.int32)
-    cell_start = jnp.concatenate(
-        [jnp.zeros((1,), dtype=jnp.int32), jnp.cumsum(counts).astype(jnp.int32)]
-    )
-    return PreparedSubstep(
+    return PreparedP2G(
         state.x[order],
         state.v[order],
         state.C[order],
         state.F[order],
         stress[order],
-        cell_start=cell_start,
+        bucket_start=_bucket_start(bucket_id, grids_per_super_cell**3),
+    )
+
+
+def home_cell_order(params, state, stress):
+    bucket_id = home_cell_id(state.x, params.inv_dx, params.num_grids)
+    order = jnp.argsort(bucket_id)
+    cells_per_axis = params.num_grids + 1
+    bucket_shape = (cells_per_axis, cells_per_axis, cells_per_axis)
+    bucket_start = _bucket_start(bucket_id, cells_per_axis**3)
+    return PreparedP2G(
+        state.x[order],
+        state.v[order],
+        state.C[order],
+        state.F[order],
+        stress[order],
+        bucket_bounds=_bucket_bounds(bucket_start, bucket_shape),
     )
 
 
@@ -94,7 +112,7 @@ def jax_scan_p2g(params, prepared):
     )
 
 
-def jax_scan_g2p_mls(params, prepared, grid_v):
+def g2p_mls(params, prepared, grid_v):
     return _g2p_scan_mls(
         grid_v,
         prepared.x,

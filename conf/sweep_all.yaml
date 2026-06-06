@@ -1,4 +1,4 @@
-# Full comparison sweep: JAX variants vs inline CUDA kernels.
+# Full comparison sweep: JAX variants vs CUDA/cuTile kernels.
 #
 # Usage: pixi run python simulate.py -cn sweep_all
 #
@@ -12,7 +12,7 @@ hydra:
     mode: MULTIRUN
     sweeper:
         params:
-            backend: jax,cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v2
+            backend: jax,cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v3
 
 render:
     enabled: false

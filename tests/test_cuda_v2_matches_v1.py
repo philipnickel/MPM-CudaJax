@@ -1,8 +1,8 @@
 """cuda_v2 must match cuda_v1 up to atomic-order f32 drift.
 
 Both kernels are bit-identical in their per-particle math; only the scatter
-strategy differs (v2_inline adds a warp-shuffle reduction before each
-atomicAdd). The same drift sources as the rest of the CUDA equivalence
+strategy differs (v2 adds a warp-shuffle reduction before each atomicAdd).
+The same drift sources as the rest of the CUDA equivalence
 suite apply (non-deterministic atomicAdd ordering), so we use the same
 tolerances as the v1-vs-JAX comparison.
 
@@ -15,9 +15,9 @@ import numpy as np
 import pytest
 from omegaconf import OmegaConf
 
-from mpm_jax.backends import CudaV1Backend, CudaV2Backend
+from mpm_jax.p2g.backends import CudaV1Backend, CudaV2Backend
 from mpm_jax.constitutive import stvk_elasticity_jacobi
-from mpm_jax.cuda.p2g_cuda import CudaV1P2G, CudaV2P2G
+from mpm_jax.p2g.cuda.p2g_cuda import CudaV1P2G, CudaV2P2G
 from mpm_jax.solver import build_backend_frame
 from mpm_jax.types import MPMState, MPMParams
 
@@ -40,7 +40,7 @@ def _require_kernels(*kernel_types):
 
 
 def test_cuda_v2_matches_v1():
-    """Run a short sim under both inline kernels and compare final state."""
+    """Run a short sim under both CUDA kernels and compare final state."""
     _require_kernels(CudaV1P2G, CudaV2P2G)
     n = 2000
     num_grids = 16

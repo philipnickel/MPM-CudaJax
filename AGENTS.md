@@ -22,12 +22,12 @@ The main entry points are:
 - `profile_nsight.py` - Nsight Python profiling for per-stage and per-kernel
   analysis.
 - `src/mpm_jax/solver.py` - Equinox-based `MPMSolver`.
-- `src/mpm_jax/backends/` - Hydra-registered backend implementations.
-- `src/mpm_jax/grid.py`, `sort.py` - pure-math helpers (grid update; Morton +
-  super-cell sorting).
-- `src/mpm_jax/cutile_p2g.py` - cuTile tiled kernel bridge helpers.
-- `src/mpm_jax/cuda/` - nanobind-backed JAX FFI CUDA registration plus CUDA
-  kernel sources.
+- `src/mpm_jax/p2g/backends/` - Hydra-registered P2G backend implementations.
+- `src/mpm_jax/grid.py`, `src/mpm_jax/p2g/sort.py` - pure-math helpers (grid
+  update; Morton + super-cell sorting).
+- `src/mpm_jax/p2g/cutile/` - cuTile tiled kernel bridge helpers.
+- `src/mpm_jax/p2g/cuda/` - nanobind-backed JAX FFI CUDA registration plus
+  CUDA kernel sources.
 - `conf/` - Hydra config groups for simulation, materials, kernels, profiling,
   and sweeps.
 - `tests/` - pytest coverage for solver behavior, CUDA equivalence, backends,
@@ -42,7 +42,7 @@ The main entry points are:
 - CUDA kernels are built as an importable nanobind extension through
   scikit-build-core and CMake during `pixi install`.
 - Kernel selection is Hydra-target-driven. Backend implementation modules under
-  `src/mpm_jax/backends/` register their own Hydra config-group choices via
+  `src/mpm_jax/p2g/backends/` register their own Hydra config-group choices via
   hydra-zen; do not add dispatch logic to `simulate.py`.
 - Preserve the benchmark methodology described in `.claude/CLAUDE.md`,
   especially the standard 8-particles-per-cell setup and the

@@ -1,5 +1,5 @@
 # Standard high-performance benchmark configuration.
-# Uses an even grid so JAX, inline CUDA, and the super-cell-tiled cuTile/CUDA
+# Uses an even grid so JAX, CUDA, and the super-cell-tiled cuTile/CUDA
 # kernels can all run the same apples-to-apples preset. This is close to the Taichi /
 # MLS-MPM 8 ppc setup: dx ~= 8.06e-3, particles in [0.1, 0.9]^3, 8M particles.
 #

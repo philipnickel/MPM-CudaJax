@@ -20,7 +20,7 @@ import jax
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
-import mpm_jax.backends as backend_configs
+import mpm_jax.p2g.backends as backend_configs
 from mpm_jax.solver import MPMSolver
 
 logger = logging.getLogger(__name__)
@@ -149,7 +149,7 @@ def _build_p2g_stage(cfg: DictConfig):
     """Isolate the P2G as a profiled callable, reusing the constructed solver.
 
     Builds the solver from the Hydra-instantiated runtime config, then
-    runs just elasticity -> backend.prepare (sort) -> backend.p2g (scatter)
+    runs just elasticity -> backend.prepare (sort) -> backend.scatter
     on the solver's own params/state/fns — no duplicated construction.
     """
     solver = MPMSolver(hydra.utils.instantiate(cfg.solver))
@@ -161,7 +161,7 @@ def _build_p2g_stage(cfg: DictConfig):
     def jit_p2g_stage(state):
         stress = elasticity_fn(state.F)
         prepared = backend.prepare(params, state, stress)
-        return backend.p2g(params, prepared)
+        return backend.scatter(params, prepared)
 
     warmup = jit_p2g_stage(state)
     jax.block_until_ready(warmup)

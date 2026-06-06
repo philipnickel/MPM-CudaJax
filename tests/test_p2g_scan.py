@@ -2,7 +2,7 @@
 
 import jax.numpy as jnp
 
-from mpm_jax.p2g_scan import _p2g_scan
+from mpm_jax.p2g.scan import _p2g_scan
 
 
 def test_p2g_scan_shapes_and_mass_are_finite():

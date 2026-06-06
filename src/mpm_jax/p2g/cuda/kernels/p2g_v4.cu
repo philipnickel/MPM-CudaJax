@@ -1,7 +1,7 @@
-// Cell-major inline P2G scatter kernel used by the cuda_v4 backend.
+// Cell-major P2G scatter kernel used by the cuda_v4 backend.
 //
 // Combines two ideas:
-//   * `p2g_inline.cu` (cuda_v1): one thread per particle, inline
+//   * `p2g_v1.cu` (cuda_v1): one thread per particle,
 //     B-spline weights + 27-stencil scatter computed in registers. No
 //     (N, 27, *) tensor is ever materialised in HBM.
 //   * Particles are sorted by their home SUPER-cell on the JAX side; one
@@ -23,7 +23,7 @@
 //
 // The hypothesis is that the smem aggregation amortises the 27 global
 // atomicAdds per particle (108 floats) down to the per-super-cell tile flush
-// (~TILE_SIZE = (SC+2)^3 = 216 occupied grid nodes for SC=4). With inline
+// (~TILE_SIZE = (SC+2)^3 = 216 occupied grid nodes for SC=4). With local
 // weight computation, the (N, 27, *) momentum/mass/index tensors disappear
 // from HBM and only x/v/C/stress are loaded once per particle.
 //
@@ -32,7 +32,7 @@
 //   v:          (N, 3)        particle velocities
 //   C:          (N, 9)        APIC affine matrix (row-major)
 //   stress:     (N, 9)        Kirchhoff stress (row-major)
-//   cell_start: ((G/SC)^3 + 1,) int32  CSR boundaries into the sorted arrays
+//   bucket_start: ((G/SC)^3 + 1,) int32  CSR boundaries into the sorted arrays
 //
 // Outputs:
 //   grid_mv: (G^3, 3)
@@ -60,7 +60,7 @@
 namespace ffi = xla::ffi;
 
 // ---------------------------------------------------------------------------
-// Super-cell-tiled inline kernel
+// Super-cell-tiled kernel
 // ---------------------------------------------------------------------------
 // One block per super-cell. Each thread in the block processes one or more
 // particles from that super-cell (grid-stride loop over the in-super-cell
@@ -74,12 +74,12 @@ namespace ffi = xla::ffi;
 // entries to global memory with one atomicAdd per (mv, m).
 
 template <int SC>
-__global__ void p2g_v4_inline_kernel(
+__global__ void p2g_v4_kernel(
     const float* __restrict__ x,          // (N, 3) sorted by home super-cell
     const float* __restrict__ v,          // (N, 3) sorted
     const float* __restrict__ C,          // (N, 9) sorted, row-major
     const float* __restrict__ stress,     // (N, 9) sorted, row-major
-    const int*   __restrict__ cell_start, // ((G/SC)^3 + 1,)
+    const int*   __restrict__ bucket_start, // ((G/SC)^3 + 1,)
     float*       __restrict__ grid_mv,    // (G^3, 3)
     float*       __restrict__ grid_m,     // (G^3,)
     int G,
@@ -92,8 +92,8 @@ __global__ void p2g_v4_inline_kernel(
     int super_id = blockIdx.x;
     if (super_id >= Gs3) return;
 
-    int p_start = cell_start[super_id];
-    int p_end   = cell_start[super_id + 1];
+    int p_start = bucket_start[super_id];
+    int p_end   = bucket_start[super_id + 1];
     int n_particles = p_end - p_start;
 
     // Fast empty-super-cell exit. The particle block only occupies a fraction
@@ -214,13 +214,13 @@ __global__ void p2g_v4_inline_kernel(
 // XLA FFI handler
 // ---------------------------------------------------------------------------
 
-ffi::Error P2GV4InlineImpl(
+ffi::Error P2GV4Impl(
     cudaStream_t stream,
     ffi::Buffer<ffi::F32> x,
     ffi::Buffer<ffi::F32> v,
     ffi::Buffer<ffi::F32> C,
     ffi::Buffer<ffi::F32> stress,
-    ffi::Buffer<ffi::S32> cell_start,
+    ffi::Buffer<ffi::S32> bucket_start,
     ffi::ResultBuffer<ffi::F32> grid_mv,
     ffi::ResultBuffer<ffi::F32> grid_m,
     int32_t G,
@@ -235,14 +235,14 @@ ffi::Error P2GV4InlineImpl(
         return ffi::Error(ffi::ErrorCode::kInvalidArgument,
                           "G must be divisible by SC (super-cell width)");
     }
-    // cell_start is ((G/SC)^3 + 1,) ints.
+    // bucket_start is ((G/SC)^3 + 1,) ints.
     int Gs = G / SC;
     int Gs3 = Gs * Gs * Gs;
     int expected = Gs3 + 1;
-    int got = static_cast<int>(cell_start.dimensions()[0]);
+    int got = static_cast<int>(bucket_start.dimensions()[0]);
     if (got != expected) {
         return ffi::Error(ffi::ErrorCode::kInvalidArgument,
-                          "cell_start size does not match (G/SC)^3 + 1");
+                          "bucket_start size does not match (G/SC)^3 + 1");
     }
 
     p2g_zero_grid(grid_mv->typed_data(), grid_m->typed_data(), G, stream);
@@ -251,9 +251,9 @@ ffi::Error P2GV4InlineImpl(
     // its own statically-sized shared tile); keep these cases in sync with
     // SUPPORTED_SC in p2g_cuda.py.
 #define MPM_LAUNCH_V4(SCVAL)                                                  \
-    p2g_v4_inline_kernel<SCVAL><<<Gs3, P2G_BLOCK_SIZE, 0, stream>>>(          \
+    p2g_v4_kernel<SCVAL><<<Gs3, P2G_BLOCK_SIZE, 0, stream>>>(          \
         x.typed_data(), v.typed_data(), C.typed_data(), stress.typed_data(), \
-        reinterpret_cast<const int*>(cell_start.typed_data()),               \
+        reinterpret_cast<const int*>(bucket_start.typed_data()),             \
         grid_mv->typed_data(), grid_m->typed_data(),                         \
         G, dt, vol, p_mass, inv_dx, dx)
     switch (SC) {
@@ -268,14 +268,14 @@ ffi::Error P2GV4InlineImpl(
 }
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
-    P2GV4Inline, P2GV4InlineImpl,
+    P2GV4, P2GV4Impl,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
         .Arg<ffi::Buffer<ffi::F32>>()   // x (sorted)
         .Arg<ffi::Buffer<ffi::F32>>()   // v (sorted)
         .Arg<ffi::Buffer<ffi::F32>>()   // C (sorted)
         .Arg<ffi::Buffer<ffi::F32>>()   // stress (sorted)
-        .Arg<ffi::Buffer<ffi::S32>>()   // cell_start over super-cells
+        .Arg<ffi::Buffer<ffi::S32>>()   // bucket_start over super-cells
         .Ret<ffi::Buffer<ffi::F32>>()   // grid_mv
         .Ret<ffi::Buffer<ffi::F32>>()   // grid_m
         .Attr<int32_t>("G")

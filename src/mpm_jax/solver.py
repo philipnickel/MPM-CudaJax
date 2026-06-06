@@ -10,11 +10,14 @@ from hydra.utils import instantiate
 from omegaconf import DictConfig
 from tqdm import tqdm
 
+from mpm_jax.p2g.backends.common import g2p_mls
 from mpm_jax.grid import build_grid_x, grid_update
 from mpm_jax.types import MPMParams, MPMState
 
 
-def get_particles(n_particles, center, size):
+def get_particles(
+    n_particles, center, size
+):  # says uniformly but uses random? also why is it not just done directly in jax arrays?
     """Sample n_particles uniformly in a box."""
     start = np.array(center, dtype=np.float32) - np.array(size, dtype=np.float32) / 2
     end = np.array(center, dtype=np.float32) + np.array(size, dtype=np.float32) / 2
@@ -24,30 +27,30 @@ def get_particles(n_particles, center, size):
     )
 
 
-def _instantiate_target(value):
+def _instantiate_target(value):  # this seems redundant
     if isinstance(value, dict | DictConfig) and "_target_" in value:
         return instantiate(value)
     return value
 
 
-def _target_name(value):
+def _target_name(value):  # this seems hacky and redundant
     if isinstance(value, dict | DictConfig) and "_target_" in value:
         return str(value["_target_"]).rsplit(".", maxsplit=1)[-1]
     return getattr(value, "__name__", type(value).__name__)
 
 
-def _gpu_type():
+def _gpu_type():  # we can assume its looking for a cuda device....  and then just do inline instead of having a method for it
     for device in jax.devices():
         if device.platform in {"cuda", "gpu"}:
             return getattr(device, "device_kind", str(device))
     return getattr(jax.devices()[0], "device_kind", jax.default_backend())
 
 
-def _sticky_floor_mask(grid_x, dx):
+def _sticky_floor_mask(grid_x, dx):  # can be done inline
     return grid_x[:, 2] * dx < 0.02
 
 
-def _apply_sticky_floor(grid_v, sticky_floor):
+def _apply_sticky_floor(grid_v, sticky_floor):  # can be done inline
     return jnp.where(sticky_floor[:, None], 0.0, grid_v)
 
 
@@ -56,7 +59,8 @@ def _backend_substep(_, state, *, params, elasticity_fn, backend, sticky_floor):
         stress = elasticity_fn(state.F)
 
     with jax.named_scope(f"{backend.name}_p2g"):
-        prepared, grid_mv, grid_m = backend.step(params, state, stress)
+        prepared = backend.prepare(params, state, stress)
+        grid_mv, grid_m = backend.scatter(params, prepared)
 
     with jax.named_scope("grid_update"):
         grid_mv = grid_update(
@@ -64,15 +68,17 @@ def _backend_substep(_, state, *, params, elasticity_fn, backend, sticky_floor):
         )
         grid_v = _apply_sticky_floor(grid_mv, sticky_floor)
 
-    with jax.named_scope(f"{backend.name}_g2p"):
-        new_x, new_v, new_C, new_F = backend.g2p(params, prepared, grid_v)
+    with jax.named_scope(
+        "g2p"
+    ):  # do we even have multiple g2p backends?
+        new_x, new_v, new_C, new_F = g2p_mls(params, prepared, grid_v)
 
     return MPMState(x=new_x, v=new_v, C=new_C, F=new_F)
 
 
 def _run_backend_frame(
     state, *, params, elasticity_fn, backend, sticky_floor, steps_per_frame
-):
+):  # yet another wrapper? this is getting ridiculous. why not just have the fori_loop directly in the frame?
     substep = partial(
         _backend_substep,
         params=params,
@@ -83,12 +89,14 @@ def _run_backend_frame(
     return jax.lax.fori_loop(0, steps_per_frame, substep, state)
 
 
-def build_backend_frame(params, elasticity_fn, backend, steps_per_frame):
+def build_backend_frame(
+    params, elasticity_fn, backend, steps_per_frame
+):  # this seems just like a wrapper?
     """Build one JIT-compiled frame from a backend object.
 
     The frame owns the common MPM control flow (elasticity, grid update, sticky
     floor, the substep loop). The backend owns only the
-    P2G — ``backend.step`` orders the particles and scatters — and ``g2p``.
+    P2G — ``backend.prepare`` orders particles and ``backend.scatter`` scatters.
     The ``steps_per_frame`` substeps run as a single ``lax.fori_loop``.
     """
     sticky_floor = _sticky_floor_mask(build_grid_x(params.num_grids), params.dx)
@@ -170,7 +178,7 @@ class MPMSolver:
             self.steps_per_frame,
         )
 
-    def step(self):
+    def step(self):  # why have both step, _frame, build_backend_frame?
         """Advance this solver in place and return the new state."""
         self.state = self._frame(self.state)
         return self.state
@@ -182,13 +190,15 @@ class MPMSolver:
 
         frames = []
         frame_iter = range(self.num_frames)
-        if progress:
+        if progress:  # we will always have progress...
             frame_iter = tqdm(frame_iter, desc="simulate")
 
         t0 = time.perf_counter()
         for _ in frame_iter:
             if capture_frames:
-                frames.append(np.array(self.state.x))
+                frames.append(
+                    np.array(self.state.x)
+                )  # hmm shouldn't this be device arrays optimally?
             self.step()
             if capture_frames:
                 jax.block_until_ready(self.state.x)
@@ -197,7 +207,9 @@ class MPMSolver:
 
         return frames, time.perf_counter() - t0
 
-    def metrics(self, elapsed_s):
+    def metrics(
+        self, elapsed_s
+    ):  # this is ugly. metrics should have a dataclass container instead.
         elapsed_s = float(elapsed_s)
         total_steps = self.num_frames * self.steps_per_frame
         particle_steps = self.params.n_particles * total_steps
@@ -217,6 +229,6 @@ class MPMSolver:
             "gpu_type": self.gpu_type,
         }
 
-    def reset_to_initial(self):
+    def reset_to_initial(self):  # this is unneccessary to have as a method
         self.state = self._init_state
         return self.state
