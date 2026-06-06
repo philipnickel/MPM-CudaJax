@@ -138,11 +138,11 @@ def _load_particle_columns(x, v, C, stress, p, active, inv_dx, particle_tile):
     b = ct.astype(ct.floor(x_p - 0.5), ct.int32)
     fx = x_p - ct.astype(b, ct.float32)
     return (
-        *_vector_columns(b, particle_tile),
-        *_vector_columns(fx, particle_tile),
-        *_vector_columns(v_p, particle_tile),
-        *_matrix_columns(C_p, particle_tile),
-        *_matrix_columns(stress_p, particle_tile),
+        _vector_columns(b, particle_tile),
+        _vector_columns(fx, particle_tile),
+        _vector_columns(v_p, particle_tile),
+        _matrix_columns(C_p, particle_tile),
+        _matrix_columns(stress_p, particle_tile),
     )
 
 
@@ -209,35 +209,12 @@ def _node_contribution(
 
 
 def _node_contribution_columns(pcols, node_rows, dt, vol, p_mass, inv_dx, dx):
-    (
-        b0,
-        b1,
-        b2,
-        fx0,
-        fx1,
-        fx2,
-        vp0,
-        vp1,
-        vp2,
-        C00,
-        C01,
-        C02,
-        C10,
-        C11,
-        C12,
-        C20,
-        C21,
-        C22,
-        s00,
-        s01,
-        s02,
-        s10,
-        s11,
-        s12,
-        s20,
-        s21,
-        s22,
-    ) = pcols
+    b, fx, velocity, C, stress = pcols
+    b0, b1, b2 = b
+    fx0, fx1, fx2 = fx
+    vp0, vp1, vp2 = velocity
+    C00, C01, C02, C10, C11, C12, C20, C21, C22 = C
+    s00, s01, s02, s10, s11, s12, s20, s21, s22 = stress
     gi_row, gj_row, gk_row = node_rows
 
     ox = gi_row - b0
