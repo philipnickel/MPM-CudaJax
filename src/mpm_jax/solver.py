@@ -1,5 +1,6 @@
 import copy
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
 import jax
@@ -36,39 +37,57 @@ def _apply_sticky_floor(grid_v, sticky_floor):
     return jnp.where(sticky_floor[:, None], 0.0, grid_v)
 
 
+def _backend_substep(_, state, *, params, elasticity_fn, backend, sticky_floor):
+    with jax.named_scope("elasticity"):
+        stress = elasticity_fn(state.F)
+
+    with jax.named_scope(f"{backend.name}_p2g"):
+        prepared, grid_mv, grid_m = backend.step(params, state, stress)
+
+    with jax.named_scope("grid_update"):
+        grid_mv = grid_update(
+            grid_mv, grid_m, params.gravity, params.dt, params.damping
+        )
+        grid_v = _apply_sticky_floor(grid_mv, sticky_floor)
+
+    with jax.named_scope(f"{backend.name}_g2p"):
+        new_x, new_v, new_C, new_F = backend.g2p(params, prepared, grid_v)
+
+    return MPMState(x=new_x, v=new_v, C=new_C, F=new_F)
+
+
+def _run_backend_frame(
+    state, *, params, elasticity_fn, backend, sticky_floor, steps_per_frame
+):
+    substep = partial(
+        _backend_substep,
+        params=params,
+        elasticity_fn=elasticity_fn,
+        backend=backend,
+        sticky_floor=sticky_floor,
+    )
+    return jax.lax.fori_loop(0, steps_per_frame, substep, state)
+
+
 def build_backend_frame(params, elasticity_fn, backend, steps_per_frame):
     """Build one JIT-compiled frame from a backend object.
 
-    The frame owns the common MPM control flow (boundary conditions, elasticity,
-    grid update, the substep loop). The backend owns only the
+    The frame owns the common MPM control flow (elasticity, grid update, sticky
+    floor, the substep loop). The backend owns only the
     P2G — ``backend.step`` orders the particles and scatters — and ``g2p``.
     The ``steps_per_frame`` substeps run as a single ``lax.fori_loop``.
     """
     sticky_floor = _sticky_floor_mask(build_grid_x(params.num_grids), params.dx)
-
-    @jax.jit
-    def jit_frame(state):
-        def step_body(state):
-            with jax.named_scope("elasticity"):
-                stress = elasticity_fn(state.F)
-
-            with jax.named_scope(f"{backend.name}_p2g"):
-                prepared, grid_mv, grid_m = backend.step(params, state, stress)
-
-            with jax.named_scope("grid_update"):
-                grid_mv = grid_update(
-                    grid_mv, grid_m, params.gravity, params.dt, params.damping
-                )
-                grid_v = _apply_sticky_floor(grid_mv, sticky_floor)
-
-            with jax.named_scope(f"{backend.name}_g2p"):
-                new_x, new_v, new_C, new_F = backend.g2p(params, prepared, grid_v)
-
-            return MPMState(x=new_x, v=new_v, C=new_C, F=new_F)
-
-        return jax.lax.fori_loop(0, steps_per_frame, lambda _, s: step_body(s), state)
-
-    return jit_frame
+    return jax.jit(
+        partial(
+            _run_backend_frame,
+            params=params,
+            elasticity_fn=elasticity_fn,
+            backend=backend,
+            sticky_floor=sticky_floor,
+            steps_per_frame=steps_per_frame,
+        )
+    )
 
 
 @dataclass
