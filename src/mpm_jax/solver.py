@@ -29,6 +29,19 @@ def _instantiate_target(value):
     return value
 
 
+def _target_name(value):
+    if isinstance(value, dict | DictConfig) and "_target_" in value:
+        return str(value["_target_"]).rsplit(".", maxsplit=1)[-1]
+    return getattr(value, "__name__", type(value).__name__)
+
+
+def _gpu_type():
+    for device in jax.devices():
+        if device.platform in {"cuda", "gpu"}:
+            return getattr(device, "device_kind", str(device))
+    return getattr(jax.devices()[0], "device_kind", jax.default_backend())
+
+
 def _sticky_floor_mask(grid_x, dx):
     return grid_x[:, 2] * dx < 0.02
 
@@ -136,9 +149,12 @@ class MPMSolver:
             F=jnp.tile(jnp.eye(3), (n, 1, 1)),
         )
         self.params = params
+        self.num_frames = int(getattr(sim, "num_frames", 1))
         self.steps_per_frame = int(sim.steps_per_frame)
         self._init_state = init_state
         self.state = init_state
+        self.material_elasticity = _target_name(mat.elasticity)
+        self.gpu_type = str(_gpu_type())
         self.elasticity_fn = _instantiate_target(mat.elasticity)
         if not callable(self.elasticity_fn):
             raise TypeError(
@@ -172,29 +188,24 @@ class MPMSolver:
                 on_frame(f, self.state)
         return self.state
 
-    def metrics(
-        self,
-        elapsed_s,
-        *,
-        num_frames,
-        render_enabled,
-        material_elasticity="unknown",
-        render_path=None,
-    ):
-        total_steps = int(num_frames) * self.steps_per_frame
+    def metrics(self, elapsed_s):
+        elapsed_s = float(elapsed_s)
+        total_steps = self.num_frames * self.steps_per_frame
+        particle_steps = self.params.n_particles * total_steps
         return {
             "kernel": self.backend.name,
-            "material_elasticity": material_elasticity,
+            "material_elasticity": self.material_elasticity,
             "n_particles": self.params.n_particles,
             "num_grids": self.params.num_grids,
-            "num_frames": int(num_frames),
+            "num_frames": self.num_frames,
             "steps_per_frame": self.steps_per_frame,
-            "render_enabled": bool(render_enabled),
             "total_steps": total_steps,
-            "elapsed_s": float(elapsed_s),
-            "ms_per_step": float(elapsed_s) / total_steps * 1000,
-            "steps_per_sec": total_steps / float(elapsed_s),
-            "render_path": render_path,
+            "elapsed_s": elapsed_s,
+            "ms_per_frame": elapsed_s / self.num_frames * 1000,
+            "ms_per_step": elapsed_s / total_steps * 1000,
+            "steps_per_sec": total_steps / elapsed_s,
+            "particles_per_sec": particle_steps / elapsed_s,
+            "gpu_type": self.gpu_type,
         }
 
     def reset_to_initial(self):

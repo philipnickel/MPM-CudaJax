@@ -19,7 +19,7 @@ from mpm_jax.solver import MPMSolver
 # ---------------------------------------------------------------------------
 
 
-def _run_solver(solver, *, num_frames, render_enabled):
+def _run_solver(solver, *, render_enabled):
     """Drive an MPMSolver, capturing frames only when rendering is enabled."""
     solver.step()
     jax.block_until_ready(solver.state.x)
@@ -28,7 +28,7 @@ def _run_solver(solver, *, num_frames, render_enabled):
     frames = []
 
     t0 = time.perf_counter()
-    for _ in tqdm(range(num_frames), desc="simulate"):
+    for _ in tqdm(range(solver.num_frames), desc="simulate"):
         if render_enabled:
             frames.append(np.array(solver.state.x))
         solver.step()
@@ -49,7 +49,6 @@ def run(cfg: DictConfig):
     solver = MPMSolver(hydra.utils.instantiate(cfg.solver))
     frames, elapsed = _run_solver(
         solver,
-        num_frames=int(cfg.sim.num_frames),
         render_enabled=bool(cfg.render.get("enabled", True)),
     )
     return solver, frames, elapsed
@@ -63,17 +62,11 @@ def run(cfg: DictConfig):
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig):
     run_dir = os.path.abspath(HydraConfig.get().runtime.output_dir)
-    choices = HydraConfig.get().runtime.choices
-    num_frames = int(cfg.sim.num_frames)
     render_enabled = bool(cfg.render.get("enabled", True))
 
     solver, frames, elapsed = run(cfg)
-    metrics = solver.metrics(
-        elapsed,
-        num_frames=num_frames,
-        render_enabled=render_enabled,
-        material_elasticity=choices.get("material", "unknown"),
-    )
+    metrics = solver.metrics(elapsed)
+    metrics["render_enabled"] = render_enabled
 
     # Print timing summary
     backend_label = "solver-loop"
@@ -83,11 +76,12 @@ def main(cfg: DictConfig):
     )
 
     print(
-        f"\nWall-clock timing: {elapsed / num_frames * 1000:.3f} ms/frame "
-        f"({solver.steps_per_frame} substeps each, n={num_frames})"
+        f"\nWall-clock timing: {metrics['ms_per_frame']:.3f} ms/frame "
+        f"({solver.steps_per_frame} substeps each, n={solver.num_frames}, "
+        f"{metrics['particles_per_sec']:.3e} particles/s)"
     )
 
-    export_path = None
+    metrics["render_path"] = None
     if render_enabled and frames:
         render_cfg = cfg.get("render", {})
         fps = int(render_cfg.get("fps", 30))

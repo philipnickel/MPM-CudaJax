@@ -45,8 +45,9 @@ pixi run python simulate.py \
     backend=cuda_v3 material=jelly \
     sim=benchmark render.enabled=false
 ```
-Prints `total_steps`, `elapsed_s`, `steps_per_sec`, and average
-`ms/step`. No GIF, no per-frame state capture — just wall-clock timing.
+Prints `total_steps`, `elapsed_s`, `steps_per_sec`, average `ms/step`,
+high-level `particles_per_sec`, and the detected `gpu_type`. No GIF, no
+per-frame state capture — just wall-clock timing.
 
 Outputs:
 - GIF renders, `results.json`, Hydra logs, config snapshots → `outputs/<date>/<run>/`
