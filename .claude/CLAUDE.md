@@ -215,7 +215,7 @@ CMake auto-detects the local GPU arch when `MPM_CUDA_ARCH` is unset.
   5. Include the backend in any sweep configs that should exercise it.
   6. Rebuild the editable package metadata after module/package shape changes: `pixi reinstall mpm-cudajax`.
 - **Adding a new cuTile-in-JAX kernel:** put the cuTile kernel + `cutile_call` bridge in a dedicated module (see `cutile_p2g.py`), add a backend implementation under `src/mpm_jax/backends/`, and decorate it with `hydra_zen.store(..., group="backend")`.
-- Constitutive models and boundary conditions are Hydra-instantiated (`material.elasticity._target_`, `sim.boundary_conditions[*]._target_`).
+- Constitutive models and the sticky plane boundary are Hydra-instantiated (`material.elasticity._target_`, `sim.boundary._target_`).
 - **No `block_until_ready` inside the timed region in benchmark mode.** Both timing modes dispatch all frames back-to-back and sync exactly once after the loop; elapsed/num_frames is the average. Per-stage breakdown comes from `profile=jax` (TensorBoard trace) or `profile_nsight.py`, not from `simulate.py`'s output.
 - XLA command-buffer / CUDA-Graph capture is enabled for **all** kernels via `XLA_FLAGS` in the GPU activation block (`--xla_gpu_enable_command_buffer=FUSION,CUSTOM_CALL,WHILE`), so it is always on under `pixi run`. There is no per-kernel `cuda_graph` flag anymore.
 - Lint with ruff (config in `ruff.toml`); `I` is allowed as a variable name (identity matrix), and `tests/*` skips E402/F401.

@@ -1,6 +1,6 @@
 import jax.numpy as jnp
 
-from mpm_jax.boundary import StickyPlane, bind_boundaries
+from mpm_jax.boundary import StickyPlane
 
 
 def _make_grid_x(num_grids):
@@ -13,15 +13,13 @@ def test_sticky_boundary_zeroes_velocity_below_surface():
     num_grids = 5
     dx = 1.0 / num_grids
     grid_x = _make_grid_x(num_grids)
-    bc_configs = [
-        StickyPlane(
-            point=(1.0, 1.0, 0.02),
-            normal=(0.0, 0.0, 1.0),
-            start_time=0.0,
-            end_time=1e3,
-        ),
-    ]
-    post_fn = bind_boundaries(bc_configs, grid_x, dx)
+    boundary = StickyPlane(
+        point=(1.0, 1.0, 0.02),
+        normal=(0.0, 0.0, 1.0),
+        start_time=0.0,
+        end_time=1e3,
+    )
+    post_fn = boundary.bind_grid(grid_x, dx)
     grid_mv = jnp.ones((num_grids**3, 3))
     grid_m = jnp.ones((num_grids**3,))
     result = post_fn(grid_mv, grid_m, 0.0)
@@ -33,11 +31,17 @@ def test_sticky_boundary_zeroes_velocity_below_surface():
     assert jnp.allclose(result[~below], 1.0)
 
 
-def test_noop_when_no_bcs():
+def test_inactive_sticky_boundary_is_noop():
     num_grids = 5
     dx = 1.0 / num_grids
     grid_x = _make_grid_x(num_grids)
-    post_fn = bind_boundaries([], grid_x, dx)
+    boundary = StickyPlane(
+        point=(1.0, 1.0, 0.02),
+        normal=(0.0, 0.0, 1.0),
+        start_time=1.0,
+        end_time=2.0,
+    )
+    post_fn = boundary.bind_grid(grid_x, dx)
     grid_mv = jnp.ones((num_grids**3, 3))
     grid_m = jnp.ones((num_grids**3,))
     assert jnp.allclose(post_fn(grid_mv, grid_m, 0.0), grid_mv)

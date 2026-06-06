@@ -12,9 +12,9 @@ center: [0.5, 0.5, 0.5]
 # Particle-sampling cube side (also sets per-particle volume = prod(size)/n).
 # 0.5 -> particles fill [0.25, 0.75]^3 (the historical default region).
 size: [0.5, 0.5, 0.5]
-boundary_conditions:
-  - _target_: mpm_jax.boundary.StickyPlane
-    point: [1.0, 1.0, 0.02]
-    normal: [0.0, 0.0, 1.0]
-    start_time: 0.0
-    end_time: 1e3
+boundary:
+  _target_: mpm_jax.boundary.StickyPlane
+  point: [1.0, 1.0, 0.02]
+  normal: [0.0, 0.0, 1.0]
+  start_time: 0.0
+  end_time: 1e3

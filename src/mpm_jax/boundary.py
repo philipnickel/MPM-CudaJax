@@ -21,15 +21,3 @@ class StickyPlane:
             return jnp.where(active & blocked[:, None], 0.0, grid_mv)
 
         return post_grid
-
-
-def bind_boundaries(boundaries, grid_x, dx):
-    """Bind configured sticky planes to a post-grid callback."""
-    post_grid_fns = [boundary.bind_grid(grid_x, dx) for boundary in boundaries]
-
-    def post_grid_fn(grid_mv, grid_m, time):
-        for fn in post_grid_fns:
-            grid_mv = fn(grid_mv, grid_m, time)
-        return grid_mv
-
-    return post_grid_fn

@@ -9,7 +9,6 @@ from hydra.utils import instantiate
 from omegaconf import DictConfig
 
 from mpm_jax.grid import build_grid_x, grid_update
-from mpm_jax.boundary import bind_boundaries
 from mpm_jax.types import MPMParams, MPMState
 
 
@@ -88,7 +87,7 @@ class MPMSolver:
 
         Reads each config section and constructs the pieces — params (with its
         derived dx/vol/p_mass), particles, the target-instantiated backend,
-        the boundary closures, and the initial state — then hands them to
+        the boundary closure, and the initial state — then hands them to
         the compiled frame. The shared scalars (``n_particles``/``num_grids``)
         are read once and threaded as locals (``n``/``g``).
         """
@@ -98,16 +97,12 @@ class MPMSolver:
         params = MPMParams(sim)
         backend = _instantiate_target(config.backend)
         backend.validate_num_grids(params.num_grids)
-        boundaries = [_instantiate_target(bc) for bc in sim.boundary_conditions]
+        boundary = _instantiate_target(sim.boundary)
         particles = jnp.asarray(
             get_particles(n, center=list(sim.center), size=list(sim.size)),
             dtype=jnp.float32,
         )
-        post_fn = bind_boundaries(
-            boundaries,
-            build_grid_x(g),
-            params.dx,
-        )
+        post_fn = boundary.bind_grid(build_grid_x(g), params.dx)
         init_state = MPMState(
             x=particles,
             v=jnp.broadcast_to(
