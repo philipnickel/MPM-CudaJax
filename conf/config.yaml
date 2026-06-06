@@ -2,7 +2,6 @@ defaults:
   - material: jelly
   - sim: benchmark
   - backend: jax
-  - profile: none
   - _self_
 
 solver:

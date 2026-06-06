@@ -9,15 +9,14 @@ This is a benchmarking/investigation project; the code is shaped by the followin
 **The story (why the code is the way it is):**
 
 1. **Start in JAX.** Implement the full MLS-MPM timestep in pure JAX/XLA (`backend=jax`) — the baseline. It scans over the 27 stencil offsets for **both** P2G and G2P (so neither `(N, 27, *)` intermediate materialises), uses the unified MLS-MPM G2P (the APIC affine `C` doubles as ∇v), and a closed-form StVK elastic stress (SVD-free, no plasticity). **Every other variant reuses this exact JAX G2P (`jax_scan_g2p_mls` / `_g2p_scan_mls`), so across the backend set only the P2G implementation varies.**
-2. **Profile to find the bottlenecks.** Use the JAX profiler trace (`profile=jax`) to locate the *canonical MPM bottlenecks* — chiefly the P2G scatter and the `(N, 27, *)` stencil materialisation.
+2. **Profile to find the bottlenecks.** Use `profile_nsight.py` to locate the *canonical MPM bottlenecks* — chiefly the P2G scatter and the `(N, 27, *)` stencil materialisation.
 3. **Optimise the P2G with custom CUDA.** JAX FFI lets us drop hand-written CUDA **P2G** kernels in (`backend=cuda_v1` through `backend=cuda_v4`) while the rest of the timestep — G2P, grid, constitutive — stays the JAX baseline. Holding G2P fixed isolates the P2G question: "where is XLA's scatter enough vs. where does a custom kernel win?"
 4. **Try a different programming model — tiled (cuTile).** Finally, investigate whether the **tiled programming model** (NVIDIA cuTile) can reach similar or better P2G performance while keeping the same JAX-owned frame loop. The cuTile Hydra backend choice is `backend=cutile`: JAX computes stress, sorts particles by super-cell, updates the grid, and runs the **same JAX baseline G2P**; cuTile owns only the tiled P2G kernel (an SPGrid-style arena scatter — reduce each SC=2 super-cell into a 4³ L1 arena, then one tile-coalesced `atomic_store_add` per arena) via the cuTile/JAX bridge. At the standard 8M-particle benchmark it is the fastest P2G backend, ahead of the hand-written CUDA kernels. (An NVIDIA Warp tiled path was also explored and then dropped — it was slower than both cuTile and the CUDA kernels at this resolution.)
 
 **The analysis method (applied to every variant, in this order):**
 
-1. **JAX trace** (`profile=jax`) — on a *representative* particle count, identify where time goes for the jax/cuda-based variants.
-2. **`ncu` (Nsight Compute), from the CLI** — same particle count, get roofline / occupancy / memory-throughput for the initial deeper per-kernel analysis.
-3. **`nsight-python`** (`profile_nsight.py`) — automate sweeping metrics across variants *and* particle counts. This is the broad sweep, run across **multiple architectures / systems** (e.g. A100 / H100 / GH200).
+1. **`profile_nsight.py`** — automate sweeping metrics across variants *and* particle counts. This is the broad sweep, run across **multiple architectures / systems** (e.g. A100 / H100 / GH200).
+2. **`ncu` (Nsight Compute), from the CLI** — same particle count, get roofline / occupancy / memory-throughput for deeper per-kernel analysis.
 
 ## Standard benchmark settings
 
@@ -83,11 +82,10 @@ pixi.lock              locked deps (committed)
 CMakeLists.txt         CUDA kernel build (called by scikit-build-core)
 ruff.toml              lint config
 conf/                  Hydra config groups
-  config.yaml          top-level defaults (material/sim/backend/profile)
+  config.yaml          top-level defaults (material/sim/backend)
   nsight_profile.yaml  top-level defaults for profile_nsight.py
   material/            jelly.yaml  (constitutive model)
   sim/default.yaml     n_particles, num_grids, dt, ...
-  profile/             none.yaml, jax.yaml
   sweep_*.yaml         pre-baked Hydra multirun sweeps
 src/mpm_jax/
   types.py             MPMState, MPMParams
@@ -144,7 +142,7 @@ Current kernel names:
 
 Material baseline:
 - `material=jelly` is the only material: StVK elastic stress (closed-form, SVD-free), no plasticity. (The earlier StVK/Drucker-Prager *sand* path and its in-repo Jacobi SVD were removed — jelly never needed them, and the SVD's only consumer was sand's plasticity.)
-- The cuTile backend is part of the same JAX loop as the CUDA/JAX variants, so `profile=jax` and ordinary benchmark timing apply.
+- The cuTile backend is part of the same JAX loop as the CUDA/JAX variants, so ordinary benchmark timing and `profile_nsight.py` apply.
 
 ## Common commands
 
@@ -166,9 +164,6 @@ pixi run python simulate.py backend=cutile material=jelly benchmark=true  # cuTi
 # Override sim params
 pixi run python simulate.py sim.n_particles=50000 sim.num_grids=64
 
-# Profilers
-pixi run python simulate.py profile=jax  benchmark=true     # TensorBoard trace
-
 # Nsight Python profiler (per-stage kernel analysis)
 pixi run python profile_nsight.py -cn nsight_profile backend=jax material=jelly nsight.phase=p2g sim.n_particles=4096
 
@@ -177,7 +172,6 @@ pixi run python simulate.py -cn sweep_baseline    # JAX-only scaling
 pixi run python simulate.py -cn sweep_all
 pixi run python simulate.py -cn sweep_quick
 pixi run python simulate.py -cn sweep_scaling
-pixi run python simulate.py -cn sweep_profile
 pixi run sweep-all                                 # task alias
 pixi run sweep-quick                               # task alias
 
@@ -215,7 +209,7 @@ CMake auto-detects the local GPU arch when `MPM_CUDA_ARCH` is unset.
   6. Rebuild the editable package metadata after module/package shape changes: `pixi reinstall mpm-cudajax`.
 - **Adding a new cuTile-in-JAX kernel:** put the cuTile kernel + `cutile_call` bridge in a dedicated module (see `cutile_p2g.py`), add a backend implementation under `src/mpm_jax/backends/`, and decorate it with `hydra_zen.store(..., group="backend")`.
 - Constitutive models are Hydra-instantiated (`material.elasticity._target_`); the sticky floor boundary is fixed in `solver.py`.
-- **No `block_until_ready` inside the timed region in benchmark mode.** Both timing modes dispatch all frames back-to-back and sync exactly once after the loop; elapsed/num_frames is the average. Per-stage breakdown comes from `profile=jax` (TensorBoard trace) or `profile_nsight.py`, not from `simulate.py`'s output.
+- **No `block_until_ready` inside the timed region in benchmark mode.** Both timing modes dispatch all frames back-to-back and sync exactly once after the loop; elapsed/num_frames is the average. Per-stage breakdown comes from `profile_nsight.py`, not from `simulate.py`'s output.
 - XLA command-buffer / CUDA-Graph capture is enabled for **all** kernels via `XLA_FLAGS` in the GPU activation block (`--xla_gpu_enable_command_buffer=FUSION,CUSTOM_CALL,WHILE`), so it is always on under `pixi run`. There is no per-kernel `cuda_graph` flag anymore.
 - Lint with ruff (config in `ruff.toml`); `I` is allowed as a variable name (identity matrix), and `tests/*` skips E402/F401.
 

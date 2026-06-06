@@ -19,55 +19,31 @@ from mpm_jax.solver import MPMSolver
 # ---------------------------------------------------------------------------
 
 
-def _run_solver(solver, cfg: DictConfig, trace_dir=None, profile_opts=None):
-    """Drive an MPMSolver: warmup, then benchmark or frame-capture loop.
-
-    When ``trace_dir`` is set, the JAX profiler is started *after* warmup and
-    stopped after the steady-state loop, so the one-time JIT compile +
-    autotuning (and the Python import-tracer flood) stay out of the trace.
-    """
+def _run_solver(solver, cfg: DictConfig):
+    """Drive an MPMSolver: warmup, then benchmark or frame-capture loop."""
     sim = cfg.sim
-    kernel_name = solver.backend.name
     bench = cfg.get("benchmark", False)
 
-    with jax.profiler.TraceAnnotation("warmup", kernel=kernel_name):
-        solver.step()
-        jax.block_until_ready(solver.state.x)
-        solver.reset_to_initial()
+    solver.step()
+    jax.block_until_ready(solver.state.x)
+    solver.reset_to_initial()
 
     frames = []
 
-    # Start the profiler AFTER warmup so only steady-state work is captured —
-    # the one-time JIT compile + autotuning (and its import-tracer flood) stay
-    # out of the window.
-    tracing = trace_dir is not None
-    if tracing:
-        jax.profiler.start_trace(trace_dir, profiler_options=profile_opts)
-        print(f"JAX profiler started (steady-state only) -> {trace_dir}")
-
-    try:
-        if bench:
-            with jax.profiler.TraceAnnotation("benchmark", kernel=kernel_name):
-                t0 = time.perf_counter()
-                for frame in tqdm(range(sim.num_frames), desc="simulate"):
-                    with jax.profiler.StepTraceAnnotation("frame", step_num=frame):
-                        solver.step()
-                jax.block_until_ready(solver.state.x)
-                elapsed = time.perf_counter() - t0
-        else:
-            t0 = time.perf_counter()
-            with jax.profiler.TraceAnnotation("render_loop", kernel=kernel_name):
-                for frame in tqdm(range(sim.num_frames), desc="simulate"):
-                    with jax.profiler.StepTraceAnnotation("frame", step_num=frame):
-                        # capture current state BEFORE advancing (frame 0 == initial config)
-                        frames.append(np.array(solver.state.x))
-                        solver.step()
-                        jax.block_until_ready(solver.state.x)
-            elapsed = time.perf_counter() - t0
-    finally:
-        if tracing:
-            jax.profiler.stop_trace()
-            print(f"JAX trace saved (steady-state only) -> {trace_dir}")
+    if bench:
+        t0 = time.perf_counter()
+        for _ in tqdm(range(sim.num_frames), desc="simulate"):
+            solver.step()
+        jax.block_until_ready(solver.state.x)
+        elapsed = time.perf_counter() - t0
+    else:
+        t0 = time.perf_counter()
+        for _ in tqdm(range(sim.num_frames), desc="simulate"):
+            # capture current state BEFORE advancing (frame 0 == initial config)
+            frames.append(np.array(solver.state.x))
+            solver.step()
+            jax.block_until_ready(solver.state.x)
+        elapsed = time.perf_counter() - t0
 
     total_steps = sim.num_frames * solver.steps_per_frame
     avg_frame_ms = elapsed / sim.num_frames * 1000
@@ -82,13 +58,13 @@ def _run_solver(solver, cfg: DictConfig, trace_dir=None, profile_opts=None):
     return frames, elapsed, total_steps, summary
 
 
-def run(cfg: DictConfig, trace_dir=None, profile_opts=None):
+def run(cfg: DictConfig):
     """Instantiate the runtime config, build the solver, and drive it.
 
     Returns (frames, elapsed, total_steps, summary).
     """
     solver = MPMSolver(hydra.utils.instantiate(cfg.solver))
-    return _run_solver(solver, cfg, trace_dir=trace_dir, profile_opts=profile_opts)
+    return _run_solver(solver, cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -96,62 +72,11 @@ def run(cfg: DictConfig, trace_dir=None, profile_opts=None):
 # ---------------------------------------------------------------------------
 
 
-def _build_profile_options(profile_cfg):
-    """Translate the `conf/profile/jax.yaml` block into a ProfileOptions.
-
-    python_tracer_level defaults to 0: the Python import/call tracer otherwise
-    adds ~1e6 events and buries the device timeline. host_tracer_level=2 keeps
-    the TraceMe annotations. The `gpu:` sub-block maps to CUPTI
-    advanced_configuration knobs (NVTX, CUDA-graph tracing, event caps, PM
-    sampling).
-    """
-    opts = jax.profiler.ProfileOptions()
-    opts.python_tracer_level = int(profile_cfg.get("python_tracer_level", 0))
-    opts.host_tracer_level = int(profile_cfg.get("host_tracer_level", 2))
-    gpu = profile_cfg.get("gpu", {}) or {}
-    adv = opts.advanced_configuration
-    if gpu.get("nvtx"):
-        adv["gpu_enable_nvtx_tracking"] = True
-    if gpu.get("cuda_graph_trace"):
-        adv["gpu_enable_cupti_activity_graph_trace"] = True
-    if gpu.get("graph_node_mapping"):
-        adv["gpu_dump_graph_node_mapping"] = True
-    if gpu.get("max_activity_events"):
-        adv["gpu_max_activity_api_events"] = int(gpu["max_activity_events"])
-    if gpu.get("max_callback_events"):
-        adv["gpu_max_callback_api_events"] = int(gpu["max_callback_events"])
-    if gpu.get("pm_sample_counters"):
-        adv["gpu_pm_sample_counters"] = str(gpu["pm_sample_counters"])
-    # Reassign in case advanced_configuration returns a fresh container.
-    opts.advanced_configuration = adv
-    return opts
-
-
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig):
-    profile_name = cfg.get("profile", {}).get("name", "none")
-
-    if profile_name not in ("none", "jax"):
-        raise RuntimeError(
-            f"Unsupported profile={profile_name!r}. Only profile=none, "
-            "and profile=jax are supported."
-        )
-
     run_dir = os.path.abspath(HydraConfig.get().runtime.output_dir)
 
-    # JAX profiler: resolve the trace dir + options here, but let the solver
-    # driver start/stop the trace around the steady-state loop only, so warmup /
-    # JIT compile / autotuning is excluded from the window.
-    jax_trace_dir = None
-    profile_opts = None
-    if profile_name == "jax":
-        jax_trace_dir = os.path.join(run_dir, "jax_trace")
-        profile_opts = _build_profile_options(cfg.get("profile", {}))
-
-    # Run simulation. When profiling, the driver wraps only the steady-state loop.
-    frames, elapsed, total_steps, summary = run(
-        cfg, trace_dir=jax_trace_dir, profile_opts=profile_opts
-    )
+    frames, elapsed, total_steps, summary = run(cfg)
     kernel_name = HydraConfig.get().runtime.choices.get("backend", "jax")
 
     # Print timing summary

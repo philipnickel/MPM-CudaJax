@@ -151,7 +151,6 @@ pixi run python simulate.py -cn sweep_baseline    # JAX-only scaling
 pixi run python simulate.py -cn sweep_all
 pixi run python simulate.py -cn sweep_quick
 pixi run python simulate.py -cn sweep_scaling
-pixi run python simulate.py -cn sweep_profile
 ```
 
 Each combination gets its own `multirun/<date>/<run>/` subdir with a `results.json`.
@@ -163,60 +162,7 @@ For an ad-hoc sweep: `pixi run python simulate.py -m sim.n_particles=5000,50000,
 
 ## Profiling
 
-**JAX profiler** (in-process, writes a TensorBoard trace):
-
-```bash
-pixi run python simulate.py profile=jax benchmark=true \
-    backend=cuda_v3 material=jelly
-```
-
-The trace is written to `outputs/<YYYY-MM-DD>/<HH-MM-SS>/jax_trace/` and includes
-`jax.named_scope` regions for elasticity, P2G, grid update, G2P, and plasticity.
-
-View the trace with TensorBoard/XProf:
-
-```bash
-pixi run tensorboard \
-    --logdir outputs/<YYYY-MM-DD>/<HH-MM-SS>/jax_trace \
-    --port 6006 \
-    --bind_all
-```
-
-Then open `http://localhost:6006`, select the **Profile** tab, choose the run,
-and open **Tools -> trace_viewer**. On a remote GPU machine, keep TensorBoard
-running there and forward the port from your laptop:
-
-```bash
-ssh -L 6006:localhost:6006 <user>@<remote-host>
-```
-
-The default Pixi environment includes `tensorboard`, `xprof`, and a
-`setuptools<81` pin because TensorBoard 2.20 still imports `pkg_resources`.
-
-For single-frame traces where compilation should not dominate the timeline,
-warm up once before starting the profiler, then block on the frame inside the
-trace:
-
-```python
-import jax
-
-solver.step()
-jax.block_until_ready(solver.state.x)
-solver.reset_to_initial()
-
-jax.profiler.start_trace("traces/xprof_mpm_step")
-with jax.profiler.StepTraceAnnotation("mpm_frame", step_num=0):
-    solver.step()
-    jax.block_until_ready(solver.state.x)
-jax.profiler.stop_trace()
-```
-
-This workflow works for all registered kernels because they all enter the same
-JAX-owned frame loop through `MPMSolver(hydra.utils.instantiate(cfg.solver))`. Pure JAX variants are shown as
-XLA-generated operations and fusion kernels. CUDA and cuTile variants appear as
-JAX/XLA custom calls plus their GPU kernels.
-
-**Nsight Python profiler** (per-stage kernel analysis, requires `nsight-python`):
+Use the dedicated Nsight Python entrypoint for per-stage kernel analysis:
 
 ```bash
 pixi run python profile_nsight.py -cn nsight_profile \
@@ -232,7 +178,6 @@ Hydra config groups in `conf/`:
 | `material` | `jelly` (default) | Constitutive model |
 | `sim` | `default` | n_particles, num_grids, dt, BCs, ... |
 | `backend` | `jax` (default), `cuda_v1`, `cuda_v2`, `cuda_v3`, `cuda_v4`, `cutile` | P2G implementation (G2P shared) |
-| `profile` | `none` (default), `jax` | Profiling backend |
 
 Top-level fields: `benchmark`, `tag`, `render`. All overridable from CLI:
 
@@ -270,7 +215,6 @@ MPM-CudaJax/
 │   ├── nsight_profile.yaml
 │   ├── material/            # jelly.yaml
 │   ├── sim/default.yaml
-│   ├── profile/             # none.yaml, jax.yaml
 │   └── sweep_*.yaml
 └── src/
     └── mpm_jax/
