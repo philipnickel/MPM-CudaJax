@@ -15,7 +15,7 @@ dependencies = [
     "tqdm",
     "numpy",
     "warp-lang",
-    "pyvista",
+    "imageio",
 ]
 
 [tool.scikit-build]
@@ -64,7 +64,6 @@ nanobind = "*"
 ninja = "*"
 seaborn = ">=0.13.2,<0.14"
 pandas = ">=3.0.3,<4"
-pyvista = "*"
 imageio = "*"
 # NOTE: `warp-lang` is intentionally NOT here. The conda-forge build pulls
 # `jax` as a hard runtime dep, which would conflict with the PyPI-side
@@ -113,7 +112,6 @@ XLA_FLAGS = "--xla_gpu_enable_command_buffer=FUSION,CUSTOM_CALL,WHILE"
 JAX_COMPILATION_CACHE_DIR = "$PIXI_PROJECT_ROOT/.jax_cache"
 JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS = "0"
 JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES = "0"
-PYVISTA_OFF_SCREEN = "true"
 
 [tool.pixi.feature.gpu.system-requirements]
 cuda = "12.0"

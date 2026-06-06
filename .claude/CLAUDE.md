@@ -47,7 +47,7 @@ pixi run python simulate.py -cn config sim=benchmark \
 
 One environment is defined in `[tool.pixi.environments]` in `pyproject.toml`:
 
-- `default` — Linux only (`linux-64`, `linux-aarch64`) and GPU-first. **JAX runs on CUDA 13** (PyPI `jax[cuda13]`); `cuda-tile[tileiras]` (PyPI) is the cuTile runtime the `cutile` backend requires; `warp-lang==1.14.0` (now used only by the optional `warp_opengl`/`warp_usd` renderers, not by any P2G kernel) and `nsight-python` are PyPI too. conda-forge supplies the `cuda-nvcc` (**CUDA 12.x**) + `gxx` toolchain that compiles the FFI `.cu` kernels and the nanobind capsule module, plus `nsight-compute`. So the *build* toolchain is CUDA 12.x while the JAX *runtime* is CUDA 13 — they coexist and the FFI kernels load fine on the cuda13 runtime. The GPU activation block sets `JAX_PLATFORMS=cuda` + a persistent JAX compile cache (`.jax_cache/`). No `module load` required on DTU HPC.
+- `default` — Linux only (`linux-64`, `linux-aarch64`) and GPU-first. **JAX runs on CUDA 13** (PyPI `jax[cuda13]`); `cuda-tile[tileiras]` (PyPI) is the cuTile runtime the `cutile` backend requires; `warp-lang==1.14.0` (now used only by the optional Warp OpenGL renderer, not by any P2G kernel) and `nsight-python` are PyPI too. conda-forge supplies the `cuda-nvcc` (**CUDA 12.x**) + `gxx` toolchain that compiles the FFI `.cu` kernels and the nanobind capsule module, plus `nsight-compute`. So the *build* toolchain is CUDA 12.x while the JAX *runtime* is CUDA 13 — they coexist and the FFI kernels load fine on the cuda13 runtime. The GPU activation block sets `JAX_PLATFORMS=cuda` + a persistent JAX compile cache (`.jax_cache/`). No `module load` required on DTU HPC.
 
 Common patterns:
 
@@ -199,7 +199,7 @@ pixi run sim                         # smoke-test
 
 CMake auto-detects the local GPU arch when `MPM_CUDA_ARCH` is unset.
 
-**Warp 1.14 note:** `warp-lang==1.14.0` (PyPI) is kept in the default env only for the optional `warp_opengl`/`warp_usd` render backends (`warp.render`); no P2G kernel uses Warp anymore. `libc = { family = "glibc", version = "2.34" }` in `pyproject.toml` lets both the `manylinux_2_34` aarch64 wheel (GH200) and the `manylinux_2_28` x86_64 wheel (H100/A100) resolve correctly.
+**Warp 1.14 note:** `warp-lang==1.14.0` (PyPI) is kept in the default env only for the optional Warp OpenGL renderer (`warp.render`); no P2G kernel uses Warp anymore. `libc = { family = "glibc", version = "2.34" }` in `pyproject.toml` lets both the `manylinux_2_34` aarch64 wheel (GH200) and the `manylinux_2_28` x86_64 wheel (H100/A100) resolve correctly.
 
 ## Conventions
 

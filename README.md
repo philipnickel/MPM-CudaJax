@@ -86,8 +86,8 @@ MPM_CUDA_ARCH=sm_90 pixi install     # Hopper
 ships `cuda-nvcc`, `gxx`, and CUDA runtime libraries inside the default env.
 
 **Warp 1.14:** `warp-lang==1.14.0` is kept in the default env for the optional
-`warp_opengl` / `warp_usd` render backends (`warp.render`); it is no longer
-used for any P2G kernel. The `glibc 2.34` system-requirement lets both the
+Warp OpenGL renderer (`warp.render`); it is no longer used for any P2G kernel.
+The `glibc 2.34` system-requirement lets both the
 `manylinux_2_34` aarch64 wheel (GH200) and the `manylinux_2_28` x86_64
 wheel (H100/A100) resolve correctly.
 

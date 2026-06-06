@@ -1,255 +1,17 @@
 import json
-import importlib
 import os
 import time
 
 import hydra
-import imageio.v2 as imageio
 import jax
-import jax.numpy as jnp
 import numpy as np
-import pyvista as pv
-from tqdm import tqdm
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig
+from tqdm import tqdm
 
 import mpm_jax.backends  # noqa: F401 - registers Hydra backend config choices
+from mpm_jax.rendering import render_warp_opengl
 from mpm_jax.solver import MPMSolver
-
-
-def _optional_module(name):
-    try:
-        return importlib.import_module(name)
-    except ImportError:  # pragma: no cover - optional render backend
-        return None
-
-
-pyglet = _optional_module("pyglet")
-wp = _optional_module("warp")
-if wp is not None:
-    _optional_module("warp.render")
-Gf = _optional_module("pxr.Gf")
-Usd = _optional_module("pxr.Usd")
-UsdGeom = _optional_module("pxr.UsdGeom")
-UsdRender = _optional_module("pxr.UsdRender")
-ovrtx = _optional_module("ovrtx")
-
-
-def visualize_frames(
-    frames,
-    export_path,
-    center=[0.5, 0.5, 0.5],
-    size=[2.0, 2.0, 2.0],
-    c="blue",
-    s=20,
-    fps=30,
-):
-    try:
-        # Need to start xvfb for pyvista offscreen rendering to work without a display
-        # But we can also set the VTK render window to offscreen before plotting
-        pv.start_xvfb()
-    except Exception:
-        pass
-
-    plotter = pv.Plotter(off_screen=True)
-    plotter.open_gif(export_path)
-
-    # Initialize point cloud
-    points = frames[0]
-    cloud = pv.PolyData(points)
-    plotter.add_mesh(cloud, color=c, point_size=s, render_points_as_spheres=True)
-
-    # Add bounding box
-    bounds = [
-        center[0] - size[0] / 2,
-        center[0] + size[0] / 2,
-        center[1] - size[1] / 2,
-        center[1] + size[1] / 2,
-        center[2] - size[2] / 2,
-        center[2] + size[2] / 2,
-    ]
-    box = pv.Box(bounds)
-    plotter.add_mesh(box, style="wireframe", color="black")
-
-    plotter.camera_position = "iso"
-    plotter.show(auto_close=False)
-
-    for i in range(len(frames)):
-        cloud.points = frames[i]
-        plotter.add_text(f"Frame {i}", position="upper_left", name="time_label")
-        plotter.write_frame()
-
-    plotter.close()
-
-
-def _color_to_rgb(color):
-    colors = {
-        "blue": (0.25, 0.45, 1.0),
-        "orange": (1.0, 0.55, 0.15),
-        "white": (0.92, 0.94, 1.0),
-    }
-    if isinstance(color, str):
-        return colors.get(color, (0.8, 0.8, 0.8))
-    return tuple(color)
-
-
-def visualize_frames_warp_usd(frames, export_path, color="white", radius=0.008, fps=30):
-    renderer = wp.render.UsdRenderer(export_path, up_axis="Z", fps=fps, scaling=1.0)
-    renderer.render_ground(size=1.0)
-    rgb = _color_to_rgb(color)
-    for i, points in enumerate(frames):
-        renderer.begin_frame(i / fps)
-        renderer.render_points(
-            name="particles",
-            points=np.asarray(points, dtype=np.float32),
-            radius=radius,
-            colors=rgb,
-            as_spheres=True,
-        )
-        renderer.end_frame()
-    renderer.save()
-
-
-def visualize_frames_warp_opengl(
-    frames,
-    export_path,
-    color="white",
-    radius=0.008,
-    fps=30,
-    width=960,
-    height=720,
-    write_usd_path=None,
-):
-    pyglet.options["headless"] = True
-
-    renderer = wp.render.OpenGLRenderer(
-        title="MPM-CudaJax",
-        headless=True,
-        screen_width=width,
-        screen_height=height,
-        near_plane=0.01,
-        far_plane=10.0,
-        camera_fov=32.0,
-        camera_pos=(2.05, 2.05, 1.55),
-        camera_front=(-0.62, -0.62, -0.46),
-        camera_up=(0.0, 0.0, 1.0),
-        background_color=(0.94, 0.95, 0.96),
-        draw_grid=False,
-        draw_sky=False,
-        draw_axis=False,
-        show_info=False,
-        fps=fps,
-        vsync=False,
-    )
-
-    rgb = _color_to_rgb(color)
-    pixels = wp.zeros((height, width, 3), dtype=wp.float32)
-    images = []
-
-    try:
-        for i, points in enumerate(frames):
-            renderer.begin_frame(i / fps)
-            renderer.render_plane(
-                "floor",
-                pos=(0.5, 0.5, 0.02),
-                rot=(0.70710678, 0.0, 0.0, 0.70710678),
-                width=0.65,
-                length=0.65,
-                color=(0.82, 0.84, 0.86),
-            )
-            renderer.render_points(
-                name="particles",
-                points=np.asarray(points, dtype=np.float32),
-                radius=radius,
-                colors=rgb,
-                as_spheres=True,
-            )
-            renderer.end_frame()
-            renderer.get_pixels(pixels, split_up_tiles=False, mode="rgb")
-            img = np.clip(pixels.numpy() * 255.0, 0, 255).astype(np.uint8)
-            images.append(img)
-    finally:
-        renderer.clear()
-
-    imageio.mimsave(export_path, images, fps=fps)
-    if write_usd_path:
-        visualize_frames_warp_usd(
-            frames, write_usd_path, color=color, radius=radius, fps=fps
-        )
-
-
-def _ensure_ovrtx_render_product(stage_path, width=960, height=540):
-    stage = Usd.Stage.Open(str(stage_path))
-    if stage is None:
-        raise RuntimeError(f"Failed to open USD stage: {stage_path}")
-
-    UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
-
-    camera_path = "/Render/ViewCamera"
-    product_path = "/Render/Camera"
-    camera = UsdGeom.Camera.Define(stage, camera_path)
-    camera.CreateFocalLengthAttr(30.0)
-    camera.CreateHorizontalApertureAttr(20.955)
-    camera.CreateVerticalApertureAttr(15.2908)
-    camera.CreateClippingRangeAttr(Gf.Vec2f(0.01, 10.0))
-
-    eye = Gf.Vec3d(2.4, 2.2, 1.7)
-    target = Gf.Vec3d(0.5, 0.5, 0.28)
-    up = Gf.Vec3d(0.0, 0.0, 1.0)
-    view = Gf.Matrix4d().SetLookAt(eye, target, up)
-    xform = UsdGeom.Xformable(camera)
-    xform.ClearXformOpOrder()
-    xform.AddTransformOp().Set(view.GetInverse())
-
-    stage.DefinePrim("/Render")
-    camera_product = UsdRender.Product.Define(stage, product_path)
-    camera_product.CreateResolutionAttr(Gf.Vec2i(width, height))
-    camera_product.GetCameraRel().SetTargets([camera_path])
-    camera_product.GetOrderedVarsRel().SetTargets(["/Render/Camera/LdrColor"])
-
-    ldr_color = UsdRender.Var.Define(stage, "/Render/Camera/LdrColor")
-    ldr_color.CreateSourceNameAttr("LdrColor")
-
-    root = stage.GetPrimAtPath("/root")
-    if root.IsValid():
-        stage.SetDefaultPrim(root)
-    stage.GetRootLayer().Save()
-    return product_path
-
-
-def visualize_frames_ovrtx_mp4(
-    frames,
-    export_path,
-    color="white",
-    radius=0.008,
-    fps=30,
-    width=960,
-    height=540,
-    write_usd_path=None,
-):
-    usd_path = write_usd_path or os.path.splitext(export_path)[0] + ".ovrtx.usd"
-    visualize_frames_warp_usd(frames, usd_path, color=color, radius=radius, fps=fps)
-    product_path = _ensure_ovrtx_render_product(usd_path, width=width, height=height)
-
-    print("Creating OVRTX renderer. First run may compile shaders...")
-    renderer = ovrtx.Renderer()
-    renderer.open_usd(str(usd_path))
-
-    with imageio.get_writer(
-        export_path, fps=fps, codec="libx264", quality=8, macro_block_size=1
-    ) as writer:
-        for frame in tqdm(range(len(frames)), desc="OVRTX render"):
-            renderer.update_from_usd_time(frame / fps)
-            products = renderer.step(
-                render_products={product_path},
-                delta_time=1.0 / fps,
-            )
-            product = products[product_path]
-            if not product.frames:
-                raise RuntimeError("OVRTX returned no frames.")
-            var = product.frames[0].render_vars["LdrColor"].map(device=ovrtx.Device.CPU)
-            pixels = np.from_dlpack(var)
-            writer.append_data(np.asarray(pixels[..., :3]))
 
 
 # ---------------------------------------------------------------------------
@@ -257,8 +19,8 @@ def visualize_frames_ovrtx_mp4(
 # ---------------------------------------------------------------------------
 
 
-def _run_jax_solver(solver, cfg: DictConfig, trace_dir=None, profile_opts=None):
-    """Drive an MPMSolver (JAX backend): warmup, then benchmark or GIF loop.
+def _run_solver(solver, cfg: DictConfig, trace_dir=None, profile_opts=None):
+    """Drive an MPMSolver: warmup, then benchmark or frame-capture loop.
 
     When ``trace_dir`` is set, the JAX profiler is started *after* warmup and
     stopped after the steady-state loop, so the one-time JIT compile +
@@ -268,20 +30,12 @@ def _run_jax_solver(solver, cfg: DictConfig, trace_dir=None, profile_opts=None):
     kernel_name = solver.backend.name
     bench = cfg.get("benchmark", False)
 
-    def _warmup_metrics(s):
-        """Compile the per-frame metric reads so the first timed frame doesn't
-        eat a one-shot trace+compile on jnp.mean / jnp.abs.max."""
-        _ = float(s.x[:, 2].mean())
-        _ = float(jnp.abs(s.v).max())
-
     with jax.profiler.TraceAnnotation("warmup", kernel=kernel_name):
         solver.step()
         jax.block_until_ready(solver.state.x)
-        _warmup_metrics(solver.state)
         solver.reset_to_initial()
 
     frames = []
-    frame_metrics = []
 
     # Start the profiler AFTER warmup so only steady-state work is captured —
     # the one-time JIT compile + autotuning (and its import-tracer flood) stay
@@ -295,7 +49,7 @@ def _run_jax_solver(solver, cfg: DictConfig, trace_dir=None, profile_opts=None):
         if bench:
             with jax.profiler.TraceAnnotation("benchmark", kernel=kernel_name):
                 t0 = time.perf_counter()
-                for frame in tqdm(range(sim.num_frames), desc="JAX"):
+                for frame in tqdm(range(sim.num_frames), desc="simulate"):
                     with jax.profiler.StepTraceAnnotation("frame", step_num=frame):
                         solver.step()
                 jax.block_until_ready(solver.state.x)
@@ -303,22 +57,12 @@ def _run_jax_solver(solver, cfg: DictConfig, trace_dir=None, profile_opts=None):
         else:
             t0 = time.perf_counter()
             with jax.profiler.TraceAnnotation("render_loop", kernel=kernel_name):
-                for frame in tqdm(range(sim.num_frames), desc="JAX"):
+                for frame in tqdm(range(sim.num_frames), desc="simulate"):
                     with jax.profiler.StepTraceAnnotation("frame", step_num=frame):
                         # capture current state BEFORE advancing (frame 0 == initial config)
                         frames.append(np.array(solver.state.x))
-                        t_frame = time.perf_counter()
                         solver.step()
                         jax.block_until_ready(solver.state.x)
-                        frame_ms = (time.perf_counter() - t_frame) * 1000
-                        frame_metrics.append(
-                            {
-                                "x_mean_z": float(solver.state.x[:, 2].mean()),
-                                "v_max": float(jnp.abs(solver.state.v).max()),
-                                "frame_ms": frame_ms,
-                                "timestep_ms": frame_ms,
-                            }
-                        )
             elapsed = time.perf_counter() - t0
     finally:
         if tracing:
@@ -335,16 +79,16 @@ def _run_jax_solver(solver, cfg: DictConfig, trace_dir=None, profile_opts=None):
             "count": sim.num_frames,
         }
     }
-    return frames, elapsed, total_steps, summary, frame_metrics
+    return frames, elapsed, total_steps, summary
 
 
 def run(cfg: DictConfig, trace_dir=None, profile_opts=None):
     """Instantiate the runtime config, build the solver, and drive it.
 
-    Returns (frames, elapsed, total_steps, summary, frame_metrics).
+    Returns (frames, elapsed, total_steps, summary).
     """
     solver = MPMSolver(hydra.utils.instantiate(cfg.solver))
-    return _run_jax_solver(solver, cfg, trace_dir=trace_dir, profile_opts=profile_opts)
+    return _run_solver(solver, cfg, trace_dir=trace_dir, profile_opts=profile_opts)
 
 
 # ---------------------------------------------------------------------------
@@ -405,7 +149,7 @@ def main(cfg: DictConfig):
         profile_opts = _build_profile_options(cfg.get("profile", {}))
 
     # Run simulation. When profiling, the driver wraps only the steady-state loop.
-    frames, elapsed, total_steps, summary, _frame_metrics = run(
+    frames, elapsed, total_steps, summary = run(
         cfg, trace_dir=jax_trace_dir, profile_opts=profile_opts
     )
     kernel_name = HydraConfig.get().runtime.choices.get("backend", "jax")
@@ -413,7 +157,7 @@ def main(cfg: DictConfig):
     # Print timing summary
     steps_per_sec = total_steps / elapsed
     ms_per_step = elapsed / total_steps * 1000
-    backend_label = "jax-loop"
+    backend_label = "solver-loop"
     print(
         f"\n{backend_label} ({kernel_name}): {total_steps} steps in {elapsed:.2f}s ({steps_per_sec:.1f} steps/s, {ms_per_step:.2f} ms/step)"
     )
@@ -433,57 +177,19 @@ def main(cfg: DictConfig):
         output_dir = os.path.join(orig_cwd, cfg.output_dir)
         os.makedirs(output_dir, exist_ok=True)
         render_cfg = cfg.get("render", {})
-        render_backend = render_cfg.get("backend", "pyvista_gif")
         fps = int(render_cfg.get("fps", 30))
         radius = float(render_cfg.get("point_radius", 0.008))
-        if render_backend == "warp_opengl":
-            export_path = os.path.join(output_dir, f"{cfg.tag}_{kernel_name}.gif")
-            usd_path = None
-            if bool(render_cfg.get("write_usd", False)):
-                usd_path = os.path.join(output_dir, f"{cfg.tag}_{kernel_name}.usd")
-            print(f"\nRendering with Warp OpenGL to {export_path}...")
-            visualize_frames_warp_opengl(
-                frames,
-                export_path,
-                color=cfg.material.color,
-                radius=radius,
-                fps=fps,
-                width=int(render_cfg.get("width", 960)),
-                height=int(render_cfg.get("height", 720)),
-                write_usd_path=usd_path,
-            )
-        elif render_backend == "warp_usd":
-            export_path = os.path.join(output_dir, f"{cfg.tag}_{kernel_name}.usd")
-            print(f"\nRendering with Warp USD to {export_path}...")
-            visualize_frames_warp_usd(
-                frames, export_path, color=cfg.material.color, radius=radius, fps=fps
-            )
-        elif render_backend == "ovrtx_mp4":
-            export_path = os.path.join(output_dir, f"{cfg.tag}_{kernel_name}.mp4")
-            usd_path = None
-            if bool(render_cfg.get("write_usd", False)):
-                usd_path = os.path.join(
-                    output_dir, f"{cfg.tag}_{kernel_name}.ovrtx.usd"
-                )
-            print(f"\nRendering with OVRTX to {export_path}...")
-            visualize_frames_ovrtx_mp4(
-                frames,
-                export_path,
-                color=cfg.material.color,
-                radius=radius,
-                fps=fps,
-                width=int(render_cfg.get("width", 960)),
-                height=int(render_cfg.get("height", 540)),
-                write_usd_path=usd_path,
-            )
-        elif render_backend == "pyvista_gif":
-            export_path = os.path.join(output_dir, f"{cfg.tag}_{kernel_name}.gif")
-            print(f"\nRendering to {export_path}...")
-            visualize_frames(
-                frames, export_path, size=[1, 1, 1], c=cfg.material.color, fps=fps
-            )
-        else:
-            raise RuntimeError(f"Unsupported render.backend={render_backend!r}.")
+        export_path = os.path.join(output_dir, f"{cfg.tag}_{kernel_name}.gif")
+        print(f"\nRendering with Warp OpenGL to {export_path}...")
+        render_warp_opengl(
+            frames,
+            export_path,
+            color=cfg.material.color,
+            radius=radius,
+            fps=fps,
+            width=int(render_cfg.get("width", 960)),
+            height=int(render_cfg.get("height", 720)),
+        )
     elif cfg.get("benchmark", False):
         print("\nBenchmark mode: skipping GIF rendering.")
 

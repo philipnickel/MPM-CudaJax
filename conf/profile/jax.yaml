@@ -1,5 +1,5 @@
 # JAX built-in trace — Chrome trace_events, viewable in Perfetto / TensorBoard.
-# The trace is started AFTER warmup (see simulate.py:_run_jax_solver), so the
+# The trace is started AFTER warmup (see simulate.py:_run_solver), so the
 # one-time JIT compile + autotuning are excluded and only steady-state work is
 # captured. Run a few frames of real substeps so the P2G/G2P kernels repeat.
 name: jax
