@@ -11,7 +11,6 @@ from mpm_jax.backends.cuda import (
     CudaV2Backend,
     CudaV3Backend,
     CudaV4Backend,
-    _register_cuda_kernel,
 )
 from mpm_jax.backends.cutile import CutileBackend, arena_super_cell, load_cutile_kernels
 from mpm_jax.backends.jax import JaxBackend
@@ -48,7 +47,6 @@ __all__ = [
     "CutileBackend",
     "JaxBackend",
     "PreparedSubstep",
-    "_register_cuda_kernel",
     "arena_super_cell",
     "backend_choices",
     "backend_config",

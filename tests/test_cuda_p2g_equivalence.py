@@ -16,7 +16,12 @@ from mpm_jax.backends import (
     CutileBackend,
     JaxBackend,
 )
-from mpm_jax.cuda.p2g_cuda import is_available
+from mpm_jax.cuda.p2g_cuda import (
+    register_p2g_inline,
+    register_p2g_v2_inline,
+    register_p2g_v3_inline,
+    register_p2g_v4_inline,
+)
 from mpm_jax.types import MPMState, MPMParams
 
 
@@ -37,10 +42,10 @@ def _has_cuda() -> bool:
         return False
 
 
-def _cuda_kernels_available(*kinds: str) -> bool:
+def _cuda_kernels_available(*registrars) -> bool:
     if not _has_cuda():
         return False
-    return all(is_available(kind) for kind in kinds)
+    return all(register() for register in registrars)
 
 
 def _cutile_available() -> bool:
@@ -89,7 +94,12 @@ def _p2g_output(backend, params, state, stress):
 
 
 @pytest.mark.skipif(
-    not _cuda_kernels_available("inline", "v2_inline", "v3_inline", "v4_inline"),
+    not _cuda_kernels_available(
+        register_p2g_inline,
+        register_p2g_v2_inline,
+        register_p2g_v3_inline,
+        register_p2g_v4_inline,
+    ),
     reason="CUDA P2G kernels not built or no GPU backend available",
 )
 def test_cuda_p2g_variants_match_jax_scan():
@@ -115,7 +125,7 @@ def test_cuda_p2g_variants_match_jax_scan():
 
 
 @pytest.mark.skipif(
-    not _cuda_kernels_available("v4_inline"),
+    not _cuda_kernels_available(register_p2g_v4_inline),
     reason="cuda_v4 kernel not built or no GPU backend available",
 )
 def test_cuda_v4_supercell_widths_match_jax_scan():

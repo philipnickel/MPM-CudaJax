@@ -52,7 +52,7 @@ Outputs:
 - GIF renders → `output/<tag>_<kernel>.gif`
 - Hydra logs / config snapshots → `outputs/<date>/<run>/`
 - Multirun sweep results → `multirun/<date>/<run>/`
-- Built CUDA `.so` files → `src/mpm_jax/cuda/_lib/` (rebuilds on `.cu` edit via `editable.rebuild=true`)
+- Native CUDA extension → `mpm_jax.cuda._p2g_ffi` (rebuilds on native-source edit via `editable.rebuild=true`)
 
 ## Setup
 
@@ -70,8 +70,9 @@ pixi run python simulate.py sim.num_frames=5
 ```
 
 CUDA kernels are built by [scikit-build-core](https://scikit-build-core.readthedocs.io/)
-+ CMake during `pixi install`. Output `.so` files land in
-`src/mpm_jax/cuda/_lib/` and are loaded at runtime via
++ CMake during `pixi install` into one nanobind extension module:
+`mpm_jax.cuda._p2g_ffi`. `p2g_cuda.py` imports that module, gets PyCapsule
+handlers for the CUDA FFI targets, and registers them with
 `jax.ffi.register_ffi_target`.
 
 Override the CUDA architecture at install time:
@@ -280,9 +281,9 @@ MPM-CudaJax/
         ├── backends/        # backend implementations + hydra-zen registrations
         ├── cutile_p2g.py    # cuTile arena-scatter P2G kernel + jax bridge
         └── cuda/
-            ├── p2g_cuda.py  # FFI registration + kernel wrappers
-            ├── _lib/        # built .so files (gitignored)
-            └── kernels/     # p2g_inline.cu, p2g_v2_inline.cu, p2g_v3_inline.cu,
+            ├── p2g_cuda.py  # FFI capsule registration + kernel wrappers
+            └── kernels/     # p2g_ffi_module.cc plus p2g_inline.cu,
+                             # p2g_v2_inline.cu, p2g_v3_inline.cu,
                              # p2g_v4_inline.cu
 ```
 

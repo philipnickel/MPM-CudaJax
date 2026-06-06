@@ -21,8 +21,22 @@ enable_language(CUDA)
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# Locate the JAX FFI header from whichever Python is running scikit-build-core.
-find_package(Python REQUIRED COMPONENTS Interpreter)
+# Locate Python, nanobind, and the JAX FFI header from whichever Python is
+# running scikit-build-core.
+find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
+execute_process(
+    COMMAND ${Python_EXECUTABLE} -m nanobind --cmake_dir
+    OUTPUT_VARIABLE nanobind_ROOT
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE _nanobind_result
+)
+if(NOT _nanobind_result EQUAL 0 OR nanobind_ROOT STREQUAL "")
+    message(FATAL_ERROR
+        "python -m nanobind --cmake_dir failed. Add 'nanobind' to the Pixi "
+        "environment and [build-system] requires.")
+endif()
+find_package(nanobind CONFIG REQUIRED)
+
 execute_process(
     COMMAND ${Python_EXECUTABLE} -c "import jax.ffi; print(jax.ffi.include_dir())"
     OUTPUT_VARIABLE JAX_FFI_INCLUDE
@@ -38,33 +52,28 @@ message(STATUS "JAX FFI include: ${JAX_FFI_INCLUDE}")
 message(STATUS "CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
 
 set(KERNEL_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/mpm_jax/cuda/kernels)
-set(KERNELS p2g_inline p2g_v2_inline p2g_v3_inline p2g_v4_inline)
+set(P2G_FFI_SOURCES
+    ${KERNEL_SRC_DIR}/p2g_ffi_module.cc
+    ${KERNEL_SRC_DIR}/p2g_inline.cu
+    ${KERNEL_SRC_DIR}/p2g_v2_inline.cu
+    ${KERNEL_SRC_DIR}/p2g_v3_inline.cu
+    ${KERNEL_SRC_DIR}/p2g_v4_inline.cu
+)
 
-# Drop libs into mpm_jax/cuda/_lib/ in BOTH the source tree (for editable
-# installs, where p2g_cuda.py looks them up via Path(__file__).parent) and
-# the wheel's mpm_jax/cuda/_lib/ (for proper installs).
-set(KERNEL_OUT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/mpm_jax/cuda/_lib)
+nanobind_add_module(_p2g_ffi NB_STATIC NOMINSIZE ${P2G_FFI_SOURCES})
+target_include_directories(_p2g_ffi PRIVATE ${JAX_FFI_INCLUDE})
+target_compile_options(_p2g_ffi PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:-O3>
+    $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>
+    # -lineinfo: source-level attribution for ncu/Nsight (no codegen change,
+    # unlike -G); this project's analysis method leans on per-kernel ncu.
+    $<$<COMPILE_LANGUAGE:CUDA>:-lineinfo>
+    # -Xptxas -v: print per-kernel registers / spills / shared-mem usage at
+    # build time, feeding the occupancy/roofline narrative.
+    $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-v>
+    $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-fPIC>
+    $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wno-return-type>
+    $<$<COMPILE_LANGUAGE:CUDA>:-diag-suppress=940,2473>
+)
 
-foreach(name ${KERNELS})
-    add_library(${name} SHARED ${KERNEL_SRC_DIR}/${name}.cu)
-    target_include_directories(${name} PRIVATE ${JAX_FFI_INCLUDE})
-    target_compile_options(${name} PRIVATE
-        $<$<COMPILE_LANGUAGE:CUDA>:-O3>
-        $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>
-        # -lineinfo: source-level attribution for ncu/Nsight (no codegen change,
-        # unlike -G); this project's analysis method leans on per-kernel ncu.
-        $<$<COMPILE_LANGUAGE:CUDA>:-lineinfo>
-        # -Xptxas -v: print per-kernel registers / spills / shared-mem usage at
-        # build time, feeding the occupancy/roofline narrative.
-        $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-v>
-        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-fPIC>
-        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wno-return-type>
-        $<$<COMPILE_LANGUAGE:CUDA>:-diag-suppress=940,2473>
-    )
-    set_target_properties(${name} PROPERTIES
-        PREFIX "lib"
-        OUTPUT_NAME "${name}"
-        LIBRARY_OUTPUT_DIRECTORY ${KERNEL_OUT_DIR}
-    )
-    install(TARGETS ${name} LIBRARY DESTINATION src/mpm_jax/cuda/_lib)
-endforeach()
+install(TARGETS _p2g_ffi LIBRARY DESTINATION mpm_jax/cuda)

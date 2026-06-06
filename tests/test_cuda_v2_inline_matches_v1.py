@@ -18,7 +18,7 @@ from omegaconf import OmegaConf
 from mpm_jax.backends import CudaV1Backend, CudaV2Backend
 from mpm_jax.boundary import build_boundary_fns
 from mpm_jax.constitutive import stvk_elasticity_jacobi
-from mpm_jax.cuda.p2g_cuda import is_available
+from mpm_jax.cuda.p2g_cuda import register_p2g_inline, register_p2g_v2_inline
 from mpm_jax.solver import build_backend_frame
 from mpm_jax.types import MPMState, MPMParams
 
@@ -30,14 +30,17 @@ def _has_cuda() -> bool:
         return False
 
 
-def _kernel_available(kind: str) -> bool:
+def _kernel_available(registrar) -> bool:
     if not _has_cuda():
         return False
-    return is_available(kind)
+    return registrar()
 
 
 @pytest.mark.skipif(
-    not (_kernel_available("inline") and _kernel_available("v2_inline")),
+    not (
+        _kernel_available(register_p2g_inline)
+        and _kernel_available(register_p2g_v2_inline)
+    ),
     reason="cuda_v1 / cuda_v2 .so not built or no GPU",
 )
 def test_cuda_v2_matches_v1():

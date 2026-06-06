@@ -21,7 +21,20 @@ def test_jax_backend_constructs_without_gpu():
 def test_cuda_backend_constructors_register_expected_kind(monkeypatch):
     calls = []
     monkeypatch.setattr(
-        "mpm_jax.backends.cuda.is_available", lambda kind: calls.append(kind)
+        "mpm_jax.backends.cuda.register_p2g_inline",
+        lambda: calls.append("cuda_v1"),
+    )
+    monkeypatch.setattr(
+        "mpm_jax.backends.cuda.register_p2g_v2_inline",
+        lambda: calls.append("cuda_v2"),
+    )
+    monkeypatch.setattr(
+        "mpm_jax.backends.cuda.register_p2g_v3_inline",
+        lambda: calls.append("cuda_v3"),
+    )
+    monkeypatch.setattr(
+        "mpm_jax.backends.cuda.register_p2g_v4_inline",
+        lambda: calls.append("cuda_v4"),
     )
 
     CudaV1Backend(num_grids=16)
@@ -29,11 +42,11 @@ def test_cuda_backend_constructors_register_expected_kind(monkeypatch):
     CudaV3Backend(num_grids=16)
     CudaV4Backend(num_grids=16)
 
-    assert calls == ["inline", "v2_inline", "v3_inline", "v4_inline"]
+    assert calls == ["cuda_v1", "cuda_v2", "cuda_v3", "cuda_v4"]
 
 
 def test_supercell_backend_validates_num_grids(monkeypatch):
-    monkeypatch.setattr("mpm_jax.backends.cuda.is_available", lambda kind: True)
+    monkeypatch.setattr("mpm_jax.backends.cuda.register_p2g_v4_inline", lambda: True)
 
     with pytest.raises(RuntimeError, match="requires num_grids"):
         CudaV4Backend(num_grids=18, super_cell_width=4)

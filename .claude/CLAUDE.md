@@ -47,7 +47,7 @@ pixi run python simulate.py -cn config sim=benchmark \
 
 One environment is defined in `[tool.pixi.environments]` in `pyproject.toml`:
 
-- `default` — Linux only (`linux-64`, `linux-aarch64`) and GPU-first. **JAX runs on CUDA 13** (PyPI `jax[cuda13]`); `cuda-tile[tileiras]` (PyPI) is the cuTile runtime the `cutile` backend requires; `warp-lang==1.14.0` (now used only by the optional `warp_opengl`/`warp_usd` renderers, not by any P2G kernel) and `nsight-python` are PyPI too. conda-forge supplies the `cuda-nvcc` (**CUDA 12.x**) + `gxx` toolchain that compiles the FFI `.cu` kernels, plus `nsight-compute`. So the *build* toolchain is CUDA 12.x while the JAX *runtime* is CUDA 13 — they coexist and the FFI kernels load fine on the cuda13 runtime. The GPU activation block sets `JAX_PLATFORMS=cuda` + a persistent JAX compile cache (`.jax_cache/`). No `module load` required on DTU HPC.
+- `default` — Linux only (`linux-64`, `linux-aarch64`) and GPU-first. **JAX runs on CUDA 13** (PyPI `jax[cuda13]`); `cuda-tile[tileiras]` (PyPI) is the cuTile runtime the `cutile` backend requires; `warp-lang==1.14.0` (now used only by the optional `warp_opengl`/`warp_usd` renderers, not by any P2G kernel) and `nsight-python` are PyPI too. conda-forge supplies the `cuda-nvcc` (**CUDA 12.x**) + `gxx` toolchain that compiles the FFI `.cu` kernels and the nanobind capsule module, plus `nsight-compute`. So the *build* toolchain is CUDA 12.x while the JAX *runtime* is CUDA 13 — they coexist and the FFI kernels load fine on the cuda13 runtime. The GPU activation block sets `JAX_PLATFORMS=cuda` + a persistent JAX compile cache (`.jax_cache/`). No `module load` required on DTU HPC.
 
 Common patterns:
 
@@ -61,15 +61,15 @@ pixi add <pkg>                                    # add a runtime dep (edits pyp
 pixi add --feature gpu <pkg>                      # add to the GPU feature used by default
 ```
 
-### CUDA kernel build (scikit-build-core + CMake)
+### CUDA kernel build (scikit-build-core + CMake + nanobind)
 
-CUDA kernels in `src/mpm_jax/cuda/kernels/*.cu` build via `CMakeLists.txt` driven by **scikit-build-core** at `pixi install` time. Output `.so` files land in `src/mpm_jax/cuda/_lib/` (gitignored) and are loaded by `src/mpm_jax/cuda/p2g_cuda.py` which registers them with JAX FFI (`jax.ffi.register_ffi_target` / `ffi_call`).
+CUDA kernels in `src/mpm_jax/cuda/kernels/*.cu` and the tiny capsule binding `p2g_ffi_module.cc` build via `CMakeLists.txt` driven by **scikit-build-core** at `pixi install` time. CMake produces one importable nanobind extension, `mpm_jax.cuda._p2g_ffi`. `src/mpm_jax/cuda/p2g_cuda.py` imports that module, obtains PyCapsule handlers for the CUDA FFI symbols, and registers them with JAX FFI (`jax.ffi.register_ffi_target` / `ffi_call`).
 
 Key knobs:
 
 - `MPM_CUDA_ARCH=sm_86` (or `sm_90`, etc.) at install time → CMake picks that arch. Default is `native` (CMake auto-detects the local GPU). Set this before `pixi install` on cross-build hosts.
-- `editable.rebuild = true` in `pyproject.toml` means edits to `.cu` sources trigger a rebuild on the next `import mpm_jax.cuda.p2g_cuda`. Manual rebuild: `pixi reinstall mpm-cudajax`.
-- `[build-system].requires` pulls in `scikit-build-core>=0.10`, `cmake>=3.24`, and `jax>=0.4.20` (jax is needed at build time so CMake can `import jax.ffi` to find the FFI headers).
+- `editable.rebuild = true` in `pyproject.toml` means edits to `.cu`, `.cuh`, or binding `.cc` sources trigger a rebuild when the native extension is next imported. Manual rebuild: `pixi reinstall mpm-cudajax`.
+- `[build-system].requires` pulls in `scikit-build-core>=0.10`, `cmake>=3.24`, `jax>=0.4.20`, and `nanobind` (jax is needed at build time so CMake can `import jax.ffi` to find the FFI headers).
 
 ## Layout
 
@@ -101,9 +101,9 @@ src/mpm_jax/
   sort.py              morton_argsort, home_super_cell_id
   cutile_p2g.py        cuTile arena-scatter P2G kernel + cutile_call bridge
   cuda/
-    p2g_cuda.py        loads prebuilt .so + jax.ffi.register_ffi_target
-    _lib/              prebuilt .so files (gitignored, populated by CMake)
+    p2g_cuda.py        imports _p2g_ffi capsules + jax.ffi.register_ffi_target
     kernels/
+      p2g_ffi_module.cc      nanobind module exporting FFI handler capsules
       p2g_inline.cu          cuda_v1: one thread/particle, inline weights, global atomicAdd
       p2g_v2_inline.cu       cuda_v2: warp-shuffle coalescing, inline weights
       p2g_v3_inline.cu       cuda_v3: Morton-sorted particles, inline weights
@@ -209,8 +209,8 @@ CMake auto-detects the local GPU arch when `MPM_CUDA_ARCH` is unset.
 - Single-particle functions vectorise via `jax.vmap` (e.g. `constitutive.stvk_elasticity_jacobi` is `jax.vmap` of a single-3×3 stress). Don't write batched code by hand — vmap is the contract.
 - **Adding a new CUDA P2G kernel** (e.g. `cuda_vX_inline`) — only the P2G varies; G2P stays the JAX baseline:
   1. Add `src/mpm_jax/cuda/kernels/p2g_vX_inline.cu`.
-  2. Add the kernel name to the `KERNELS` list in `CMakeLists.txt`.
-  3. Add `_register_vX_inline()` + `cuda_p2g_vX_inline()` wrapper in `src/mpm_jax/cuda/p2g_cuda.py`.
+  2. Add the `.cu` source to `P2G_FFI_SOURCES` in `CMakeLists.txt`.
+  3. Declare/export the handler capsule in `p2g_ffi_module.cc`, then add `register_p2g_vX_inline()` + `cuda_p2g_vX_inline()` in `src/mpm_jax/cuda/p2g_cuda.py`.
   4. Add a backend implementation in `src/mpm_jax/backends/` overriding `p2g()` (and `prepare()` if it needs a sort); `g2p()` is inherited from the base, so only P2G differs. Decorate the implementation with `hydra_zen.store(name="cuda_vX", group="backend", num_grids="${sim.num_grids}")`, register the kernel in `__init__` (so a compile-cache hit still finds the handler), and return the super-cell width from `grid_divisor()` if the grid must divide it.
   5. Include the backend in any sweep configs that should exercise it.
   6. Rebuild the editable package metadata after module/package shape changes: `pixi reinstall mpm-cudajax`.

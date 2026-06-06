@@ -1,19 +1,16 @@
 """CUDA P2G kernels, integrated via JAX FFI.
 
-The .so files are built at install time by scikit-build-core + CMake (see
-CMakeLists.txt) and shipped inside ``mpm_jax/cuda/_lib/``. In editable Pixi
-environments, ``editable.rebuild=true`` lets scikit-build-core incrementally
-rebuild changed CUDA sources when the packaged artifact is resolved.
+The native ``mpm_jax.cuda._p2g_ffi`` extension is built by scikit-build-core +
+CMake (see CMakeLists.txt). In editable Pixi environments,
+``editable.rebuild=true`` lets scikit-build-core incrementally rebuild changed
+CUDA or binding sources when the extension module is imported.
 
 Override the CUDA architecture at build time with ``MPM_CUDA_ARCH=sm_86``
 (default: ``native``).
 """
 
-import ctypes
-import importlib.resources as resources
-import importlib.util
+import importlib
 import logging
-from pathlib import Path
 from threading import Lock
 
 import jax
@@ -22,113 +19,133 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-_PACKAGE_DIR = Path(__file__).resolve().parent
-_LIB_DIR = _PACKAGE_DIR / "_lib"
+_FFI_MODULE = "mpm_jax.cuda._p2g_ffi"
 _REGISTERED: dict[str, bool] = {}
 _REGISTER_LOCK = Lock()
 
-
-def _shared_library_path(so_name: str) -> Path:
-    return _LIB_DIR / so_name
-
-
-def _shared_library_candidates(so_name: str) -> list[Path]:
-    """Return plausible locations for a packaged CUDA shared library.
-
-    Prefer Python's package/artifact lookup so scikit-build-core's editable
-    rebuild hook can run when CUDA sources changed. The source-tree ``_lib``
-    path is only a fallback for older installs or direct in-tree builds.
-    """
-    # Ask Python's import machinery for the installed artifact. In editable
-    # scikit-build-core installs, this triggers the native editable rebuild
-    # hook for known wheel files when needed and gives us the built .so path.
-    candidates = []
-    module_name = Path(so_name).stem
-    try:
-        spec = importlib.util.find_spec(f"mpm_jax.cuda._lib.{module_name}")
-    except Exception:
-        spec = None
-    if spec is not None and spec.origin:
-        candidates.append(Path(spec.origin))
-
-    try:
-        resource_path = resources.files("mpm_jax.cuda._lib").joinpath(so_name)
-        candidates.append(Path(str(resource_path)))
-    except (ModuleNotFoundError, FileNotFoundError):
-        pass
-
-    candidates.append(_shared_library_path(so_name))
-
-    return candidates
+_P2G_INLINE_TARGET = "p2g_inline_cuda"
+_P2G_V2_INLINE_TARGET = "p2g_v2_inline_cuda"
+_P2G_V3_INLINE_TARGET = "p2g_v3_inline_cuda"
+_P2G_V4_INLINE_TARGET = "p2g_v4_inline_cuda"
 
 
-def _find_shared_library(so_name: str) -> Path | None:
-    for candidate in _shared_library_candidates(so_name):
-        if candidate.exists():
-            return candidate
-    return None
-
-
-def _register(name: str, so_name: str, symbol: str) -> bool:
-    """Load .so from the package's _lib/ dir and register the FFI target."""
+def _register(name: str, capsule_factory: str) -> bool:
+    """Import the native binding module and register one FFI target."""
     with _REGISTER_LOCK:
         if name in _REGISTERED:
             return _REGISTERED[name]
 
-        so_path = _find_shared_library(so_name)
-        if so_path is None:
+        try:
+            ffi_module = importlib.import_module(_FFI_MODULE)
+            capsule = getattr(ffi_module, capsule_factory)()
+        except ImportError:
             logger.warning(
-                "CUDA kernel %s not found in package resources. Run "
+                "CUDA FFI extension %s is unavailable. Run "
                 "`pixi install` in an environment where nvcc is on PATH.",
-                so_name,
+                _FFI_MODULE,
             )
+            _REGISTERED[name] = False
+            return False
+        except Exception as e:
+            logger.error("Failed to load CUDA FFI target '%s': %s", name, e)
             _REGISTERED[name] = False
             return False
 
         try:
-            lib = ctypes.cdll.LoadLibrary(str(so_path))
             jax.ffi.register_ffi_target(
                 name,
-                jax.ffi.pycapsule(getattr(lib, symbol)),
+                capsule,
                 platform="CUDA",
                 api_version=1,
             )
             _REGISTERED[name] = True
-            logger.info("Registered CUDA kernel '%s' from %s", name, so_path)
+            logger.info("Registered CUDA FFI target '%s'", name)
             return True
         except Exception as e:
-            logger.error("Failed to register CUDA kernel '%s': %s", name, e)
+            logger.error("Failed to register CUDA FFI target '%s': %s", name, e)
             _REGISTERED[name] = False
             return False
 
 
-def _register_inline():
-    return _register("p2g_inline_cuda", "libp2g_inline.so", "P2GInline")
+def register_p2g_inline():
+    return _register(_P2G_INLINE_TARGET, "p2g_inline")
 
 
-def _register_v2_inline():
-    return _register("p2g_v2_inline_cuda", "libp2g_v2_inline.so", "P2GV2Inline")
+def register_p2g_v2_inline():
+    return _register(_P2G_V2_INLINE_TARGET, "p2g_v2_inline")
 
 
-def _register_v3_inline():
-    return _register("p2g_v3_inline_cuda", "libp2g_v3_inline.so", "P2GV3Inline")
+def register_p2g_v3_inline():
+    return _register(_P2G_V3_INLINE_TARGET, "p2g_v3_inline")
 
 
-def _register_v4_inline():
-    return _register("p2g_v4_inline_cuda", "libp2g_v4_inline.so", "P2GV4Inline")
+def register_p2g_v4_inline():
+    return _register(_P2G_V4_INLINE_TARGET, "p2g_v4_inline")
 
 
-def is_available(kernel="inline"):
-    """Check if a prebuilt CUDA kernel can be loaded and registered."""
-    if kernel == "inline":
-        return _register_inline()
-    elif kernel == "v2_inline":
-        return _register_v2_inline()
-    elif kernel == "v3_inline":
-        return _register_v3_inline()
-    elif kernel == "v4_inline":
-        return _register_v4_inline()
-    return False
+def _p2g_output_shapes(num_grids):
+    grid_nodes = num_grids**3
+    return (
+        jax.ShapeDtypeStruct((grid_nodes, 3), jnp.float32),
+        jax.ShapeDtypeStruct((grid_nodes,), jnp.float32),
+    )
+
+
+def _particle_mats(C, stress, n_particles):
+    return C.reshape(n_particles, 9), stress.reshape(n_particles, 9)
+
+
+def _physical_attrs(num_grids, dt, vol, p_mass, inv_dx, dx):
+    return {
+        "G": np.int32(num_grids),
+        "dt": np.float32(dt),
+        "vol": np.float32(vol),
+        "p_mass": np.float32(p_mass),
+        "inv_dx": np.float32(inv_dx),
+        "dx": np.float32(dx),
+    }
+
+
+def _p2g_ffi_call(
+    target_name,
+    x,
+    v,
+    C,
+    stress,
+    *extra_args,
+    num_grids,
+    attrs,
+):
+    n_particles = x.shape[0]
+    C_flat, stress_flat = _particle_mats(C, stress, n_particles)
+
+    return jax.ffi.ffi_call(
+        target_name,
+        _p2g_output_shapes(num_grids),
+        vmap_method="broadcast_all",
+    )(
+        x,
+        v,
+        C_flat,
+        stress_flat,
+        *extra_args,
+        **attrs,
+    )
+
+
+def _inline_p2g_call(target_name, x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
+    return _p2g_ffi_call(
+        target_name,
+        x,
+        v,
+        C,
+        stress,
+        num_grids=num_grids,
+        attrs={
+            "N": np.int32(x.shape[0]),
+            **_physical_attrs(num_grids, dt, vol, p_mass, inv_dx, dx),
+        },
+    )
 
 
 def cuda_p2g_inline(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
@@ -141,34 +158,19 @@ def cuda_p2g_inline(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
     Stress is computed by the JAX elasticity model; weights and scatter happen
     inside this CUDA kernel.
     """
-    N = x.shape[0]
-    G = num_grids
-    G3 = G**3
-    C_flat = C.reshape(N, 9)
-    stress_flat = stress.reshape(N, 9)
-
-    grid_mv, grid_m = jax.ffi.ffi_call(
-        "p2g_inline_cuda",
-        (
-            jax.ShapeDtypeStruct((G3, 3), jnp.float32),
-            jax.ShapeDtypeStruct((G3,), jnp.float32),
-        ),
-        vmap_method="broadcast_all",
-    )(
+    return _inline_p2g_call(
+        _P2G_INLINE_TARGET,
         x,
         v,
-        C_flat,
-        stress_flat,
-        N=np.int32(N),
-        G=np.int32(G),
-        dt=np.float32(dt),
-        vol=np.float32(vol),
-        p_mass=np.float32(p_mass),
-        inv_dx=np.float32(inv_dx),
-        dx=np.float32(dx),
+        C,
+        stress,
+        num_grids,
+        dt,
+        vol,
+        p_mass,
+        inv_dx,
+        dx,
     )
-
-    return grid_mv, grid_m
 
 
 def cuda_p2g_v2_inline(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
@@ -180,34 +182,19 @@ def cuda_p2g_v2_inline(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
     the 27-stencil scatter loop, so warp-resident contributions to the same
     grid_idx collapse to a single atomic.
     """
-    N = x.shape[0]
-    G = num_grids
-    G3 = G**3
-    C_flat = C.reshape(N, 9)
-    stress_flat = stress.reshape(N, 9)
-
-    grid_mv, grid_m = jax.ffi.ffi_call(
-        "p2g_v2_inline_cuda",
-        (
-            jax.ShapeDtypeStruct((G3, 3), jnp.float32),
-            jax.ShapeDtypeStruct((G3,), jnp.float32),
-        ),
-        vmap_method="broadcast_all",
-    )(
+    return _inline_p2g_call(
+        _P2G_V2_INLINE_TARGET,
         x,
         v,
-        C_flat,
-        stress_flat,
-        N=np.int32(N),
-        G=np.int32(G),
-        dt=np.float32(dt),
-        vol=np.float32(vol),
-        p_mass=np.float32(p_mass),
-        inv_dx=np.float32(inv_dx),
-        dx=np.float32(dx),
+        C,
+        stress,
+        num_grids,
+        dt,
+        vol,
+        p_mass,
+        inv_dx,
+        dx,
     )
-
-    return grid_mv, grid_m
 
 
 def cuda_p2g_v3_inline(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
@@ -218,34 +205,19 @@ def cuda_p2g_v3_inline(x, v, C, stress, num_grids, dt, vol, p_mass, inv_dx, dx):
     :func:`mpm_jax.sort.morton_argsort`) so adjacent warp lanes share
     stencil targets — the sort is what makes the warp reduction productive.
     """
-    N = x.shape[0]
-    G = num_grids
-    G3 = G**3
-    C_flat = C.reshape(N, 9)
-    stress_flat = stress.reshape(N, 9)
-
-    grid_mv, grid_m = jax.ffi.ffi_call(
-        "p2g_v3_inline_cuda",
-        (
-            jax.ShapeDtypeStruct((G3, 3), jnp.float32),
-            jax.ShapeDtypeStruct((G3,), jnp.float32),
-        ),
-        vmap_method="broadcast_all",  # should we do it like this?
-    )(
+    return _inline_p2g_call(
+        _P2G_V3_INLINE_TARGET,
         x,
         v,
-        C_flat,
-        stress_flat,
-        N=np.int32(N),
-        G=np.int32(G),
-        dt=np.float32(dt),
-        vol=np.float32(vol),
-        p_mass=np.float32(p_mass),
-        inv_dx=np.float32(inv_dx),
-        dx=np.float32(dx),
+        C,
+        stress,
+        num_grids,
+        dt,
+        vol,
+        p_mass,
+        inv_dx,
+        dx,
     )
-
-    return grid_mv, grid_m
 
 
 # Super-cell width for the cuda_v4 backend. With SC=k the kernel launches (G/SC)^3
@@ -284,40 +256,27 @@ def cuda_p2g_v4_inline(
     flushing to HBM. With SC=4, the standard 8 particles/cell benchmark gives
     each non-empty block enough particles to amortize the tile overhead.
     """
-    N = x_sorted.shape[0]
-    G = num_grids
-    G3 = G**3
-    C_flat = C_sorted.reshape(N, 9)
-    stress_flat = stress_sorted.reshape(N, 9)
-
-    grid_mv, grid_m = jax.ffi.ffi_call(
-        "p2g_v4_inline_cuda",
-        (
-            jax.ShapeDtypeStruct((G3, 3), jnp.float32),
-            jax.ShapeDtypeStruct((G3,), jnp.float32),
-        ),
-        vmap_method="broadcast_all",
-    )(
+    return _p2g_ffi_call(
+        _P2G_V4_INLINE_TARGET,
         x_sorted,
         v_sorted,
-        C_flat,
-        stress_flat,
+        C_sorted,
+        stress_sorted,
         cell_start,
-        G=np.int32(G),
-        SC=np.int32(super_cell),
-        dt=np.float32(dt),
-        vol=np.float32(vol),
-        p_mass=np.float32(p_mass),
-        inv_dx=np.float32(inv_dx),
-        dx=np.float32(dx),
+        num_grids=num_grids,
+        attrs={
+            "SC": np.int32(super_cell),
+            **_physical_attrs(num_grids, dt, vol, p_mass, inv_dx, dx),
+        },
     )
-
-    return grid_mv, grid_m
 
 
 __all__ = [
     # FFI registration
-    "is_available",
+    "register_p2g_inline",
+    "register_p2g_v2_inline",
+    "register_p2g_v3_inline",
+    "register_p2g_v4_inline",
     # FFI op wrappers
     "cuda_p2g_inline",
     "cuda_p2g_v2_inline",

@@ -26,7 +26,8 @@ The main entry points are:
 - `src/mpm_jax/grid.py`, `sort.py` - pure-math helpers (grid update; Morton +
   super-cell sorting).
 - `src/mpm_jax/cutile_p2g.py` - cuTile tiled kernel bridge helpers.
-- `src/mpm_jax/cuda/` - JAX FFI CUDA loading plus CUDA kernel sources.
+- `src/mpm_jax/cuda/` - nanobind-backed JAX FFI CUDA registration plus CUDA
+  kernel sources.
 - `conf/` - Hydra config groups for simulation, materials, kernels, profiling,
   and sweeps.
 - `tests/` - pytest coverage for solver behavior, CUDA equivalence, backends,
@@ -38,8 +39,8 @@ The main entry points are:
   system Python or direct `pip install` workflows.
 - Prefer `pixi run test` for the full test suite and plain `pixi run ...` for
   GPU/CUDA/cuTile runs. The default Pixi environment is the GPU environment.
-- CUDA kernels are built through scikit-build-core and CMake during
-  `pixi install`.
+- CUDA kernels are built as an importable nanobind extension through
+  scikit-build-core and CMake during `pixi install`.
 - Kernel selection is Hydra-target-driven. Backend implementation modules under
   `src/mpm_jax/backends/` register their own Hydra config-group choices via
   hydra-zen; do not add dispatch logic to `simulate.py`.

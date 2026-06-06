@@ -1,5 +1,5 @@
 [build-system]
-requires = ["scikit-build-core>=0.10", "cmake>=3.24", "jax>=0.4.20"]
+requires = ["scikit-build-core>=0.10", "cmake>=3.24", "jax>=0.4.20", "nanobind"]
 build-backend = "scikit_build_core.build"
 
 [project]
@@ -25,7 +25,7 @@ dependencies = [
 # aborts the editable build with SystemExit(7). Relaxing it makes the key a
 # warning instead, so `pixi install` succeeds regardless of the local pixi rev.
 strict-config = false
-# Auto-rebuild the .so files on import when .cu sources change in editable mode.
+# Auto-rebuild the native CUDA extension on import when native sources change.
 build-dir = "build/{wheel_tag}"
 wheel.packages = ["src/mpm_jax"]
 editable.rebuild = true
@@ -52,6 +52,7 @@ tqdm = "*"
 numpy = "*"
 cmake = ">=3.24"
 scikit-build-core = ">=0.10"
+nanobind = "*"
 ninja = "*"
 seaborn = ">=0.13.2,<0.14"
 pandas = ">=3.0.3,<4"
@@ -117,7 +118,7 @@ default = { features = ["gpu", "dev"], solve-group = "default" }
 [tool.pixi.tasks]
 test = "pytest tests/ -v"
 lint = "ruff check ."
-clean = { cmd = "rm -f src/mpm_jax/cuda/_lib/*.so src/mpm_jax/cuda/kernels/*.so && rm -rf build multirun outputs output && rm -f *.sqlite && find . -type d -name __pycache__ -exec rm -rf {} +" }
+clean = { cmd = "rm -f src/mpm_jax/cuda/_p2g_ffi*.so src/mpm_jax/cuda/_lib/*.so src/mpm_jax/cuda/kernels/*.so && rm -rf multirun outputs output .pytest_cache && rm -f *.sqlite && find . -type d -name __pycache__ -print0 | xargs -0 rm -rf" }
 sim = "python simulate.py"
 sweep = "python simulate.py -cn sweep_baseline"
 sweep-quick = "python simulate.py -cn sweep_quick"
@@ -126,7 +127,7 @@ sweep-all = "python simulate.py -cn sweep_all"
 # Push the working tree to a remote host (e.g. `pixi run sync lambda`).
 # Excludes generated dirs (.pixi, build, outputs, etc.) and arch-specific
 # CUDA .so files — the remote rebuilds those on its own `pixi install`.
-sync = { args = [{ arg = "host" }], cmd = "rsync -ahz --info=stats1,name0 --exclude=.pixi --exclude=.venv --exclude=build --exclude=outputs --exclude=multirun --exclude=output --exclude=src/mpm_jax/cuda/_lib --exclude=__pycache__ --exclude='*.sqlite' --exclude='*.egg-info' --exclude=.pytest_cache ./ {{ host }}:~/MPM-CudaJax/" }
+sync = { args = [{ arg = "host" }], cmd = "rsync -ahz --info=stats1,name0 --exclude=.pixi --exclude=.venv --exclude=build --exclude=outputs --exclude=multirun --exclude=output --exclude=src/mpm_jax/cuda/_lib --exclude='src/mpm_jax/cuda/_p2g_ffi*.so' --exclude=__pycache__ --exclude='*.sqlite' --exclude='*.egg-info' --exclude=.pytest_cache ./ {{ host }}:~/MPM-CudaJax/" }
 
 # Pull Hydra run outputs back from a remote host (e.g. `pixi run sync-results lambda`).
 # One rsync with include/exclude rules so missing source dirs are silently skipped.
