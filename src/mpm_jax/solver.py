@@ -172,6 +172,31 @@ class MPMSolver:
                 on_frame(f, self.state)
         return self.state
 
+    def metrics(
+        self,
+        elapsed_s,
+        *,
+        num_frames,
+        render_enabled,
+        material_elasticity="unknown",
+        render_path=None,
+    ):
+        total_steps = int(num_frames) * self.steps_per_frame
+        return {
+            "kernel": self.backend.name,
+            "material_elasticity": material_elasticity,
+            "n_particles": self.params.n_particles,
+            "num_grids": self.params.num_grids,
+            "num_frames": int(num_frames),
+            "steps_per_frame": self.steps_per_frame,
+            "render_enabled": bool(render_enabled),
+            "total_steps": total_steps,
+            "elapsed_s": float(elapsed_s),
+            "ms_per_step": float(elapsed_s) / total_steps * 1000,
+            "steps_per_sec": total_steps / float(elapsed_s),
+            "render_path": render_path,
+        }
+
     def reset_to_initial(self):
         self.state = self._init_state
         return self.state

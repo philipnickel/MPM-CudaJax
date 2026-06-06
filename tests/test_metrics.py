@@ -1,24 +1,22 @@
-import json
+from types import SimpleNamespace
 
-from mpm_jax.metrics import RunConfig, RunMetrics, metrics_dataframe
+from mpm_jax.solver import MPMSolver
 
 
-def test_run_metrics_writes_flat_results_record(tmp_path):
-    run_config = RunConfig(
-        kernel="jax",
-        material_elasticity="jelly",
-        n_particles=32,
-        num_grids=16,
+def test_solver_metrics_returns_flat_results_record():
+    solver = object.__new__(MPMSolver)
+    solver.backend = SimpleNamespace(name="jax")
+    solver.params = SimpleNamespace(n_particles=32, num_grids=16)
+    solver.steps_per_frame = 3
+
+    record = solver.metrics(
+        elapsed_s=0.012,
         num_frames=2,
-        steps_per_frame=3,
         render_enabled=False,
+        material_elasticity="jelly",
+        render_path=None,
     )
-    metrics = RunMetrics(config=run_config, elapsed_s=0.012, render_path=None)
 
-    path = tmp_path / "results.json"
-    metrics.write_json(path)
-
-    record = json.loads(path.read_text())
     assert record == {
         "kernel": "jax",
         "material_elasticity": "jelly",
@@ -33,21 +31,3 @@ def test_run_metrics_writes_flat_results_record(tmp_path):
         "steps_per_sec": 500.0,
         "render_path": None,
     }
-
-
-def test_metrics_dataframe_loads_results_json_files(tmp_path):
-    first = RunMetrics(
-        config=RunConfig("jax", "jelly", 32, 16, 1, 2, False),
-        elapsed_s=0.01,
-    )
-    second = RunMetrics(
-        config=RunConfig("cuda_v3", "jelly", 64, 16, 1, 2, False),
-        elapsed_s=0.005,
-    )
-    first.write_json(tmp_path / "a.json")
-    second.write_json(tmp_path / "b.json")
-
-    df = metrics_dataframe([tmp_path / "a.json", tmp_path / "b.json"])
-
-    assert list(df["kernel"]) == ["jax", "cuda_v3"]
-    assert list(df["ms_per_step"]) == [5.0, 2.5]

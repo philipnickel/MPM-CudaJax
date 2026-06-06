@@ -1,6 +1,6 @@
+import json
 import os
 import time
-from dataclasses import replace
 
 import hydra
 import jax
@@ -10,7 +10,6 @@ from omegaconf import DictConfig
 from tqdm import tqdm
 
 import mpm_jax.backends  # noqa: F401 - registers Hydra backend config choices
-from mpm_jax.metrics import RunConfig, RunMetrics
 from mpm_jax.rendering import render_warp_opengl
 from mpm_jax.solver import MPMSolver
 
@@ -20,7 +19,7 @@ from mpm_jax.solver import MPMSolver
 # ---------------------------------------------------------------------------
 
 
-def _run_solver(solver, run_config: RunConfig):
+def _run_solver(solver, *, num_frames, render_enabled):
     """Drive an MPMSolver, capturing frames only when rendering is enabled."""
     solver.step()
     jax.block_until_ready(solver.state.x)
@@ -29,26 +28,31 @@ def _run_solver(solver, run_config: RunConfig):
     frames = []
 
     t0 = time.perf_counter()
-    for _ in tqdm(range(run_config.num_frames), desc="simulate"):
-        if run_config.render_enabled:
+    for _ in tqdm(range(num_frames), desc="simulate"):
+        if render_enabled:
             frames.append(np.array(solver.state.x))
         solver.step()
-        if run_config.render_enabled:
+        if render_enabled:
             jax.block_until_ready(solver.state.x)
-    if not run_config.render_enabled:
+    if not render_enabled:
         jax.block_until_ready(solver.state.x)
     elapsed = time.perf_counter() - t0
 
     return frames, elapsed
 
 
-def run(cfg: DictConfig, run_config: RunConfig):
+def run(cfg: DictConfig):
     """Instantiate the runtime config, build the solver, and drive it.
 
-    Returns (frames, elapsed_s).
+    Returns (solver, frames, elapsed_s).
     """
     solver = MPMSolver(hydra.utils.instantiate(cfg.solver))
-    return _run_solver(solver, run_config)
+    frames, elapsed = _run_solver(
+        solver,
+        num_frames=int(cfg.sim.num_frames),
+        render_enabled=bool(cfg.render.get("enabled", True)),
+    )
+    return solver, frames, elapsed
 
 
 # ---------------------------------------------------------------------------
@@ -60,25 +64,31 @@ def run(cfg: DictConfig, run_config: RunConfig):
 def main(cfg: DictConfig):
     run_dir = os.path.abspath(HydraConfig.get().runtime.output_dir)
     choices = HydraConfig.get().runtime.choices
-    run_config = RunConfig.from_hydra(cfg, choices)
+    num_frames = int(cfg.sim.num_frames)
+    render_enabled = bool(cfg.render.get("enabled", True))
 
-    frames, elapsed = run(cfg, run_config)
-    metrics = RunMetrics(config=run_config, elapsed_s=elapsed)
+    solver, frames, elapsed = run(cfg)
+    metrics = solver.metrics(
+        elapsed,
+        num_frames=num_frames,
+        render_enabled=render_enabled,
+        material_elasticity=choices.get("material", "unknown"),
+    )
 
     # Print timing summary
     backend_label = "solver-loop"
     print(
-        f"\n{backend_label} ({run_config.kernel}): {metrics.total_steps} steps in {metrics.elapsed_s:.2f}s "
-        f"({metrics.steps_per_sec:.1f} steps/s, {metrics.ms_per_step:.2f} ms/step)"
+        f"\n{backend_label} ({metrics['kernel']}): {metrics['total_steps']} steps in {elapsed:.2f}s "
+        f"({metrics['steps_per_sec']:.1f} steps/s, {metrics['ms_per_step']:.2f} ms/step)"
     )
 
     print(
-        f"\nWall-clock timing: {metrics.ms_per_frame:.3f} ms/frame "
-        f"({run_config.steps_per_frame} substeps each, n={run_config.num_frames})"
+        f"\nWall-clock timing: {elapsed / num_frames * 1000:.3f} ms/frame "
+        f"({solver.steps_per_frame} substeps each, n={num_frames})"
     )
 
     export_path = None
-    if run_config.render_enabled and frames:
+    if render_enabled and frames:
         render_cfg = cfg.get("render", {})
         fps = int(render_cfg.get("fps", 30))
         radius = float(render_cfg.get("point_radius", 0.008))
@@ -93,11 +103,12 @@ def main(cfg: DictConfig):
             width=int(render_cfg.get("width", 960)),
             height=int(render_cfg.get("height", 720)),
         )
-        metrics = replace(metrics, render_path=export_path)
-    elif not run_config.render_enabled:
+        metrics["render_path"] = export_path
+    elif not render_enabled:
         print("\nRendering disabled.")
 
-    metrics.write_json(os.path.join(run_dir, "results.json"))
+    with open(os.path.join(run_dir, "results.json"), "w") as f:
+        json.dump(metrics, f, indent=2)
 
 
 if __name__ == "__main__":
