@@ -21,6 +21,7 @@ tag: jelly
 profile:
   enabled: false
   label: null               # trace run name (null -> backend name); set to keep a focused capture separate
+  disable_command_buffers: true  # graphs hide kernels from the profiler; turn them off during capture
   warmup_frames: 1          # throwaway frames before the trace starts
   step_mode: frame           # frame = jitted fori_loop; staged = per-stage jitted substeps
   options:                  # splatted onto jax.profiler.ProfileOptions via setattr

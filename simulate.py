@@ -1,6 +1,43 @@
+# Trace collection disables CUDA graphs so kernels are visible to the profiler
+# (graphs hide them inside cuGraphLaunch -> empty GPU timeline). XLA reads
+# XLA_FLAGS once, at backend init during the jax imports below, so the flag must
+# be flipped here -- before importing jax, hence too early for the Hydra config
+# (we sniff argv for the trace configs / an explicit profile.enabled=true).
+# ruff: noqa: E402
+import os
+import re
+import sys
+
+
+def _disable_command_buffers_for_trace(argv):
+    if any("disable_command_buffers=false" in a.lower() for a in argv):
+        return
+    cfg_name = "config"
+    for i, a in enumerate(argv):
+        if a in ("-cn", "--config-name") and i + 1 < len(argv):
+            cfg_name = argv[i + 1]
+        elif a.startswith(("--config-name=", "-cn=")):
+            cfg_name = a.split("=", 1)[1]
+    if cfg_name not in ("trace", "trace_substep") and not any(
+        "profile.enabled=true" in a.lower() for a in argv
+    ):
+        return
+    flags = os.environ.get("XLA_FLAGS", "")
+    if "--xla_gpu_enable_command_buffer" in flags:
+        flags = re.sub(
+            r"--xla_gpu_enable_command_buffer=\S*",
+            "--xla_gpu_enable_command_buffer=",
+            flags,
+        )
+    else:
+        flags = f"{flags} --xla_gpu_enable_command_buffer=".strip()
+    os.environ["XLA_FLAGS"] = flags
+
+
+_disable_command_buffers_for_trace(sys.argv)
+
 import json
 import logging
-import os
 
 import hydra
 import jax
@@ -26,14 +63,19 @@ def main(cfg: DictConfig):
     run_dir = os.path.abspath(HydraConfig.get().runtime.output_dir)
     render_enabled = bool(cfg.render.get("enabled", True))
 
-    solver = MPMSolver(hydra.utils.instantiate(cfg.solver))
-
     profile_cfg = cfg.get("profile", {})
     profile_enabled = bool(profile_cfg.get("enabled", False))
     step_mode = str(profile_cfg.get("step_mode", "frame"))
     if step_mode not in {"frame", "staged"}:
         raise ValueError("profile.step_mode must be 'frame' or 'staged'.")
     staged = step_mode == "staged"
+
+    if profile_enabled:
+        logger.info(
+            "Trace collection: XLA_FLAGS=%r", os.environ.get("XLA_FLAGS", "")
+        )
+
+    solver = MPMSolver(hydra.utils.instantiate(cfg.solver))
 
     # Warmup (JIT compilation) always runs outside any trace.
     solver.warmup(int(profile_cfg.get("warmup_frames", 1)), staged=staged)
