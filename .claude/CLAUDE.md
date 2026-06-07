@@ -57,7 +57,6 @@ pixi run test                                     # pytest
 pixi run sim                                      # task alias for `python simulate.py`
 pixi run ncu-ui                                   # Nsight Compute GUI in default env
 pixi run sweep-particles                          # task alias for `simulate.py -cn sweep sweep=particle_count`
-pixi run sweep-density                            # task alias for `simulate.py -cn sweep sweep=particle_density`
 pixi run plot-sweeps                              # plot sweep CSVs into figures/sweeps/
 pixi add <pkg>                                    # add a runtime dep (edits pyproject.toml)
 pixi add --feature gpu <pkg>                      # add to the GPU feature used by default
@@ -90,7 +89,7 @@ conf/                  Hydra config groups
   material/            jelly.yaml  (constitutive model)
   sim/default.yaml     n_particles, num_grids, dt, ...
   sweep.yaml           pre-baked Hydra multirun sweep entry point
-  sweep/               scale-axis config group (all, particle_count, particle_density, weak_scaling)
+  sweep/               scale-axis config group (particle_count, weak_scaling)
 src/mpm_jax/
   types.py             MPMState, MPMParams
   solver.py            RuntimeConfig + MPMSolver + jitted frame stepping + get_particles
@@ -207,20 +206,17 @@ pixi run ncu-ui
 # args: simulate.py sim=benchmark backend=cutile_v3 render.enabled=false
 
 # Sweeps (Hydra multirun). One entry point + a sweep/ config group axis.
-pixi run python simulate.py -cn sweep                       # all backends, benchmark only
-pixi run python simulate.py -cn sweep sweep=particle_count
-pixi run python simulate.py -cn sweep sweep=particle_density
-pixi run python simulate.py -cn sweep sweep=weak_scaling
-pixi run sweep-all                                 # task alias
+pixi run python simulate.py -cn sweep                       # particle_count (default)
+pixi run python simulate.py -cn sweep sweep=particle_count  # constant grid, particle count up
+pixi run python simulate.py -cn sweep sweep=weak_scaling    # constant active PPC, particle count up
+pixi run sweep                                     # task alias (default = particle_count)
 pixi run sweep-particles                           # task alias
-pixi run sweep-density                             # task alias
 pixi run sweep-weak                                # task alias
 pixi run plot-sweeps                               # write figures/sweeps/<gpu-kind>/
 
 # Sweep definitions (sweep group choices in conf/sweep/)
-# - particle_count: G=96, N=2^18..2^24, 50 substeps
-# - particle_density: N=10M, G=32,64,96,128,160,192, 50 substeps
-# - weak_scaling: active PPC ~= 8.492, G=32,64,96,128,160,192, 50 substeps
+# - particle_count: G=96, N=2^18..2^24, 50 substeps        (constant grid, N up)
+# - weak_scaling:   active PPC ~= 8.492, G=32..192, 50 substeps  (constant PPC, N up)
 
 # Tests
 pixi run test

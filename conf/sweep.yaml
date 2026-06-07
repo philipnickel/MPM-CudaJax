@@ -1,18 +1,13 @@
-# Backend kernel sweep entry point.
+# Backend kernel sweep entry point. Two scaling axes:
 #
-# Selects a sweep axis via the `sweep/` config group. The default is `all`
-# (every backend at the standard benchmark resolution, no extra axis);
-# override on the CLI to add a scaling axis:
-#
-#   pixi run python simulate.py -cn sweep                       # all backends only
-#   pixi run python simulate.py -cn sweep sweep=particle_count  # + particle-count axis
-#   pixi run python simulate.py -cn sweep sweep=particle_density
-#   pixi run python simulate.py -cn sweep sweep=weak_scaling
+#   pixi run python simulate.py -cn sweep                       # particle_count (default)
+#   pixi run python simulate.py -cn sweep sweep=particle_count  # constant grid, particle count up
+#   pixi run python simulate.py -cn sweep sweep=weak_scaling    # constant active PPC, particle count up
 #
 # Build CUDA kernels first: pixi install
 defaults:
     - config
-    - sweep: all
+    - sweep: particle_count
     - override /sim: benchmark
     - _self_
 
@@ -25,6 +20,11 @@ hydra:
         scaling_plot:
             _target_: postprocessing.callbacks.ScalingPlotCallback
             baseline_kernel: jax
+
+# Sweeps need only enough substeps to average past warmup; 5 keeps the big-N
+# jobs short. Override on the CLI for longer runs.
+sim:
+    steps_per_frame: 5
 
 render:
     enabled: false

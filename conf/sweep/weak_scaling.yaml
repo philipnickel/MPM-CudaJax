@@ -1,7 +1,8 @@
 # @package _global_
-# Weak-scaling axis at fixed active-cell PPC ~= 8.492: G = 32, 64, 96, 128, 160, 192.
+# Constant active PPC (~8.5), particle count up: same N as particle_count, G derived per-N.
+# 5 log-spaced points 1M..25M; the full N catalogue lives in conf/scale/weak_*.yaml.
 hydra:
     sweeper:
         params:
-            scale: weak_g32,weak_g64,weak_g96,weak_g128,weak_g160,weak_g192
+            scale: weak_1m,weak_2m,weak_5m,weak_10m,weak_25m
 tag: sweep_weak_scaling

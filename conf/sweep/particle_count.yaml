@@ -1,7 +1,8 @@
 # @package _global_
-# Particle-count axis at fixed G=96: N = 2^18 .. 2^24.
+# Constant grid (G=96), particle count up.
+# 5 log-spaced points 1M..25M; the full N catalogue lives in conf/scale/count_*.yaml.
 hydra:
     sweeper:
         params:
-            scale: count_2p18,count_2p19,count_2p20,count_2p21,count_2p22,count_2p23,count_2p24
+            scale: count_1m,count_2m,count_5m,count_10m,count_25m
 tag: sweep_particle_count

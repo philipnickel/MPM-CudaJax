@@ -1,5 +1,5 @@
 # @package _global_
-# Particle-density point: fixed N=10M, G=64.
+# particle_density point: N=20M at G=64 (active PPC ~= 149.0).
 sim:
-    n_particles: 10000000
+    n_particles: 20000000
     num_grids: 64

@@ -51,7 +51,7 @@ def test_each_backend_config_instantiates_expected_backend_name(monkeypatch):
         assert backend.name == choice
 
 
-def _compose_sweep(choice: str = "all"):
+def _compose_sweep(choice: str = "particle_count"):
     # Mirror Hydra's defaults list: group choice first, then `_self_` (sweep.yaml) on top.
     # The group choices use `# @package _global_`, so their bodies merge at the root.
     group_cfg = OmegaConf.load(CONF_DIR / "sweep" / f"{choice}.yaml")
@@ -69,7 +69,7 @@ def _backend_choices(cfg) -> list[str]:
 
 def test_scaling_sweeps_use_backend_choices_and_valid_scale_configs():
     valid_choices = set(backends.backend_choices())
-    for choice in ["particle_count", "particle_density", "weak_scaling"]:
+    for choice in ["particle_count", "weak_scaling"]:
         cfg = _compose_sweep(choice)
         backend_choices = _backend_choices(cfg)
         scale_choices = _scale_choices(cfg)
@@ -85,37 +85,29 @@ def test_scaling_sweeps_use_backend_choices_and_valid_scale_configs():
             assert scale_cfg.sim.num_grids % 4 == 0
 
 
-def test_particle_count_sweep_uses_power_counts_at_fixed_g96():
+_PARTICLE_COUNT_SEQUENCE = [
+    100_000, 200_000, 400_000, 800_000, 1_000_000,
+    2_000_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000,
+    100_000_000, 125_000_000,
+]
+
+
+def test_particle_count_sweep_uses_canonical_n_subset_at_fixed_g96():
     cfg = _compose_sweep("particle_count")
     particle_choices = []
     grid_choices = []
     for choice in _scale_choices(cfg):
         scale_cfg = OmegaConf.load(CONF_DIR / "scale" / f"{choice}.yaml")
-        n_particles = int(scale_cfg.sim.n_particles)
-        num_grids = int(scale_cfg.sim.num_grids)
-        assert n_particles & (n_particles - 1) == 0
-        particle_choices.append(n_particles)
-        grid_choices.append(num_grids)
+        particle_choices.append(int(scale_cfg.sim.n_particles))
+        grid_choices.append(int(scale_cfg.sim.num_grids))
 
-    assert particle_choices == [2**power for power in range(18, 25)]
+    assert particle_choices, "particle_count sweep must select at least one scale"
+    assert set(particle_choices).issubset(_PARTICLE_COUNT_SEQUENCE)
+    assert particle_choices == sorted(particle_choices)
     assert set(grid_choices) == {96}
 
 
-def test_particle_density_sweep_uses_fixed_particles_and_requested_grids():
-    cfg = _compose_sweep("particle_density")
-    grid_choices = []
-    particle_choices = []
-    for choice in _scale_choices(cfg):
-        scale_cfg = OmegaConf.load(CONF_DIR / "scale" / f"{choice}.yaml")
-        n_particles = int(scale_cfg.sim.n_particles)
-        grid_choices.append(int(scale_cfg.sim.num_grids))
-        particle_choices.append(n_particles)
-
-    assert set(particle_choices) == {10000000}
-    assert grid_choices == [32, 64, 96, 128, 160, 192]
-
-
-def test_weak_scaling_sweep_keeps_active_ppc_constant():
+def test_weak_scaling_sweep_keeps_active_ppc_near_target():
     cfg = _compose_sweep("weak_scaling")
     grid_choices = []
     particle_choices = []
@@ -129,35 +121,41 @@ def test_weak_scaling_sweep_keeps_active_ppc_constant():
         particle_choices.append(n_particles)
         active_ppc_choices.append(n_particles / active_cells)
 
-    assert grid_choices == [32, 64, 96, 128, 160, 192]
+    assert particle_choices, "weak_scaling sweep must select at least one scale"
+    assert set(particle_choices).issubset(_PARTICLE_COUNT_SEQUENCE)
     assert particle_choices == sorted(particle_choices)
+    assert all(g > 0 and g % 4 == 0 for g in grid_choices)
+    # G is rounded to multiples of 4 to satisfy super-cell-tiled backends, so PPC
+    # isn't exactly the target — but should stay within ~10% of 8.5.
     target_ppc = 10000000 / (0.8**3 * 132**3)
     for active_ppc in active_ppc_choices:
-        assert abs(active_ppc - target_ppc) / target_ppc < 1e-5
-
-
-def test_sweep_default_choice_is_all_with_no_scale_axis():
-    cfg = _compose_sweep("all")
-    valid_choices = set(backends.backend_choices())
-    backend_choices = _backend_choices(cfg)
-
-    assert cfg.tag == "sweep_all"
-    assert "scale" not in cfg.hydra.sweeper.params
-    assert backend_choices
-    for choice in backend_choices:
-        assert choice == choice.strip()
-        assert choice in valid_choices
+        assert abs(active_ppc - target_ppc) / target_ppc < 0.10
 
 
 def test_sweep_axis_tags_match_plot_sweeps_specs():
     expected = {
         "particle_count": "sweep_particle_count",
-        "particle_density": "sweep_particle_density",
         "weak_scaling": "sweep_weak_scaling",
+        "particle_density": "sweep_particle_density",
     }
     for choice, expected_tag in expected.items():
         cfg = _compose_sweep(choice)
         assert cfg.tag == expected_tag
+
+
+def test_particle_density_sweep_uses_fixed_n_and_varying_grid():
+    cfg = _compose_sweep("particle_density")
+    particle_choices = []
+    grid_choices = []
+    for choice in _scale_choices(cfg):
+        scale_cfg = OmegaConf.load(CONF_DIR / "scale" / f"{choice}.yaml")
+        particle_choices.append(int(scale_cfg.sim.n_particles))
+        grid_choices.append(int(scale_cfg.sim.num_grids))
+
+    assert set(particle_choices) == {20_000_000}
+    assert grid_choices == sorted(grid_choices)
+    assert all(g % 4 == 0 for g in grid_choices)
+    assert grid_choices[0] >= 64 and grid_choices[-1] <= 196
 
 
 def test_default_hydra_output_dirs_are_aggregation_friendly():

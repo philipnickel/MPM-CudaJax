@@ -109,6 +109,10 @@ JAX_TRACEBACK_IN_LOCATIONS_LIMIT = "-1"
 JAX_COMPILATION_CACHE_DIR = "$PIXI_PROJECT_ROOT/.jax_cache"
 JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS = "0"
 JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES = "0"
+# Default JAX preallocates only 75% of the GPU's memory, which is too tight for
+# the upper-end scaling points (functional updates hold both current and next
+# state pytrees). 0.95 leaves room for ~150M particles on an 80GB A100.
+XLA_PYTHON_CLIENT_MEM_FRACTION = "0.95"
 # JAX GPU performance tips: single-host multi-device NCCL tuning. Single-GPU
 # runs do not use these, and the JAX docs do not recommend them for multi-host.
 NCCL_LL128_BUFFSIZE = "-2"
@@ -130,11 +134,10 @@ lint = "ruff check ."
 dead-code = "vulture"
 clean = { cmd = "rm -f src/mpm_jax/p2g/cuda/_p2g_ffi*.so *.sqlite *.nsys-rep && rm -rf multirun outputs output traces dist .pytest_cache .ruff_cache .jax_cache *.egg-info src/*.egg-info && find . -path ./.pixi -prune -o -type d -name __pycache__ -print0 | xargs -0 rm -rf" }
 sim = "python simulate.py"
-sweep = "python simulate.py -cn sweep sweep=particle_count"
-sweep-all = "python simulate.py -cn sweep"
+sweep = "python simulate.py -cn sweep"
 sweep-particles = "python simulate.py -cn sweep sweep=particle_count"
-sweep-density = "python simulate.py -cn sweep sweep=particle_density"
 sweep-weak = "python simulate.py -cn sweep sweep=weak_scaling"
+sweep-density = "python simulate.py -cn sweep sweep=particle_density"
 plot-sweeps = "python tools/plot_sweeps.py"
 
 # Push the working tree to a remote host (e.g. `pixi run sync lambda`).

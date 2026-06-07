@@ -1,45 +1,39 @@
 """Scaling-plot rendering for MPM-CudaJax benchmark sweeps.
 
-The multirun callback writes ONE parquet at the sweep root (the combined
-multirun dataframe). This module loads that parquet and renders ms/step,
-throughput, and speedup-vs-baseline plots — one figure per sweep tag,
-faceted by ``gpu_kind`` when more than one is present.
+Both sweep groups (``sweep_particle_count`` and ``sweep_weak_scaling``) sweep
+particle count on x, so the only difference between them is the title. We
+hardcode the four plots we want — substep wall time, throughput, substep
+speedup vs jax, and throughput improvement vs jax — and call a single
+``_plot`` helper for each. No tag/spec dispatch dict.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import math
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-import matplotlib.ticker as mticker
 import pandas as pd
 import seaborn as sns
 
 logger = logging.getLogger(__name__)
 plt.switch_backend("Agg")
 
-# tag -> (x column, x-axis label, plot title)
-SWEEP_SPECS: dict[str, tuple[str, str, str]] = {
-    "sweep_particle_count": (
-        "n_particles", "particles", "Particle-count scaling at G=96",
+# Each sweep tag's x column, x-axis label, and title prefix. Add an entry here
+# to teach the renderer about a new sweep.
+GROUP_SPECS: dict[str, tuple[str, str, str]] = {
+    "sweep_particle_count": ("n_particles", "particles", "Constant grid (G=96)"),
+    "sweep_weak_scaling": (
+        "n_particles", "particles", "Constant active PPC ($\\approx 8.5$)",
     ),
     "sweep_particle_density": (
-        "num_grids", "grid resolution G (N=10M)", "Particle-density scaling",
-    ),
-    "sweep_weak_scaling": (
-        "n_particles", "particles (constant active PPC)", "Weak scaling",
-    ),
-    "sweep_all": (
-        "n_particles", "particles", "Backend comparison at benchmark",
+        "num_grids", "grid resolution G", "Constant N=20M",
     ),
 }
 
 
 def load_jobs(sweep_root: Path) -> pd.DataFrame:
-    """Build the combined multirun dataframe from per-job ``results.json``."""
     files = sorted(sweep_root.rglob("results.json"))
     if not files:
         raise FileNotFoundError(f"No results.json under {sweep_root}")
@@ -47,53 +41,44 @@ def load_jobs(sweep_root: Path) -> pd.DataFrame:
 
 
 def load_parquet(*paths: Path) -> pd.DataFrame:
-    """Concatenate one or more multirun parquets into a single dataframe."""
     if not paths:
         raise ValueError("load_parquet needs at least one path")
     return pd.concat((pd.read_parquet(p) for p in paths), ignore_index=True)
 
 
-def _save(fig: plt.Figure, path: Path) -> None:
-    fig.savefig(path)
-    plt.close(fig)
-    logger.info("Wrote %s", path)
-
-
-def _sci(value: float, _pos) -> str:
-    """Classical scientific notation: 1 × 10^n, rendered via mathtext."""
+def _kmg(value: float, _pos) -> str:
     if value <= 0:
         return ""
-    exp = int(math.floor(math.log10(value)))
-    mant = value / 10**exp
-    if abs(mant - 1.0) < 1e-9:
-        return rf"$10^{{{exp}}}$"
-    return rf"${mant:.1f}\times 10^{{{exp}}}$"
+    if value >= 1e6:
+        return f"{value / 1e6:.3g}M"
+    if value >= 1e3:
+        return f"{value / 1e3:.3g}k"
+    return f"{value:g}"
 
 
-def _set_title(fig: plt.Figure, ax: plt.Axes, title: str, subtitle: str) -> None:
-    """Main title above the figure + italic subtitle on the axes, both centered."""
-    fig.suptitle(title, fontweight="bold")
-    ax.set_title(subtitle, style="italic", color="0.35")
-
-
-def _lineplot(
+def _plot(
     df: pd.DataFrame,
     *,
     x: str,
-    y: str,
     xlabel: str,
+    y: str,
     ylabel: str,
     title: str,
     subtitle: str,
-    path: Path,
+    out_path: Path,
     y_log: bool = True,
     baseline_line: bool = False,
 ) -> None:
+    """One sweep lineplot."""
     fig, ax = plt.subplots(figsize=(7.0, 4.3), constrained_layout=True)
     sns.lineplot(data=df, x=x, y=y, hue="kernel", marker="o", ax=ax)
     ax.set_xscale("log", base=2)
-    if x == "n_particles":
-        ax.xaxis.set_major_formatter(mticker.FuncFormatter(_sci))
+    # Tick at every measured point so the axis matches the data exactly.
+    xs = sorted(df[x].dropna().unique())
+    ax.set_xticks(xs)
+    ax.set_xticklabels(
+        [_kmg(v, None) if x == "n_particles" else f"{int(round(v))}" for v in xs]
+    )
     if y_log:
         ax.set_yscale("log")
     if baseline_line:
@@ -103,45 +88,57 @@ def _lineplot(
     legend = ax.get_legend()
     if legend is not None:
         legend.set_title("backend")
-    _set_title(fig, ax, title, subtitle)
-    _save(fig, path)
+    fig.suptitle(title, fontweight="bold")
+    ax.set_title(subtitle, style="italic", color="0.35")
+    fig.savefig(out_path)
+    plt.close(fig)
+    logger.info("Wrote %s", out_path)
 
 
-def _plot_tag(
-    df: pd.DataFrame, tag: str, out_dir: Path, baseline: str, gpu_label: str
+def _plot_sweep(
+    df: pd.DataFrame,
+    *,
+    x: str,
+    xlabel: str,
+    group_title: str,
+    out_dir: Path,
+    baseline: str,
+    gpu_label: str,
 ) -> None:
-    x, xlabel, title = SWEEP_SPECS[tag]
-    sub = df[df["tag"] == tag].copy() if "tag" in df else df.copy()
-    if sub.empty or x not in sub:
-        return
+    """Render the 3 plots for one sweep group."""
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    _lineplot(
-        sub, x=x, y="ms_per_step",
-        xlabel=xlabel, ylabel="ms / step",
-        title=title, subtitle=gpu_label,
-        path=out_dir / f"{tag}_ms_per_step.png",
+    _plot(
+        df, x=x, xlabel=xlabel,
+        y="ms_per_step", ylabel="ms / substep",
+        title=f"{group_title}: substep wall time",
+        subtitle=gpu_label,
+        out_path=out_dir / "ms_per_substep.png",
     )
-    _lineplot(
-        sub, x=x, y="particles_per_sec",
-        xlabel=xlabel, ylabel="particles / second",
-        title=f"{title} (throughput)", subtitle=gpu_label,
-        path=out_dir / f"{tag}_particles_per_sec.png",
+    _plot(
+        df, x=x, xlabel=xlabel,
+        y="particles_per_sec", ylabel="particles / second",
+        title=f"{group_title}: throughput",
+        subtitle=gpu_label,
+        out_path=out_dir / "particles_per_sec.png",
     )
 
     base = (
-        sub[sub["kernel"] == baseline][[x, "ms_per_step"]]
+        df[df["kernel"] == baseline][[x, "ms_per_step"]]
         .rename(columns={"ms_per_step": "_base_ms"})
     )
     if base.empty:
-        logger.warning("No %s baseline rows for tag=%s; skipping speedup", baseline, tag)
+        logger.warning("No %s baseline rows in group '%s'", baseline, group_title)
         return
-    speedup = sub.merge(base, on=x, how="inner")
-    speedup["speedup"] = speedup["_base_ms"] / speedup["ms_per_step"]
-    _lineplot(
-        speedup, x=x, y="speedup",
-        xlabel=xlabel, ylabel=f"speedup vs {baseline}",
-        title=f"{title} (speedup)", subtitle=gpu_label,
-        path=out_dir / f"{tag}_speedup_vs_{baseline}.png",
+    merged = df.merge(base, on=x, how="inner")
+    merged["speedup_substep"] = merged["_base_ms"] / merged["ms_per_step"]
+    _plot(
+        merged, x=x, xlabel=xlabel,
+        y="speedup_substep",
+        ylabel=f"speedup vs {baseline}",
+        title=f"{group_title}: substep speedup vs {baseline}",
+        subtitle=gpu_label,
+        out_path=out_dir / f"speedup_vs_{baseline}.png",
         y_log=False, baseline_line=True,
     )
 
@@ -152,12 +149,11 @@ def render(
     *,
     baseline: str = "jax",
     gpu_subdirs: bool = True,
-) -> list[tuple[str, str]]:
-    """Render every known sweep tag present in ``df``, per gpu_kind.
+) -> None:
+    """Render every sweep group present in ``df``, per gpu_kind.
 
-    If ``gpu_subdirs`` is True (the CLI default), each gpu_kind's plots
-    land in ``out_dir/<gpu_kind>/``. Set to False when ``out_dir`` is
-    already gpu-specific (the callback's case)."""
+    Layout: ``<out_dir>/<gpu_kind>/<group>/<plot>.png``. Set
+    ``gpu_subdirs=False`` when ``out_dir`` is already gpu-specific."""
     sns.set_theme(style="darkgrid", context="paper")
     out_dir.mkdir(parents=True, exist_ok=True)
     groups = (
@@ -165,16 +161,19 @@ def render(
         if "gpu_kind" in df
         else [("gpu", df)]
     )
-    rendered: list[tuple[str, str]] = []
     for gpu_kind, gpu_df in groups:
         gpu_label = str(gpu_kind) if gpu_kind is not None else "gpu"
-        target = (out_dir / gpu_label) if gpu_subdirs else out_dir
-        target.mkdir(parents=True, exist_ok=True)
-        present = set(gpu_df["tag"].dropna().unique()) if "tag" in gpu_df else set()
-        for tag in SWEEP_SPECS:
-            if tag in present:
-                _plot_tag(gpu_df, tag, target, baseline, gpu_label)
-                rendered.append((gpu_label, tag))
-    if not rendered:
-        raise RuntimeError("No known sweep tags in the data — nothing to plot.")
-    return rendered
+        gpu_dir = (out_dir / gpu_label) if gpu_subdirs else out_dir
+        for tag, (x, xlabel, group_title) in GROUP_SPECS.items():
+            sub = gpu_df[gpu_df["tag"] == tag] if "tag" in gpu_df else pd.DataFrame()
+            if sub.empty:
+                continue
+            _plot_sweep(
+                sub,
+                x=x,
+                xlabel=xlabel,
+                group_title=group_title,
+                out_dir=gpu_dir / tag.removeprefix("sweep_"),
+                baseline=baseline,
+                gpu_label=gpu_label,
+            )

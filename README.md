@@ -151,15 +151,13 @@ holds the shared bits (multirun mode, every backend, `sim=benchmark`, render
 off) and selects a scaling axis from the `conf/sweep/` config group:
 
 ```bash
-pixi run python simulate.py -cn sweep                       # all backends, no scale axis
-pixi run python simulate.py -cn sweep sweep=particle_count
-pixi run python simulate.py -cn sweep sweep=particle_density
-pixi run python simulate.py -cn sweep sweep=weak_scaling
+pixi run python simulate.py -cn sweep                       # particle_count (default)
+pixi run python simulate.py -cn sweep sweep=particle_count  # constant grid, particle count up
+pixi run python simulate.py -cn sweep sweep=weak_scaling    # constant active PPC, particle count up
 ```
 
 The benchmark preset uses one frame with 50 substeps. `particle_count` uses
-fixed `G=96` and particle counts `2^18..2^24`. `particle_density` fixes
-`N=10M` and compares `G=32,64,96,128,160,192`. `weak_scaling` keeps
+fixed `G=96` and particle counts `2^18..2^24`. `weak_scaling` keeps
 active-cell PPC near the benchmark density (`particles_per_active_cell ~=
 8.492`) while scaling both `G` and `N`.
 
