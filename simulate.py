@@ -4,20 +4,32 @@ import logging
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
-import hydra
-import jax
-import nvtx
-from hydra.core.hydra_config import HydraConfig
-from omegaconf import DictConfig, OmegaConf
+# CUDA reads CUDA_MPS_ACTIVE_THREAD_PERCENTAGE when the driver attaches, which
+# happens during `import jax` under JAX_PLATFORMS=cuda. Pre-parse the Hydra CLI
+# (mps_thread_percent=N, +mps_thread_percent=N, ++mps_thread_percent=N) and set
+# the env var before the heavy CUDA imports below.
+for _arg in sys.argv[1:]:
+    if "mps_thread_percent=" in _arg:
+        _val = _arg.split("=", 1)[1].strip()
+        if _val and _val.lower() not in ("null", "none"):
+            os.environ["CUDA_MPS_ACTIVE_THREAD_PERCENTAGE"] = _val
+        break
 
-import mpm_jax.p2g.backends  # noqa: F401 - registers Hydra backend config choices
-import mpm_jax.resolvers  # noqa: F401 - registers OmegaConf resolvers (e.g. ppc_grid)
-import postprocessing  # noqa: F401 - registers Hydra `plot` config group via hydra-zen
-from mpm_jax.profiling import NVTX_DOMAIN
-from mpm_jax.rendering import render_warp_opengl
-from mpm_jax.solver import MPMSolver
+import hydra  # noqa: E402 - kept below MPS preamble (must run before jax)
+import jax  # noqa: E402
+import nvtx  # noqa: E402
+from hydra.core.hydra_config import HydraConfig  # noqa: E402
+from omegaconf import DictConfig, OmegaConf  # noqa: E402
+
+import mpm_jax.p2g.backends  # noqa: F401, E402 - registers Hydra backend config choices
+import mpm_jax.resolvers  # noqa: F401, E402 - registers OmegaConf resolvers (e.g. ppc_grid)
+import postprocessing  # noqa: F401, E402 - registers Hydra `plot` config group via hydra-zen
+from mpm_jax.profiling import NVTX_DOMAIN  # noqa: E402
+from mpm_jax.rendering import render_warp_opengl  # noqa: E402
+from mpm_jax.solver import MPMSolver  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +113,12 @@ def _write_metrics(run_dir, metrics):
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig):
+    # MPS thread-percentage clamp is set by the preamble at the top of this
+    # file (must happen before `import jax`). Echo the value here for the log.
+    mps_pct = cfg.get("mps_thread_percent")
+    if mps_pct is not None:
+        logger.info("CUDA_MPS_ACTIVE_THREAD_PERCENTAGE=%d", int(mps_pct))
+
     run_dir = os.path.abspath(HydraConfig.get().runtime.output_dir)
     render_enabled = bool(cfg.render.get("enabled", True))
 
@@ -139,6 +157,7 @@ def main(cfg: DictConfig):
 
     metrics = solver.metrics(elapsed)
     metrics["tag"] = cfg.get("tag")
+    metrics["mps_thread_percent"] = cfg.get("mps_thread_percent")
     metrics["render_enabled"] = render_enabled
     metrics["gpu_kind"] = _slugify(metrics["gpu_type"])
     hydra_cfg = HydraConfig.get()

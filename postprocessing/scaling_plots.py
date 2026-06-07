@@ -98,7 +98,7 @@ def loglog_plot(
     baseline="jax",
 )
 def speedup_plot(
-    df, *, x, xlabel, baseline, title, filename, gpu_label, out_dir, **_
+    df, *, x, xlabel, title, filename, gpu_label, out_dir, baseline="jax", **_
 ):
     """Semilog (log x, linear y) speedup-vs-baseline plot."""
     base = (

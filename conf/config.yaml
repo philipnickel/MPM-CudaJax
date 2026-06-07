@@ -13,6 +13,12 @@ solver:
 
 tag: jelly
 
+# CUDA MPS thread-percentage clamp. null -> don't touch the env var (default).
+# Set to an integer (e.g. 20) to limit the process to that fraction of SMs.
+# Requires the MPS control daemon running externally (`nvidia-cuda-mps-control -d`).
+# Useful for strong-scaling experiments: sweep this axis to plot SM throughput.
+mps_thread_percent: null
+
 # JAX/XProf profiling. Writes a TensorBoard trace to traces/<label>/ (CUDA
 # streams + graphs, named-scope phases, HLO graph/op stats, memory). Warmup runs
 # outside the trace so one-time JIT compilation is not captured. View with
