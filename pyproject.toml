@@ -130,11 +130,11 @@ lint = "ruff check ."
 dead-code = "vulture"
 clean = { cmd = "rm -f src/mpm_jax/p2g/cuda/_p2g_ffi*.so *.sqlite *.nsys-rep && rm -rf multirun outputs output traces dist .pytest_cache .ruff_cache .jax_cache *.egg-info src/*.egg-info && find . -path ./.pixi -prune -o -type d -name __pycache__ -print0 | xargs -0 rm -rf" }
 sim = "python simulate.py"
-sweep = "python simulate.py -cn sweep_particle_count"
-sweep-all = "python simulate.py -cn sweep_all"
-sweep-particles = "python simulate.py -cn sweep_particle_count"
-sweep-density = "python simulate.py -cn sweep_particle_density"
-sweep-weak = "python simulate.py -cn sweep_weak_scaling"
+sweep = "python simulate.py -cn sweep sweep=particle_count"
+sweep-all = "python simulate.py -cn sweep"
+sweep-particles = "python simulate.py -cn sweep sweep=particle_count"
+sweep-density = "python simulate.py -cn sweep sweep=particle_density"
+sweep-weak = "python simulate.py -cn sweep sweep=weak_scaling"
 plot-sweeps = "python tools/plot_sweeps.py"
 
 # Push the working tree to a remote host (e.g. `pixi run sync lambda`).

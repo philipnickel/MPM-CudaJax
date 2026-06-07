@@ -146,20 +146,22 @@ All solver variants now run through the same JAX-owned frame loop. The pure-JAX 
 
 ## Sweeps
 
-Pre-baked Hydra multirun sweeps:
+Pre-baked Hydra multirun sweeps share one entry point `conf/sweep.yaml`. It
+holds the shared bits (multirun mode, every backend, `sim=benchmark`, render
+off) and selects a scaling axis from the `conf/sweep/` config group:
 
 ```bash
-pixi run python simulate.py -cn sweep_all
-pixi run python simulate.py -cn sweep_particle_count
-pixi run python simulate.py -cn sweep_particle_density
-pixi run python simulate.py -cn sweep_weak_scaling
+pixi run python simulate.py -cn sweep                       # all backends, no scale axis
+pixi run python simulate.py -cn sweep sweep=particle_count
+pixi run python simulate.py -cn sweep sweep=particle_density
+pixi run python simulate.py -cn sweep sweep=weak_scaling
 ```
 
-The benchmark preset uses one frame with 50 substeps. `sweep_particle_count`
-uses fixed `G=96` and particle counts `2^18..2^24`. `sweep_particle_density`
-fixes `N=10M` and compares `G=32,64,96,128,160,192`.
-`sweep_weak_scaling` keeps active-cell PPC near the benchmark density
-(`particles_per_active_cell ~= 8.492`) while scaling both `G` and `N`.
+The benchmark preset uses one frame with 50 substeps. `particle_count` uses
+fixed `G=96` and particle counts `2^18..2^24`. `particle_density` fixes
+`N=10M` and compares `G=32,64,96,128,160,192`. `weak_scaling` keeps
+active-cell PPC near the benchmark density (`particles_per_active_cell ~=
+8.492`) while scaling both `G` and `N`.
 
 Each combination gets its own
 `outputs/sweeps/<gpu-kind>/runs/<date>/<time>/<job>_<override-dirname>/` subdir
@@ -360,7 +362,8 @@ MPM-CudaJax/
 │   ├── nsight_profile.yaml
 │   ├── material/            # jelly.yaml
 │   ├── sim/default.yaml
-│   └── sweep_*.yaml
+│   ├── sweep.yaml          # sweep entry point + shared bits
+│   └── sweep/              # scale-axis config group: all, particle_count, ...
 └── src/
     └── mpm_jax/
         ├── types.py         # MPMState, MPMParams

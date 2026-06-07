@@ -1,0 +1,7 @@
+# @package _global_
+# Weak-scaling axis at fixed active-cell PPC ~= 8.492: G = 32, 64, 96, 128, 160, 192.
+hydra:
+    sweeper:
+        params:
+            scale: weak_g32,weak_g64,weak_g96,weak_g128,weak_g160,weak_g192
+tag: sweep_weak_scaling

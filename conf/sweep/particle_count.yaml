@@ -1,0 +1,7 @@
+# @package _global_
+# Particle-count axis at fixed G=96: N = 2^18 .. 2^24.
+hydra:
+    sweeper:
+        params:
+            scale: count_2p18,count_2p19,count_2p20,count_2p21,count_2p22,count_2p23,count_2p24
+tag: sweep_particle_count

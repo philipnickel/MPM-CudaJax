@@ -1,0 +1,3 @@
+# @package _global_
+# Every backend at the standard benchmark resolution. No extra scale axis.
+tag: sweep_all

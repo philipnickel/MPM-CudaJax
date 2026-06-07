@@ -1,0 +1,7 @@
+# @package _global_
+# Particle-density axis at fixed N=10M: G = 32, 64, 96, 128, 160, 192.
+hydra:
+    sweeper:
+        params:
+            scale: density_g32,density_g64,density_g96,density_g128,density_g160,density_g192
+tag: sweep_particle_density
