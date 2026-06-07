@@ -15,6 +15,10 @@
 #include "xla/ffi/api/ffi.h"
 
 constexpr int P2G_BLOCK_SIZE = 256;
+constexpr int P2G_WARP_SIZE = 32;
+constexpr int P2G_WARPS_PER_BLOCK = P2G_BLOCK_SIZE / P2G_WARP_SIZE;
+constexpr int P2G_STENCIL_NODES = 27;
+constexpr int P2G_GRID_CHANNELS = 4;  // mv_x, mv_y, mv_z, mass
 constexpr unsigned P2G_FULL_MASK = 0xFFFFFFFFu;
 
 inline int p2g_grid_nodes(int G) {
@@ -23,6 +27,11 @@ inline int p2g_grid_nodes(int G) {
 
 inline int p2g_launch_blocks(int n_particles) {
     return (n_particles + P2G_BLOCK_SIZE - 1) / P2G_BLOCK_SIZE;
+}
+
+inline int p2g_home_cell_count(int G) {
+    int cells_per_axis = G + 1;
+    return cells_per_axis * cells_per_axis * cells_per_axis;
 }
 
 inline void p2g_zero_grid(
@@ -89,7 +98,7 @@ __device__ __forceinline__ void p2g_load_particle(
 }
 
 // Quadratic B-spline base node + fractional offset for a particle position.
-// home/base convention must stay matched to home_super_cell_id in sort.py.
+// home/base convention must stay matched to home_cell_id in sort.py.
 __device__ __forceinline__ void p2g_base_fx(
     const float px[3], float inv_dx, int base[3], float fx[3]) {
     for (int d = 0; d < 3; d++) {
@@ -158,7 +167,11 @@ __device__ __forceinline__ void p2g_node_contribution(
     *m_contrib = weight * p_mass;
 }
 
-// Warp reduction over an arbitrary __match_any_sync peer mask (used by v2/v3):
+__device__ __forceinline__ int p2g_stencil_index(int di, int dj, int dk) {
+    return di * 9 + dj * 3 + dk;
+}
+
+// Warp reduction over an arbitrary peer mask (used by v2/v4):
 // sum `val` across all lanes in `mask`, returning the sum in ALL lanes. Walk
 // the set bits rather than an XOR butterfly, since match groups are not
 // power-of-two aligned.

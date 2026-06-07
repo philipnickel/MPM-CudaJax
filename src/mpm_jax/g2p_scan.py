@@ -4,9 +4,9 @@ Motivation
 ----------
 A naive vmap G2P would gather all 27 neighbour velocities at once
 (``gv = grid_v[index]`` → ``(N, 27, 3)``) and form the APIC outer products
-``(N, 27, 3, 3)`` before reducing over the 27 axis. At 8M particles those
-intermediates are ~2.6 GB + ~15 GB of HBM traffic per substep — the G2P analog
-of the ``(N, 27, *)`` blow-up that ``p2g_scan`` was written to avoid.
+``(N, 27, 3, 3)`` before reducing over the 27 axis. At multi-million particle
+counts those intermediates are gigabytes of HBM traffic per substep — the G2P
+analog of the ``(N, 27, *)`` blow-up that ``p2g_scan`` was written to avoid.
 
 This module mirrors ``p2g_scan``: ``lax.scan`` over the 27 offsets, gather one
 ``(N, 3)`` node per step, and accumulate the APIC reconstruction into the carry.

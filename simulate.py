@@ -15,11 +15,11 @@ from omegaconf import DictConfig, OmegaConf
 import mpm_jax.p2g.backends  # noqa: F401 - registers Hydra backend config choices
 import mpm_jax.resolvers  # noqa: F401 - registers OmegaConf resolvers (e.g. ppc_grid)
 import postprocessing  # noqa: F401 - registers Hydra `plot` config group via hydra-zen
-from mpm_jax.profiling import NVTX_DOMAIN
 from mpm_jax.rendering import render_warp_opengl
 from mpm_jax.solver import MPMSolver
 
 logger = logging.getLogger(__name__)
+NVTX_DOMAIN = "mpm_cudajax"
 
 
 def _slugify(value):

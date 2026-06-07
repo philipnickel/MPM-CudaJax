@@ -1,17 +1,18 @@
 """Cross-backend P2G NCU analysis figures.
 
-Reads the wide ``results.csv`` produced by a ``profile_nsight.py`` Hydra-multirun
-sweep (``metric_preset=full derive_metric=full``, one row per backend) over the
-custom P2G backends, and renders four figures: a hierarchical fp32 roofline, the
-atomic-scatter story, occupancy + its limiter, and the warp-issue-stall breakdown.
+Reads the processed ``ProfileResults.to_dataframe()`` rows in
+``results.parquet`` produced by a ``profile_nsight.py`` Hydra-multirun
+sweep over the custom P2G backends, derives analysis columns, and renders four
+figures: a hierarchical fp32 roofline, the atomic-scatter story, occupancy + its
+limiter, and the warp-issue-stall breakdown.
 
     # 1. collect (one NCU job per backend via Hydra multirun)
     pixi run python profile_nsight.py -cn nsight_profile -m \
         backend=cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v3 \
-        nsight.target=scatter sim.n_particles=1000000
-    # 2. plot the sweep's aggregated results.csv
+        sim.n_particles=1000000
+    # 2. plot the sweep's aggregated results.parquet
     pixi run python postprocessing/nsight_plots.py \
-        outputs/nsight/<gpu>/sweeps/<date>/<time>/results.csv -o figs/
+        outputs/nsight/<gpu>/sweeps/<date>/<time>/results.parquet -o figs/
 """
 
 from __future__ import annotations
@@ -49,9 +50,216 @@ STALLS = [
 ]
 
 
-def load_dataframe(path):
-    """Read the sweep results.csv (one wide row per backend) into a DataFrame."""
+_NSIGHT_VALUE_COLUMNS = {
+    "Metric",
+    "AvgValue",
+    "StdDev",
+    "MinValue",
+    "MaxValue",
+    "NumRuns",
+    "CI95_Lower",
+    "CI95_Upper",
+    "RelativeStdDevPct",
+    "StableMeasurement",
+    "Normalized",
+    "Geomean",
+    "Value",
+}
+
+
+def _read_dataframe(path):
+    if path.is_dir() or path.suffix == ".parquet":
+        return pd.read_parquet(path)
     return pd.read_csv(path)
+
+
+def _wide_metric_rows(df):
+    """nsight-python metric rows -> one wide row per profiled config/kernel."""
+    if not {"Metric", "AvgValue"}.issubset(df.columns):
+        return df
+    index_cols = [c for c in df.columns if c not in _NSIGHT_VALUE_COLUMNS]
+    wide = (
+        df.pivot_table(
+            index=index_cols,
+            columns="Metric",
+            values="AvgValue",
+            aggfunc="first",
+        )
+        .reset_index()
+        .copy()
+    )
+    wide.columns.name = None
+    return wide
+
+
+def _col(df, name, default=0.0):
+    if name in df:
+        return pd.to_numeric(df[name], errors="coerce")
+    return pd.Series(default, index=df.index, dtype="float64")
+
+
+def _derive_analysis_columns(df):
+    """Add plotting columns from raw NCU counters. Existing derived columns win."""
+    df = df.copy()
+    n = _col(df, "n_particles")
+    time_ns = _col(df, "gpu__time_duration.sum")
+    seconds = time_ns / 1e9
+    if "time_ms" not in df:
+        df["time_ms"] = time_ns / 1e6
+    if "p2g_mparticles_per_s" not in df:
+        df["p2g_mparticles_per_s"] = (n / seconds) / 1e6
+
+    fadd = _col(df, "smsp__sass_thread_inst_executed_op_fadd_pred_on.sum")
+    fmul = _col(df, "smsp__sass_thread_inst_executed_op_fmul_pred_on.sum")
+    ffma = _col(df, "smsp__sass_thread_inst_executed_op_ffma_pred_on.sum")
+    flops = fadd + fmul + 2.0 * ffma
+    if "fp32_flops" not in df:
+        df["fp32_flops"] = flops
+    if "gflops_per_s" not in df:
+        df["gflops_per_s"] = flops / seconds / 1e9
+
+    bytes_by_level = {
+        "l1": _col(df, "l1tex__lsu_writeback_active_mem_lg.sum") * 128.0,
+        "l2": _col(df, "lts__lts2xbar_cycles_active.sum") * 32.0,
+        "hbm": _col(df, "dram__bytes.sum"),
+    }
+    for level, nbytes in bytes_by_level.items():
+        if f"bytes_{level}" not in df:
+            df[f"bytes_{level}"] = nbytes
+        if f"ai_{level}_flop_per_byte" not in df:
+            df[f"ai_{level}_flop_per_byte"] = flops / nbytes
+
+    ffma_peak = _col(df, "sm__sass_thread_inst_executed_op_ffma_pred_on.sum.peak_sustained")
+    sm_hz = _col(df, "sm__cycles_elapsed.avg.per_second")
+    if "peak_compute_gflops" not in df:
+        df["peak_compute_gflops"] = ffma_peak * 2.0 * sm_hz / 1e9
+    for level, peak_name, clock_name, width in (
+        (
+            "l1",
+            "l1tex__lsu_writeback_active_mem_lg.sum.peak_sustained",
+            "l1tex__cycles_elapsed.avg.per_second",
+            128.0,
+        ),
+        (
+            "l2",
+            "lts__lts2xbar_cycles_active.sum.peak_sustained",
+            "lts__cycles_elapsed.avg.per_second",
+            32.0,
+        ),
+        (
+            "hbm",
+            "dram__bytes.sum.peak_sustained",
+            "dram__cycles_elapsed.avg.per_second",
+            1.0,
+        ),
+    ):
+        if f"peak_{level}_gbps" not in df:
+            df[f"peak_{level}_gbps"] = _col(df, peak_name) * width * _col(df, clock_name) / 1e9
+
+    for metric, column in [
+        ("dram__bytes.sum", "dram_bytes_per_particle"),
+        ("dram__bytes_read.sum", "dram_read_bytes_per_particle"),
+        ("dram__bytes_write.sum", "dram_write_bytes_per_particle"),
+    ]:
+        if column not in df:
+            df[column] = _col(df, metric) / n
+
+    for op in ("ld", "st", "atom", "red"):
+        req = _col(df, f"l1tex__t_requests_pipe_lsu_mem_global_op_{op}.sum")
+        sec = _col(df, f"l1tex__t_sectors_pipe_lsu_mem_global_op_{op}.sum")
+        if f"global_{op}_requests_per_particle" not in df:
+            df[f"global_{op}_requests_per_particle"] = req / n
+        if f"global_{op}_sectors_per_particle" not in df:
+            df[f"global_{op}_sectors_per_particle"] = sec / n
+        if f"global_{op}_sectors_per_request" not in df:
+            df[f"global_{op}_sectors_per_request"] = sec / req
+
+    scatter_req = sum(
+        _col(df, f"l1tex__t_requests_pipe_lsu_mem_global_op_{op}.sum")
+        for op in ("red", "atom", "st")
+    )
+    scatter_sec = sum(
+        _col(df, f"l1tex__t_sectors_pipe_lsu_mem_global_op_{op}.sum")
+        for op in ("red", "atom", "st")
+    )
+    if "global_scatter_requests_per_particle" not in df:
+        df["global_scatter_requests_per_particle"] = scatter_req / n
+    if "global_scatter_sectors_per_particle" not in df:
+        df["global_scatter_sectors_per_particle"] = scatter_sec / n
+    if "global_scatter_sectors_per_request" not in df:
+        df["global_scatter_sectors_per_request"] = scatter_sec / scatter_req
+
+    for metric, column in [
+        ("sm__throughput.avg.pct_of_peak_sustained_elapsed", "sol_sm_pct"),
+        (
+            "gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed",
+            "sol_compute_memory_pct",
+        ),
+        ("dram__throughput.avg.pct_of_peak_sustained_elapsed", "sol_dram_pct"),
+        ("sm__warps_active.avg.pct_of_peak_sustained_active", "active_warps_pct"),
+        ("smsp__issue_active.avg.pct_of_peak_sustained_active", "issue_active_pct"),
+        ("lts__throughput.avg.pct_of_peak_sustained_elapsed", "sol_l2_pct"),
+        ("l1tex__throughput.avg.pct_of_peak_sustained_elapsed", "sol_l1_pct"),
+        ("lts__t_sector_hit_rate.pct", "l2_hit_rate_pct"),
+        ("l1tex__t_sector_hit_rate.pct", "l1_hit_rate_pct"),
+        (
+            "lts__t_sectors_op_red.sum.pct_of_peak_sustained_elapsed",
+            "l2_red_throughput_pct",
+        ),
+        (
+            "lts__d_atomic_input_cycles_active.sum.pct_of_peak_sustained_elapsed",
+            "l2_atomic_unit_pct",
+        ),
+        (
+            "l1tex__average_t_sectors_per_request_pipe_lsu_mem_global_op_red.ratio",
+            "scatter_sectors_per_request",
+        ),
+        (
+            "l1tex__average_t_sectors_per_request_pipe_lsu_mem_global_op_ld.ratio",
+            "load_sectors_per_request",
+        ),
+        ("launch__registers_per_thread", "regs_per_thread"),
+        ("launch__shared_mem_per_block_static", "smem_bytes_per_block"),
+    ]:
+        if column not in df:
+            df[column] = _col(df, metric)
+
+    if "sol_max_pct" not in df:
+        df["sol_max_pct"] = df[
+            ["sol_sm_pct", "sol_compute_memory_pct", "sol_dram_pct"]
+        ].max(axis=1)
+
+    if "theoretical_occ_pct" not in df or "occ_limiter_code" not in df:
+        limits = pd.DataFrame(
+            {
+                "registers": _col(df, "launch__occupancy_limit_registers"),
+                "shared_mem": _col(df, "launch__occupancy_limit_shared_mem"),
+                "warps": _col(df, "launch__occupancy_limit_warps"),
+                "blocks": _col(df, "launch__occupancy_limit_blocks"),
+            }
+        )
+        max_warps = _col(df, "sm__maximum_warps_avg_per_active_cycle", 64.0)
+        binder = limits.idxmin(axis=1)
+        df["theoretical_occ_pct"] = 100.0 * limits.min(axis=1) / max_warps
+        df["occ_limiter_code"] = binder.map(
+            {"registers": 0, "shared_mem": 1, "warps": 2, "blocks": 3}
+        )
+
+    stall_total = pd.Series(0.0, index=df.index)
+    for reason, _color in STALLS:
+        metric = f"smsp__average_warps_issue_stalled_{reason}_per_issue_active.ratio"
+        col = f"stallr_{reason}"
+        if col not in df:
+            df[col] = _col(df, metric)
+        stall_total = stall_total + _col(df, col)
+    if "stallr_total" not in df:
+        df["stallr_total"] = stall_total
+    return df.replace([float("inf"), -float("inf")], pd.NA)
+
+
+def load_dataframe(path):
+    """Read ProfileResults.to_dataframe() outputs, with old CSV fallback."""
+    return _derive_analysis_columns(_wide_metric_rows(_read_dataframe(path)))
 
 
 def table_from_dataframe(df):
@@ -149,8 +357,8 @@ def plot_roofline_scaling(df, out, scale_col="n_particles", scale_label=None):
     backends = [b for b in BACKEND_ORDER if b in set(df["backend"])] or sorted(
         df["backend"].unique()
     )
-    # Ceilings are per-chip device constants (identical across rows now that every
-    # target is a single kernel); take the median over the sweep for robustness.
+    # Ceilings are per-chip device constants; take the median over the sweep for
+    # robustness against noisy rows.
     peak_c = float(df["peak_compute_gflops"].median())
     fig, ax = plt.subplots(figsize=(8.6, 6.2))
     ai = np.logspace(-2, 3, 300)
@@ -322,14 +530,14 @@ def plot_scheduler(table, out):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
-        "results_csv",
+        "results_path",
         type=Path,
-        help="Sweep results.csv from a profile_nsight.py Hydra-multirun sweep.",
+        help="Sweep results.parquet from a profile_nsight.py Hydra-multirun sweep.",
     )
     ap.add_argument("-o", "--out-dir", type=Path, default=Path("nsight_figs"))
     args = ap.parse_args()
     args.out_dir.mkdir(parents=True, exist_ok=True)
-    df = load_dataframe(args.results_csv)
+    df = load_dataframe(args.results_path)
     table = table_from_dataframe(df)
     plot_roofline(table, args.out_dir / "roofline.png")
     plot_atomics(table, args.out_dir / "atomics.png")

@@ -1,4 +1,4 @@
-// P2G scatter kernel with warp-shuffle reduction used by the cuda_v2 backend.
+// Home-sorted P2G scatter with warp-shuffle reduction used by cuda_v2.
 //
 // Identical to the cuda_v1 backend kernel (p2g_v1.cu) for the per-particle setup —
 // one thread per particle, register-resident state, B-spline weights,
@@ -7,9 +7,12 @@
 // grid_idx reduce their contributions via __match_any_sync + __shfl_sync,
 // and only the leader lane issues the atomic.
 //
-// Question this kernel answers: now that the (N, 27, *) materialisation is
-// gone (cuda_v1 structure), does warp-shuffle reduction on top of
-// atomicAdd help, hurt, or wash?
+// Intended input order is home_cell_order. The kernel does not consume
+// bucket_bounds itself; it only relies on sorted x/v/C/stress so neighboring
+// warp lanes are more likely to target the same grid nodes.
+//
+// Question this kernel answers: does home-cell ordering plus warp aggregation
+// reduce global atomic pressure while keeping particle-owned scatter?
 //
 // Requires sm_70+ for __match_any_sync (the A10 / sm_86 is fine).
 //

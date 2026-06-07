@@ -10,36 +10,80 @@ render:
 # particle counts with Hydra multirun (-m), e.g.:
 #   pixi run python profile_nsight.py -cn nsight_profile -m \
 #       backend=cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v3 \
-#       nsight.target=scatter sim.n_particles=1000000
-# then plot the sweep's results.csv with postprocessing/nsight_plots.py.
+#       sim.n_particles=1000000
+# then plot the sweep's results.parquet with postprocessing/nsight_plots.py.
 nsight:
-  target: scatter
-  write_json: true
   analyze:
     runs: 1
-    # kernel replay (not range): the custom-backend scatter is a single kernel,
-    # and NCU's .peak_sustained roofline ceilings are unsupported in range replay.
+    # Kernel replay profiles the warmed backend scatter kernel directly.
+    # Tiny XLA wrappers can still appear around cuTile scatter for some metric
+    # sets; drop those, but do not combine real kernels by default. Nsight
+    # Python still fails if more than one non-ignored kernel remains.
     replay_mode: kernel
-    metric_preset: full
-    derive_metric: full
-    # cuTile's tiled P2G launches as a fused group: a broadcast prologue, the
-    # actual P2G kernel, and two slice wrappers. Drop the wrappers so every
-    # annotation reduces to a single kernel -- share-of-peak metrics (occupancy,
-    # stall ratios, SOL) are per-kernel and must NOT be summed across kernels
-    # (summing pushes percentages past 100%). Harmless for the single-kernel CUDA
-    # backends, whose names never appear here. This also makes the cuTile timing an
-    # apples-to-apples P2G-kernel comparison against the CUDA p2g_vN_kernel.
+    # Direct NCU metrics. Postprocessing derives throughput, roofline,
+    # occupancy, and contention columns from ProfileResults.to_dataframe().
+    metrics:
+      - gpu__time_duration.sum
+      - smsp__sass_thread_inst_executed_op_fadd_pred_on.sum
+      - smsp__sass_thread_inst_executed_op_fmul_pred_on.sum
+      - smsp__sass_thread_inst_executed_op_ffma_pred_on.sum
+      - sm__sass_thread_inst_executed_op_ffma_pred_on.sum.peak_sustained
+      - sm__cycles_elapsed.avg.per_second
+      - dram__bytes.sum
+      - dram__bytes.sum.peak_sustained
+      - dram__cycles_elapsed.avg.per_second
+      - lts__lts2xbar_cycles_active.sum
+      - lts__lts2xbar_cycles_active.sum.peak_sustained
+      - lts__cycles_elapsed.avg.per_second
+      - l1tex__lsu_writeback_active_mem_lg.sum
+      - l1tex__lsu_writeback_active_mem_lg.sum.peak_sustained
+      - l1tex__cycles_elapsed.avg.per_second
+      - sm__throughput.avg.pct_of_peak_sustained_elapsed
+      - gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed
+      - dram__throughput.avg.pct_of_peak_sustained_elapsed
+      - lts__throughput.avg.pct_of_peak_sustained_elapsed
+      - l1tex__throughput.avg.pct_of_peak_sustained_elapsed
+      - l1tex__t_requests_pipe_lsu_mem_global_op_red.sum
+      - l1tex__t_requests_pipe_lsu_mem_global_op_atom.sum
+      - l1tex__t_requests_pipe_lsu_mem_global_op_st.sum
+      - l1tex__t_sectors_pipe_lsu_mem_global_op_red.sum
+      - l1tex__t_sectors_pipe_lsu_mem_global_op_atom.sum
+      - l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum
+      - l1tex__average_t_sectors_per_request_pipe_lsu_mem_global_op_red.ratio
+      - lts__t_sectors_op_red.sum
+      - lts__t_sectors_op_red.sum.pct_of_peak_sustained_elapsed
+      - lts__d_atomic_input_cycles_active.sum.pct_of_peak_sustained_elapsed
+      - smsp__average_warps_issue_stalled_lg_throttle_per_issue_active.ratio
+      - smsp__average_warps_issue_stalled_mio_throttle_per_issue_active.ratio
+      - dram__bytes_read.sum
+      - dram__bytes_write.sum
+      - lts__t_sector_hit_rate.pct
+      - lts__t_sectors_op_read.sum
+      - lts__t_sectors_op_write.sum
+      - l1tex__average_t_sectors_per_request_pipe_lsu_mem_global_op_ld.ratio
+      - l1tex__t_sector_hit_rate.pct
+      - sm__warps_active.avg.pct_of_peak_sustained_active
+      - sm__maximum_warps_avg_per_active_cycle
+      - launch__registers_per_thread
+      - launch__shared_mem_per_block_static
+      - launch__occupancy_limit_registers
+      - launch__occupancy_limit_shared_mem
+      - launch__occupancy_limit_warps
+      - launch__occupancy_limit_blocks
+      - smsp__issue_active.avg.pct_of_peak_sustained_active
+      - smsp__average_warps_issue_stalled_long_scoreboard_per_issue_active.ratio
+      - smsp__average_warps_issue_stalled_short_scoreboard_per_issue_active.ratio
+      - smsp__average_warps_issue_stalled_barrier_per_issue_active.ratio
+      - smsp__average_warps_issue_stalled_math_pipe_throttle_per_issue_active.ratio
+      - smsp__average_warps_issue_stalled_wait_per_issue_active.ratio
+      - smsp__average_warps_issue_stalled_not_selected_per_issue_active.ratio
     ignore_kernel_list:
       - loop_broadcast_fusion
       - wrapped_slice_1
       - wrapped_slice
-    # With the wrappers removed each target is one kernel, so sum is identity;
-    # kept for any future multi-launch target.
-    combine_kernel_metrics: sum
-
 # Keep Nsight outputs out of the timing-sweep tree. The sweep dir has no "runs"
 # component, so each multirun aggregates into its own
-# outputs/nsight/<gpu>/sweeps/<date>/<time>/results.csv.
+# outputs/nsight/<gpu>/sweeps/<date>/<time>/results.parquet.
 hydra:
   run:
     dir: outputs/nsight/${gpu_kind:}/runs/${now:%Y-%m-%d}/${now:%H-%M-%S}
