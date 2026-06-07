@@ -71,6 +71,7 @@ imageio = "*"
 
 [tool.pixi.pypi-dependencies]
 mpm-cudajax = { path = ".", editable = true }
+pyarrow = "*"
 
 [tool.pixi.pypi-options]
 # Keep scikit-build-core editable builds tied to the Pixi environment instead
@@ -107,6 +108,8 @@ hydra-joblib-launcher = ">=1.2.0, <2"
 [tool.pixi.feature.gpu.activation.env]
 JAX_PLATFORMS = "cuda"
 JAX_TRACEBACK_IN_LOCATIONS_LIMIT = "-1"
+XLA_PYTHON_CLIENT_PREALLOCATE = "false"
+NSYS_NVTX_PROFILER_REGISTER_ONLY = "0"
 JAX_COMPILATION_CACHE_DIR = "$PIXI_PROJECT_ROOT/.jax_cache"
 JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS = "0"
 JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES = "0"

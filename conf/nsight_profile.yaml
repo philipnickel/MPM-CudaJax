@@ -1,45 +1,34 @@
 defaults:
   - config
+  - nsight_metrics: full
+  - optional nsight_sweep: null
+  - nsight_plot: standard
   - override /sim: benchmark
   - _self_
 
 render:
   enabled: false
 
-# One Hydra job profiles ONE backend variant with NCU. Sweep across backends /
-# particle counts with Hydra multirun (-m), e.g.:
-#   pixi run python profile_nsight.py -cn nsight_profile -m \
-#       backend=cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v3 \
-#       nsight.target=scatter sim.n_particles=1000000
-# then plot the sweep's results.csv with postprocessing/nsight_plots.py.
+# One Hydra job profiles ONE custom CUDA/cuTile backend variant with NCU.
+# Select a serial multirun sweep with nsight_sweep=<choice>; each job appends
+# to the sweep's results.parquet, and nsight_plot=<choice> renders figures from
+# that aggregate at multirun end.
 nsight:
-  target: scatter
-  write_json: true
   analyze:
     runs: 1
-    # kernel replay (not range): the custom-backend scatter is a single kernel,
-    # and NCU's .peak_sustained roofline ceilings are unsupported in range replay.
+    # Kernel replay profiles the warmed backend scatter kernel directly.
+    # Tiny XLA wrappers can still appear around cuTile scatter for some metric
+    # sets; drop those, but do not combine real kernels by default. Nsight
+    # Python still fails if more than one non-ignored kernel remains.
     replay_mode: kernel
-    metric_preset: full
-    derive_metric: full
-    # cuTile's tiled P2G launches as a fused group: a broadcast prologue, the
-    # actual P2G kernel, and two slice wrappers. Drop the wrappers so every
-    # annotation reduces to a single kernel -- share-of-peak metrics (occupancy,
-    # stall ratios, SOL) are per-kernel and must NOT be summed across kernels
-    # (summing pushes percentages past 100%). Harmless for the single-kernel CUDA
-    # backends, whose names never appear here. This also makes the cuTile timing an
-    # apples-to-apples P2G-kernel comparison against the CUDA p2g_vN_kernel.
+    combine_kernel_metrics: null
     ignore_kernel_list:
       - loop_broadcast_fusion
       - wrapped_slice_1
       - wrapped_slice
-    # With the wrappers removed each target is one kernel, so sum is identity;
-    # kept for any future multi-launch target.
-    combine_kernel_metrics: sum
-
 # Keep Nsight outputs out of the timing-sweep tree. The sweep dir has no "runs"
 # component, so each multirun aggregates into its own
-# outputs/nsight/<gpu>/sweeps/<date>/<time>/results.csv.
+# outputs/nsight/<gpu>/sweeps/<date>/<time>/results.parquet.
 hydra:
   run:
     dir: outputs/nsight/${gpu_kind:}/runs/${now:%Y-%m-%d}/${now:%H-%M-%S}

@@ -1,0 +1,14 @@
+# @package hydra.callbacks.nsight_plot
+_target_: postprocessing.callbacks.NsightPlotCallback
+results_name: results.parquet
+out_dir: figures
+plots:
+  - roofline
+  - atomics
+  - occupancy
+  - scheduler
+  - roofline_scaling
+scale_axis: auto
+style:
+  theme: darkgrid
+  context: paper

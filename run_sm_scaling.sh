@@ -28,7 +28,11 @@ fi
 PERCENTS="${MPS_PERCENTS:-10 25 50 75 100}"
 for pct in $PERCENTS; do
     echo ">>> MPS thread percentage: ${pct}%"
-    python simulate.py -cn sweep sweep=sm_scaling "mps_thread_percent=${pct}" "$@"
+    # Set the clamp in the env before launching: each run is a fresh process,
+    # and CUDA reads this once when JAX creates its context. mps_thread_percent
+    # is also passed so the value is recorded in metrics for the plot x-axis.
+    CUDA_MPS_ACTIVE_THREAD_PERCENTAGE="${pct}" \
+        python simulate.py -cn sweep sweep=sm_scaling "mps_thread_percent=${pct}" "$@"
 done
 
 # Leave the GPU as we found it: only stop MPS if this script started it.

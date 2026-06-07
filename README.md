@@ -100,9 +100,9 @@ pixi run python simulate.py sim=benchmark render.enabled=false
 # Pick a kernel
 pixi run python simulate.py backend=jax                              # JAX/XLA baseline (scan P2G + MLS G2P)
 pixi run python simulate.py backend=cuda_v1 material=jelly
-pixi run python simulate.py backend=cuda_v2 material=jelly            # warp-shuffle coalescing
-pixi run python simulate.py backend=cuda_v3 material=jelly            # Morton sort
-pixi run python simulate.py backend=cuda_v4 material=jelly            # super-cell grid tile
+pixi run python simulate.py backend=cuda_v2 material=jelly            # home-sorted warp-coalesced atomics
+pixi run python simulate.py backend=cuda_v3 material=jelly            # home-cell shared-tile reduction
+pixi run python simulate.py backend=cuda_v4 material=jelly            # home-cell structured warp reduction
 pixi run python simulate.py backend=cutile_v3 material=jelly sim=benchmark render.enabled=false  # cuTile (tiled model)
 
 # Override sim params
@@ -115,9 +115,9 @@ pixi run python simulate.py sim.n_particles=1000000 sim.num_grids=64
 |---|---|
 | `jax` | The JAX/XLA baseline: `lax.scan` over the 27 offsets for **both** P2G and G2P, unified MLS-MPM G2P (APIC affine `C` reused as ∇v), closed-form StVK stress. Every other kernel reuses this G2P, so only the P2G varies. |
 | `cuda_v1` | CUDA P2G (one thread/particle, global `atomicAdd`) + JAX baseline G2P. |
-| `cuda_v2` | CUDA warp-shuffle coalesced P2G + JAX baseline G2P. |
-| `cuda_v3` | CUDA Morton-sorted P2G + JAX baseline G2P. |
-| `cuda_v4` | CUDA super-cell-owned grid tile P2G + JAX baseline G2P. |
+| `cuda_v2` | Home-cell sorted CUDA P2G with one thread/particle and warp-coalesced global atomics + JAX baseline G2P. |
+| `cuda_v3` | Home-cell sorted CUDA P2G with one block per home cell, shared 27-node local reduction, and final global flush + JAX baseline G2P. |
+| `cuda_v4` | Home-cell sorted CUDA P2G with structured warp reduction over the 27-node local tile before the final global flush + JAX baseline G2P. |
 | `cutile_v1` | cuTile direct 27-stencil scatter comparison backend. |
 | `cutile_v3` | cuTile home-cell tiled P2G with local 27-node reduction + JAX baseline G2P. Requires `cuda-tile`. |
 
@@ -142,7 +142,16 @@ Construction (`RuntimeConfig` + `MPMSolver` in `src/mpm_jax/solver.py`):
 - `MPMSolver` reads the runtime config and builds params (with derived dx/vol/p_mass), particles, and initial state. The backend object is already instantiated by Hydra and owns CUDA/cuTile registration and grid-divisibility validation; the sticky floor is fixed in the solver frame.
 - `src/mpm_jax/p2g/backends/` is a small P2G backend hierarchy. Variants override `prepare()` when they need ordering and `scatter()` for the P2G kernel. The implementation modules register the user-facing Hydra choices (`jax`, `cuda_v1`, etc.) directly via hydra-zen. The solver substep calls `backend.prepare()`, `backend.scatter()`, then the shared `g2p_mls()` path.
 
-All solver variants now run through the same JAX-owned frame loop. The pure-JAX path compiles the entire frame (multiple substeps) as one XLA program. The CUDA variants (`cuda_v*`) move per-particle stencil work into CUDA kernels so the `(N, 27, *)` intermediate tensors never materialize in HBM. The cuTile variant (`cutile`) launches a tiled-programming-model P2G kernel from inside that same JAX frame via the cuTile/JAX bridge.
+All solver variants now run through the same JAX-owned frame loop. The pure-JAX path compiles the entire frame (multiple substeps) as one XLA program. The CUDA variants (`cuda_v*`) move P2G stencil work into CUDA kernels so the `(N, 27, *)` intermediate tensors never materialize in HBM; v2 keeps particle-owned scatter, while v3/v4 switch to home-cell-owned local reduction. The cuTile variant (`cutile`) launches a tiled-programming-model P2G kernel from inside that same JAX frame via the cuTile/JAX bridge.
+
+To time P2G `prepare`, P2G `scatter`, `prepare+scatter`, and full solver
+`ms/step` at the benchmark operating point (`G=96`, `N=10M`), run:
+
+```bash
+pixi run python tools/benchmark_p2g_substeps.py
+```
+
+The tool writes `p2g_substep_timings.parquet` in the Hydra output directory.
 
 ## Sweeps
 
@@ -204,45 +213,44 @@ Plots and per-plot summary CSVs are written to `figures/sweeps/<gpu-kind>/`.
 
 ### Nsight Compute
 
-Use the dedicated Nsight Python entrypoint for NCU metrics on one target
-(`frame`, `p2g`, `prepare`, or `scatter`):
+Use the dedicated Nsight Python entrypoint for NCU metrics on the custom
+CUDA/cuTile P2G scatter kernels. Do not use this path for `backend=jax`; the JAX
+baseline lowers to several XLA-generated kernels and belongs in the XProf trace
+workflow below. The profiler prepares inputs outside the annotation, warms the
+jitted scatter once, then profiles the warmed P2G scatter call:
 
 ```bash
 pixi run python profile_nsight.py -cn nsight_profile \
-    backend=cutile_v3 nsight.target=scatter sim.n_particles=4096
+    backend=cutile_v3 sim.n_particles=4096
 ```
 
-**Metric presets** select what NCU collects (`nsight.analyze.metric_preset`):
-`time`, `speed_of_light`, `roofline`, `atomics`, `memory_locality`, `occupancy`,
-`scheduler`, or `full` (everything in one pass-set). Or pass any NCU metric list
-directly via `nsight.analyze.metrics=[...]`. The `roofline` preset needs
-`replay_mode=kernel` (the default) — its `.peak_sustained` ceilings are derived
-by NCU from the running chip, so they are architecture-correct on A100/H100/GH200
-with no datasheet constants.
+`conf/nsight_metrics/` owns the direct NCU metric presets passed to
+`nsight.analyze.metrics`: `timing`, `roofline`, and `full` (the default). You
+can still override `nsight.analyze.metrics=[...]` directly for focused runs.
+The `full` preset includes the NCU counters needed by the roofline, atomics,
+occupancy, and scheduler plots.
 
 **Cross-backend analysis figures** (hierarchical fp32 roofline, atomic-scatter,
 occupancy, warp-stall breakdown) for the custom P2G kernels. One Hydra job
-profiles one backend variant; sweep across backends with **Hydra multirun** (`-m`),
-exactly like `simulate.py`. Each job appends one wide row of NCU-derived metrics to
-a sweep-level `results.csv` (under `outputs/nsight/<gpu>/sweeps/<date>/<time>/`),
-and `postprocessing/nsight_plots.py` loads that CSV into pandas and renders the
-figures:
+profiles one backend variant; the `conf/nsight_sweep/` group defines serial
+Hydra multiruns over the custom backends. Each job calls
+`ProfileResults.to_dataframe()`, writes the processed `nsight-python` metric-row
+DataFrame to `nsight_metrics.parquet` in its Hydra output dir, and appends those
+rows to sweep-level `results.parquet` under
+`outputs/nsight/<gpu>/sweeps/<date>/<time>/`. The `.ncu-rep` report from Nsight
+Compute is saved in the same per-job Hydra output dir. At multirun end,
+`conf/nsight_plot/standard.yaml` installs `NsightPlotCallback`, which loads that
+authoritative `results.parquet` with pandas and renders the figures:
 
 ```bash
 # Single operating point (all 6 custom kernels at the benchmark resolution):
-pixi run python profile_nsight.py -cn nsight_profile -m \
-    backend=cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v3 \
-    nsight.target=scatter
-pixi run python postprocessing/nsight_plots.py \
-    outputs/nsight/<gpu>/sweeps/<date>/<time>/results.csv -o figures/nsight/<gpu>/
+pixi run python profile_nsight.py -cn nsight_profile nsight_sweep=single_point
 ```
 
-The default `nsight_profile.yaml` uses `metric_preset=full`, `derive_metric=full`,
-`replay_mode=kernel`, and an `ignore_kernel_list` that isolates the main P2G
-kernel — cuTile's tiled scatter launches as a fused group (broadcast + P2G +
-slice wrappers), and dropping the wrappers keeps every annotation single-kernel so
-NCU's share-of-peak metrics (occupancy, stall ratios, SOL) stay correct. It is
-harmless for the single-kernel CUDA backends.
+The default `nsight_profile.yaml` uses `replay_mode=kernel`, drops known tiny XLA
+wrapper kernels around cuTile scatter, and has no default kernel combiner. Nsight
+Python will fail if more than one non-ignored kernel remains unless
+`nsight.analyze.combine_kernel_metrics` is explicitly overridden.
 
 **Scaling roofline trajectories.** Add a scale axis to the multirun and
 `nsight_plots.py` also emits `roofline_scaling.png` — a hierarchical roofline where
@@ -252,14 +260,14 @@ direction of increasing scale. The axis is auto-detected from what varies:
 ```bash
 # Load sweep (throughput vs problem size): fixed grid, growing particle count
 # (raises ppc/density). Resources are constant, so this is NOT strong scaling.
-pixi run python profile_nsight.py -cn nsight_profile -m \
-    backend=cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v3 \
-    sim.n_particles=1250000,2500000,5000000,10000000 nsight.target=scatter
+pixi run python profile_nsight.py -cn nsight_profile nsight_sweep=particle_count
 
 # Weak scaling: fixed particles-per-cell (~8.49), grid + N grow together.
-pixi run python profile_nsight.py -cn nsight_profile -m \
-    backend=cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v3 \
-    scale=weak_g64,weak_g96,weak_g128,weak_g160 nsight.target=scatter
+pixi run python profile_nsight.py -cn nsight_profile nsight_sweep=weak
+
+# Manual re-render from an existing aggregate:
+pixi run python postprocessing/nsight_plots.py \
+    outputs/nsight/<gpu>/sweeps/<date>/<time>/results.parquet -o figures/nsight/<gpu>/
 ```
 
 For interactive Nsight Compute, launch the GUI through Pixi so the profiled
@@ -275,10 +283,10 @@ Working Directory:      /root/MPM-CudaJax
 Arguments:              simulate.py sim=benchmark backend=cutile_v3 render.enabled=false
 ```
 
-The `sim=benchmark` preset is one frame with one substep, so the measured solve
-range is the jitted frame. In the API Stream, use **Run to Next Range Start** to
-land on the `cutile_v3_solve` NVTX range, then **Run to Next Kernel** and
-**Profile Kernel**. The cuTile kernel names show up as
+The `sim=benchmark` preset is one frame with 50 substeps, so the measured solve
+range is the jitted frame containing the configured substep loop. In the API
+Stream, use **Run to Next Range Start** to land on the `cutile_v3_solve` NVTX
+range, then **Run to Next Kernel** and **Profile Kernel**. The cuTile kernel names show up as
 `cutile_v1_p2g_kernel...` or `cutile_v3_p2g_kernel...`; earlier kernels in the
 same solve range are JAX/XLA helper kernels.
 The GUI environment editor can stay empty; Pixi owns the runtime environment.
@@ -370,7 +378,7 @@ MPM-CudaJax/
         ├── grid.py          # grid_update + build_grid_x
         └── p2g/
             ├── scan.py      # JAX scan P2G
-            ├── sort.py      # morton_argsort, home_super_cell_id, home_cell_id
+            ├── sort.py      # morton_argsort, home_cell_id
             ├── backends/    # backend implementations + hydra-zen registrations
             ├── cutile/      # cuTile P2G kernels + jax bridges
             └── cuda/

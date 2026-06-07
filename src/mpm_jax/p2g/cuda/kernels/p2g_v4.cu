@@ -1,212 +1,182 @@
-// Cell-major P2G scatter kernel used by the cuda_v4 backend.
+// Optimized home-cell local-reduction P2G scatter used by cuda_v4.
 //
-// Combines two ideas:
-//   * `p2g_v1.cu` (cuda_v1): one thread per particle,
-//     B-spline weights + 27-stencil scatter computed in registers. No
-//     (N, 27, *) tensor is ever materialised in HBM.
-//   * Particles are sorted by their home SUPER-cell on the JAX side; one
-//     CUDA block per super-cell aggregates
-//     its particles' contributions into a (SC+2)^3 shared-memory tile via
-//     fast shmem atomics, then flushes the tile to global memory with one
-//     atomicAdd per node.
-//
-// Super-cells (Approach B from the v4 fix plan):
-//   A super-cell of size SC^3 grid cells. One CUDA block per super-cell.
-//   SC=4 gives 4^3 cells per CUDA block. At the standard 8 particles/cell
-//   benchmark this is roughly 512 particles per non-empty block, which is
-//   enough work to amortize tile zero/sync/flush costs.
-//
-// With SC=4:
-//   Each super-cell covers 64 cells. The union of quadratic 3^3 stencils spans
-//   (SC + 2)^3 = 6^3 = 216 grid nodes. The larger shared tile increases the
-//   flush cost, but reduces the block count by another 8x versus SC=2.
-//
-// The hypothesis is that the smem aggregation amortises the 27 global
-// atomicAdds per particle (108 floats) down to the per-super-cell tile flush
-// (~TILE_SIZE = (SC+2)^3 = 216 occupied grid nodes for SC=4). With local
-// weight computation, the (N, 27, *) momentum/mass/index tensors disappear
-// from HBM and only x/v/C/stress are loaded once per particle.
-//
-// Inputs (all float32 unless noted):
-//   x:          (N, 3)        particle positions (SORTED by home super-cell)
-//   v:          (N, 3)        particle velocities
-//   C:          (N, 9)        APIC affine matrix (row-major)
-//   stress:     (N, 9)        Kirchhoff stress (row-major)
-//   bucket_start: ((G/SC)^3 + 1,) int32  CSR boundaries into the sorted arrays
-//
-// Outputs:
-//   grid_mv: (G^3, 3)
-//   grid_m:  (G^3,)
-//
-// Scalar attributes: dt, vol, p_mass, inv_dx, dx
-//
-// Home cell convention (matches `home_super_cell_id` in sort.py):
-//   For a particle at x, the stencil base node is
-//     base = floor(x * inv_dx - 0.5)
-//   and the center stencil node (offset (1,1,1)) is
-//     home = base + 1
-//   home in [0, G). Super-cell id is (home / SC) collapsed to flat.
+// This kernel has the same ownership model and FFI contract as cuda_v3:
+// one block owns one home cell from home_cell_order. The difference is the
+// local accumulation path. cuda_v3 uses shared-memory atomics into a 27-node
+// tile; cuda_v4 gives each warp a private 27-node partial tile, reduces each
+// stencil offset across active lanes, then combines those warp partials during
+// the final global flush. That removes shared-memory atomics from the
+// per-particle hot loop for the interior home-cell case.
 
 #include "xla/ffi/api/ffi.h"
 
 #include "p2g_common.cuh"
 
-// Super-cell width SC is a compile-time TEMPLATE parameter: TILE_DIM/TILE_SIZE
-// derive from it and statically size the __shared__ tile, so each instantiation
-// stays fully optimised. The FFI handler dispatches to the instantiated SC by a
-// runtime switch (kept in sync with SUPPORTED_SC in p2g_cuda.py), so SC is
-// selectable from config without a recompile and without dynamic shared memory.
-
 namespace ffi = xla::ffi;
 
-// ---------------------------------------------------------------------------
-// Super-cell-tiled kernel
-// ---------------------------------------------------------------------------
-// One block per super-cell. Each thread in the block processes one or more
-// particles from that super-cell (grid-stride loop over the in-super-cell
-// particle range). Per particle:
-//   - load x, v, C, stress
-//   - compute base node + per-axis B-spline weight/dweight tables
-//   - loop over 27 stencil offsets, atomicAdd momentum + mass into the
-//     shared-memory tile (or fall back to global atomicAdd when the stencil
-//     clips outside the tile — only happens at grid boundary).
-// After all threads finish, the block flushes the TILE_SIZE = (SC+2)^3 tile
-// entries to global memory with one atomicAdd per (mv, m).
+constexpr int P2G_V4_WARPS_PER_BLOCK = 1;
+constexpr int P2G_V4_BLOCK_SIZE = P2G_V4_WARPS_PER_BLOCK * P2G_WARP_SIZE;
 
-template <int SC>
+__device__ __forceinline__ void p2g_v4_add_warp_partial(
+    float* __restrict__ warp_tile,
+    int warp_id,
+    int tile_node,
+    float mv0,
+    float mv1,
+    float mv2,
+    float mass
+) {
+    int base = (warp_id * P2G_STENCIL_NODES + tile_node) * P2G_GRID_CHANNELS;
+    warp_tile[base + 0] += mv0;
+    warp_tile[base + 1] += mv1;
+    warp_tile[base + 2] += mv2;
+    warp_tile[base + 3] += mass;
+}
+
 __global__ void p2g_v4_kernel(
-    const float* __restrict__ x,          // (N, 3) sorted by home super-cell
-    const float* __restrict__ v,          // (N, 3) sorted
-    const float* __restrict__ C,          // (N, 9) sorted, row-major
-    const float* __restrict__ stress,     // (N, 9) sorted, row-major
-    const int*   __restrict__ bucket_start, // ((G/SC)^3 + 1,)
-    float*       __restrict__ grid_mv,    // (G^3, 3)
-    float*       __restrict__ grid_m,     // (G^3,)
+    const float* __restrict__ x,
+    const float* __restrict__ v,
+    const float* __restrict__ C,
+    const float* __restrict__ stress,
+    const int*   __restrict__ bucket_bounds,
+    float*       __restrict__ grid_mv,
+    float*       __restrict__ grid_m,
     int G,
     float dt, float vol, float p_mass, float inv_dx, float dx
 ) {
-    constexpr int TILE_DIM = SC + 2;       // stencil-union: 1-node apron each side
-    constexpr int TILE_SIZE = TILE_DIM * TILE_DIM * TILE_DIM;
-    int Gs = G / SC;                       // super-grid resolution
-    int Gs3 = Gs * Gs * Gs;
-    int super_id = blockIdx.x;
-    if (super_id >= Gs3) return;
+    int cells_per_axis = G + 1;
+    int cell_id = blockIdx.x;
+    int cell_count = cells_per_axis * cells_per_axis * cells_per_axis;
+    if (cell_id >= cell_count) return;
 
-    int p_start = bucket_start[super_id];
-    int p_end   = bucket_start[super_id + 1];
+    int hi = cell_id / (cells_per_axis * cells_per_axis);
+    int hj = (cell_id / cells_per_axis) % cells_per_axis;
+    int hk = cell_id % cells_per_axis;
+
+    int bounds_idx = cell_id * 2;
+    int p_start = bucket_bounds[bounds_idx + 0];
+    int p_end = bucket_bounds[bounds_idx + 1];
     int n_particles = p_end - p_start;
-
-    // Fast empty-super-cell exit. The particle block only occupies a fraction
-    // of the domain, so most super-cells are empty. The exit must come
-    // *before* any shared-memory allocation or __syncthreads() — all
-    // threads in a block see the same super_id, so this return is
-    // uniform and no thread is left hanging on a barrier.
     if (n_particles == 0) return;
 
-    // Super-cell 3D coords from flat index (matches the JAX-side super-cell id).
-    int Si = super_id / (Gs * Gs);
-    int Sj = (super_id / Gs) % Gs;
-    int Sk = super_id % Gs;
+    int tile_i = hi - 1;
+    int tile_j = hj - 1;
+    int tile_k = hk - 1;
 
-    // Base cell of the super-cell (in cells, not super-cells).
-    int base_ci = Si * SC;
-    int base_cj = Sj * SC;
-    int base_ck = Sk * SC;
+    __shared__ float warp_tile[
+        P2G_V4_WARPS_PER_BLOCK * P2G_STENCIL_NODES * P2G_GRID_CHANNELS
+    ];
 
-    // Tile origin: (base_cell - 1) so that the union of 3^3 stencils for
-    // particles in any of this super-cell's SC^3 cells lands at tile-local
-    // indices 0..TILE_DIM-1. For SC=4 this gives tile_dim=6, spanning
-    // cells (base_cell - 1) .. (base_cell + 4).
-    int tile_i = base_ci - 1;
-    int tile_j = base_cj - 1;
-    int tile_k = base_ck - 1;
-
-    // Shared-memory tile: (SC+2)^3 nodes, each (mv_x, mv_y, mv_z, mass).
-    __shared__ float tile[TILE_SIZE * 4];
-
-    // Cooperatively zero the tile.
-    for (int t = threadIdx.x; t < TILE_SIZE * 4; t += blockDim.x)
-        tile[t] = 0.0f;
+    for (int t = threadIdx.x;
+         t < P2G_V4_WARPS_PER_BLOCK * P2G_STENCIL_NODES * P2G_GRID_CHANNELS;
+         t += blockDim.x) {
+        warp_tile[t] = 0.0f;
+    }
     __syncthreads();
 
-    // ---- Per-particle inline scatter into the tile ----
-    for (int p = threadIdx.x; p < n_particles; p += blockDim.x) {
-        int pid = p_start + p;
+    int warp_id = threadIdx.x / P2G_WARP_SIZE;
+    int lane = threadIdx.x & (P2G_WARP_SIZE - 1);
 
-        // Register-resident particle state.
-        float px[3], pv[3], pC[9], pS[9];
-        p2g_load_particle(x, v, C, stress, pid, px, pv, pC, pS);
+    for (int local_start = warp_id * P2G_WARP_SIZE;
+         local_start < n_particles;
+         local_start += P2G_V4_WARPS_PER_BLOCK * P2G_WARP_SIZE) {
+        int p_local = local_start + lane;
+        bool active = p_local < n_particles;
+        int pid = p_start + p_local;
 
-        // Base node, fractional offset, and B-spline weight tables.
+        float px[3] = {0.0f, 0.0f, 0.0f};
+        float pv[3] = {0.0f, 0.0f, 0.0f};
+        float pC[9] = {0.0f};
+        float pS[9] = {0.0f};
+        if (active) {
+            p2g_load_particle(x, v, C, stress, pid, px, pv, pC, pS);
+        }
+
         int base[3];
         float fx[3], w[3][3], dw[3][3];
         p2g_base_fx(px, inv_dx, base, fx);
         p2g_bspline_tables(fx, w, dw);
 
-        // 27-stencil register-resident loop.
         for (int di = 0; di < 3; di++)
         for (int dj = 0; dj < 3; dj++)
         for (int dk = 0; dk < 3; dk++) {
-            // Clamped global grid index (per-axis clamp to [0, G-1]; see
-            // p2g_common.cuh — intentionally differs from the JAX flat clip).
             int gi = p2g_clip_axis(base[0] + di, G);
             int gj = p2g_clip_axis(base[1] + dj, G);
             int gk = p2g_clip_axis(base[2] + dk, G);
 
-            float mv[3], m_contrib;
-            p2g_node_contribution(di, dj, dk, w, dw, fx, pC, pS, pv,
-                                  inv_dx, dx, dt, vol, p_mass, mv, &m_contrib);
+            float mv0 = 0.0f;
+            float mv1 = 0.0f;
+            float mv2 = 0.0f;
+            float mass = 0.0f;
+            if (active) {
+                float mv[3];
+                p2g_node_contribution(di, dj, dk, w, dw, fx, pC, pS, pv,
+                                      inv_dx, dx, dt, vol, p_mass, mv, &mass);
+                mv0 = mv[0];
+                mv1 = mv[1];
+                mv2 = mv[2];
+            }
 
-            // Try the tile first. Tile-local index uses the (possibly
-            // clipped) global index, so a clipped stencil that lands back
-            // inside the tile is still tile-local and a stencil that lands
-            // outside the tile (or outside the grid) goes via global atomic.
             int ti = gi - tile_i;
             int tj = gj - tile_j;
             int tk = gk - tile_k;
-            if (ti >= 0 && ti < TILE_DIM &&
-                tj >= 0 && tj < TILE_DIM &&
-                tk >= 0 && tk < TILE_DIM) {
-                int tile_idx = (ti * TILE_DIM * TILE_DIM + tj * TILE_DIM + tk) * 4;
-                atomicAdd(&tile[tile_idx + 0], mv[0]);
-                atomicAdd(&tile[tile_idx + 1], mv[1]);
-                atomicAdd(&tile[tile_idx + 2], mv[2]);
-                atomicAdd(&tile[tile_idx + 3], m_contrib);
-            } else {
-                // Out-of-tile fallback: direct global atomic. In practice this
-                // only triggers near the grid boundary (cells where the
-                // stencil clips). The body of the simulation never falls here.
+            bool local = active &&
+                         ti >= 0 && ti < 3 &&
+                         tj >= 0 && tj < 3 &&
+                         tk >= 0 && tk < 3;
+            int tile_node = ti * 9 + tj * 3 + tk;
+
+            unsigned local_mask = __ballot_sync(P2G_FULL_MASK, local);
+            if (local_mask != 0) {
+                float smv0 = p2g_warp_reduce_masked(local ? mv0 : 0.0f, local_mask);
+                float smv1 = p2g_warp_reduce_masked(local ? mv1 : 0.0f, local_mask);
+                float smv2 = p2g_warp_reduce_masked(local ? mv2 : 0.0f, local_mask);
+                float sm   = p2g_warp_reduce_masked(local ? mass : 0.0f, local_mask);
+                int leader = __ffs(local_mask) - 1;
+                if (lane == leader) {
+                    p2g_v4_add_warp_partial(
+                        warp_tile, warp_id, tile_node, smv0, smv1, smv2, sm
+                    );
+                }
+            }
+
+            if (active && !local) {
                 int grid_idx = gi * G * G + gj * G + gk;
-                p2g_atomic_add_grid(grid_mv, grid_m, grid_idx, mv, m_contrib);
+                p2g_atomic_add_grid(grid_mv, grid_m, grid_idx, mv0, mv1, mv2, mass);
             }
         }
     }
 
     __syncthreads();
 
-    // ---- Flush the smem tile to global memory ----
-    for (int t = threadIdx.x; t < TILE_SIZE; t += blockDim.x) {
-        float smv0 = tile[t * 4 + 0];
-        float smv1 = tile[t * 4 + 1];
-        float smv2 = tile[t * 4 + 2];
-        float sm   = tile[t * 4 + 3];
-
-        // Skip entries no particle touched.
-        if (sm == 0.0f && smv0 == 0.0f && smv1 == 0.0f && smv2 == 0.0f)
+    for (int t = threadIdx.x; t < P2G_STENCIL_NODES; t += blockDim.x) {
+        float smv0 = 0.0f;
+        float smv1 = 0.0f;
+        float smv2 = 0.0f;
+        float sm = 0.0f;
+        for (int warp = 0; warp < P2G_V4_WARPS_PER_BLOCK; warp++) {
+            int idx = (warp * P2G_STENCIL_NODES + t) * P2G_GRID_CHANNELS;
+            smv0 += warp_tile[idx + 0];
+            smv1 += warp_tile[idx + 1];
+            smv2 += warp_tile[idx + 2];
+            sm   += warp_tile[idx + 3];
+        }
+        if (sm == 0.0f && smv0 == 0.0f && smv1 == 0.0f && smv2 == 0.0f) {
             continue;
+        }
 
-        int ti = t / (TILE_DIM * TILE_DIM);
-        int tj = (t / TILE_DIM) % TILE_DIM;
-        int tk = t % TILE_DIM;
+        int ti = t / 9;
+        int tj = (t / 3) % 3;
+        int tk = t % 3;
         int gi = tile_i + ti;
         int gj = tile_j + tj;
         int gk = tile_k + tk;
-
-        if (gi < 0 || gi >= G || gj < 0 || gj >= G || gk < 0 || gk >= G)
+        if (gi < 0 || gi >= G || gj < 0 || gj >= G || gk < 0 || gk >= G) {
             continue;
+        }
 
-        int gid = gi * G * G + gj * G + gk;
-        p2g_atomic_add_grid(grid_mv, grid_m, gid, smv0, smv1, smv2, sm);
+        int grid_idx = gi * G * G + gj * G + gk;
+        p2g_atomic_add_grid(grid_mv, grid_m, grid_idx, smv0, smv1, smv2, sm);
     }
 }
 
@@ -220,49 +190,36 @@ ffi::Error P2GV4Impl(
     ffi::Buffer<ffi::F32> v,
     ffi::Buffer<ffi::F32> C,
     ffi::Buffer<ffi::F32> stress,
-    ffi::Buffer<ffi::S32> bucket_start,
+    ffi::Buffer<ffi::S32> bucket_bounds,
     ffi::ResultBuffer<ffi::F32> grid_mv,
     ffi::ResultBuffer<ffi::F32> grid_m,
     int32_t G,
-    int32_t SC,
     float dt, float vol, float p_mass, float inv_dx, float dx
 ) {
-    if (SC != 2 && SC != 4 && SC != 8) {
+    int cells_per_axis = G + 1;
+    auto dims = bucket_bounds.dimensions();
+    if (dims.size() != 4 ||
+        dims[0] != cells_per_axis ||
+        dims[1] != cells_per_axis ||
+        dims[2] != cells_per_axis ||
+        dims[3] != 2) {
         return ffi::Error(ffi::ErrorCode::kInvalidArgument,
-                          "unsupported SC; kernel is built for SC in {2, 4, 8}");
-    }
-    if (G % SC != 0) {
-        return ffi::Error(ffi::ErrorCode::kInvalidArgument,
-                          "G must be divisible by SC (super-cell width)");
-    }
-    // bucket_start is ((G/SC)^3 + 1,) ints.
-    int Gs = G / SC;
-    int Gs3 = Gs * Gs * Gs;
-    int expected = Gs3 + 1;
-    int got = static_cast<int>(bucket_start.dimensions()[0]);
-    if (got != expected) {
-        return ffi::Error(ffi::ErrorCode::kInvalidArgument,
-                          "bucket_start size does not match (G/SC)^3 + 1");
+                          "bucket_bounds must have shape (G+1, G+1, G+1, 2)");
     }
 
     p2g_zero_grid(grid_mv->typed_data(), grid_m->typed_data(), G, stream);
 
-    // One block per super-cell. SC selects the template instantiation (each has
-    // its own statically-sized shared tile); keep these cases in sync with
-    // SUPPORTED_SC in p2g_cuda.py.
-#define MPM_LAUNCH_V4(SCVAL)                                                  \
-    p2g_v4_kernel<SCVAL><<<Gs3, P2G_BLOCK_SIZE, 0, stream>>>(          \
-        x.typed_data(), v.typed_data(), C.typed_data(), stress.typed_data(), \
-        reinterpret_cast<const int*>(bucket_start.typed_data()),             \
-        grid_mv->typed_data(), grid_m->typed_data(),                         \
-        G, dt, vol, p_mass, inv_dx, dx)
-    switch (SC) {
-        case 2: MPM_LAUNCH_V4(2); break;
-        case 4: MPM_LAUNCH_V4(4); break;
-        case 8: MPM_LAUNCH_V4(8); break;
-        default: break;
-    }
-#undef MPM_LAUNCH_V4
+    p2g_v4_kernel<<<p2g_home_cell_count(G), P2G_V4_BLOCK_SIZE, 0, stream>>>(
+        x.typed_data(),
+        v.typed_data(),
+        C.typed_data(),
+        stress.typed_data(),
+        reinterpret_cast<const int*>(bucket_bounds.typed_data()),
+        grid_mv->typed_data(),
+        grid_m->typed_data(),
+        G,
+        dt, vol, p_mass, inv_dx, dx
+    );
 
     return p2g_last_launch_error();
 }
@@ -271,15 +228,14 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     P2GV4, P2GV4Impl,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()   // x (sorted)
-        .Arg<ffi::Buffer<ffi::F32>>()   // v (sorted)
-        .Arg<ffi::Buffer<ffi::F32>>()   // C (sorted)
-        .Arg<ffi::Buffer<ffi::F32>>()   // stress (sorted)
-        .Arg<ffi::Buffer<ffi::S32>>()   // bucket_start over super-cells
+        .Arg<ffi::Buffer<ffi::F32>>()   // x (home-cell sorted)
+        .Arg<ffi::Buffer<ffi::F32>>()   // v (home-cell sorted)
+        .Arg<ffi::Buffer<ffi::F32>>()   // C (home-cell sorted)
+        .Arg<ffi::Buffer<ffi::F32>>()   // stress (home-cell sorted)
+        .Arg<ffi::Buffer<ffi::S32>>()   // bucket_bounds
         .Ret<ffi::Buffer<ffi::F32>>()   // grid_mv
         .Ret<ffi::Buffer<ffi::F32>>()   // grid_m
         .Attr<int32_t>("G")
-        .Attr<int32_t>("SC")
         .Attr<float>("dt")
         .Attr<float>("vol")
         .Attr<float>("p_mass")
