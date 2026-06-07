@@ -1,0 +1,39 @@
+# @package _global_
+# Constant active PPC (~8.5), particle count up. G is derived from the swept N
+# via the ${ppc_grid:N} resolver — no per-point yaml needed.
+defaults:
+    - /plot@plots.time: loglog
+    - /plot@plots.throughput: loglog
+    - /plot@plots.speedup: speedup
+    - _self_
+
+hydra:
+    sweeper:
+        params:
+            sim.n_particles: 1000000,2000000,5000000,10000000,25000000
+
+sim:
+    num_grids: ${ppc_grid:${sim.n_particles}}
+
+tag: sweep_weak_scaling
+
+plots:
+    time:
+        x: n_particles
+        xlabel: particles
+        y: ms_per_step
+        ylabel: ms / substep
+        title: "Time per step (fixed PPC)"
+        filename: ms_per_substep.png
+    throughput:
+        x: n_particles
+        xlabel: particles
+        y: particles_per_sec
+        ylabel: particles / second
+        title: "Particle Throughput (fixed PPC)"
+        filename: particles_per_sec.png
+    speedup:
+        x: n_particles
+        xlabel: particles
+        title: "Speedup over Jax Baseline (fixed PPC)"
+        filename: speedup_vs_jax.png
