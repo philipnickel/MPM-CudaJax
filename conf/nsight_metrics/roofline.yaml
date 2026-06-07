@@ -1,18 +1,19 @@
 # @package nsight.analyze
-# Metrics needed for hierarchical fp32 roofline plots.
+# Nsight Compute 2020 hierarchical roofline application metrics from Yang
+# (arXiv:2009.02449, Table III), plus peak counters used for reference roofs.
 metrics:
-  - gpu__time_duration.sum
-  - smsp__sass_thread_inst_executed_op_fadd_pred_on.sum
-  - smsp__sass_thread_inst_executed_op_fmul_pred_on.sum
-  - smsp__sass_thread_inst_executed_op_ffma_pred_on.sum
-  - sm__sass_thread_inst_executed_op_ffma_pred_on.sum.peak_sustained
+  - sm__cycles_elapsed.avg
   - sm__cycles_elapsed.avg.per_second
+  - sm__sass_thread_inst_executed_op_fadd_pred_on.sum
+  - sm__sass_thread_inst_executed_op_ffma_pred_on.sum
+  - sm__sass_thread_inst_executed_op_fmul_pred_on.sum
+  - l1tex__t_bytes.sum
+  - lts__t_bytes.sum
   - dram__bytes.sum
+  - sm__sass_thread_inst_executed_op_ffma_pred_on.sum.peak_sustained
+  - l1tex__t_bytes.sum.peak_sustained
+  - l1tex__cycles_elapsed.avg.per_second
+  - lts__t_bytes.sum.peak_sustained
+  - lts__cycles_elapsed.avg.per_second
   - dram__bytes.sum.peak_sustained
   - dram__cycles_elapsed.avg.per_second
-  - lts__lts2xbar_cycles_active.sum
-  - lts__lts2xbar_cycles_active.sum.peak_sustained
-  - lts__cycles_elapsed.avg.per_second
-  - l1tex__lsu_writeback_active_mem_lg.sum
-  - l1tex__lsu_writeback_active_mem_lg.sum.peak_sustained
-  - l1tex__cycles_elapsed.avg.per_second
