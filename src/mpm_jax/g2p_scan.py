@@ -47,7 +47,7 @@ def _g2p_scan_mls(grid_v, x, F, dt, inv_dx, dx, num_grids, clip_bound):
         return (v_acc, C_acc), None
 
     init = (jnp.zeros((N, 3), jnp.float32), jnp.zeros((N, 3, 3), jnp.float32))
-    (new_v, C_acc), _ = jax.lax.scan(scan_body, init, OFFSET_27)
+    (new_v, C_acc), _ = jax.lax.scan(scan_body, init, OFFSET_27, unroll=True)
     # same as in the p2g scan ..
 
     new_C = 4.0 * inv_dx * inv_dx * C_acc  # APIC affine = MLS velocity gradient
