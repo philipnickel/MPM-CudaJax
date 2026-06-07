@@ -21,17 +21,13 @@ EXPECTED_BACKENDS = {
 }
 
 
-def _registered_backend_config(choice):
-    return backends.backend_config(choice)
-
-
 def test_backend_config_choices_are_registered_backend_names():
     assert set(backends.backend_choices()) == set(EXPECTED_BACKENDS)
 
 
 def test_backend_config_choices_point_at_expected_targets():
     for choice, target in EXPECTED_BACKENDS.items():
-        cfg = _registered_backend_config(choice)
+        cfg = backends.backend_config(choice)
         assert cfg._target_ == target
 
 
@@ -49,7 +45,7 @@ def test_each_backend_config_instantiates_expected_backend_name(monkeypatch):
     )
 
     for choice in EXPECTED_BACKENDS:
-        cfg = _registered_backend_config(choice)
+        cfg = backends.backend_config(choice)
         cfg.num_grids = 16
         backend = hydra.utils.instantiate(cfg)
         assert backend.name == choice

@@ -14,11 +14,12 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from omegaconf import OmegaConf
+from types import SimpleNamespace
 
 from mpm_jax.p2g.backends import CudaV1Backend, CudaV2Backend
 from mpm_jax.constitutive import stvk_elasticity_jacobi
 from mpm_jax.p2g.cuda.p2g_cuda import CudaV1P2G, CudaV2P2G
-from mpm_jax.solver import build_backend_frame
+from mpm_jax.solver import MPMSolver, RuntimeConfig
 from mpm_jax.types import MPMState, MPMParams
 
 
@@ -75,24 +76,36 @@ def test_cuda_v2_matches_v1():
     steps_per_frame = 5
     num_frames = 3
 
-    jit_v1 = build_backend_frame(
-        params,
-        elasticity_fn,
-        CudaV1Backend(num_grids),
-        steps_per_frame,
+    sim = OmegaConf.create(
+        {
+            "n_particles": n,
+            "num_grids": num_grids,
+            "dt": params.dt,
+            "gravity": [0.0, 0.0, -9.8],
+            "rho": 1000.0,
+            "clip_bound": 0.5,
+            "damping": 1.0,
+            "size": [1.0, 1.0, 1.0],
+            "initial_velocity": [0.0, 0.0, -0.5],
+            "center": [0.5, 0.5, 0.5],
+            "steps_per_frame": steps_per_frame,
+        }
     )
-    jit_v2 = build_backend_frame(
-        params,
-        elasticity_fn,
-        CudaV2Backend(num_grids),
-        steps_per_frame,
+    material = SimpleNamespace(elasticity=elasticity_fn)
+    solver_v1 = MPMSolver(
+        RuntimeConfig(material=material, sim=sim, backend=CudaV1Backend(num_grids))
     )
+    solver_v2 = MPMSolver(
+        RuntimeConfig(material=material, sim=sim, backend=CudaV2Backend(num_grids))
+    )
+    solver_v1.state = state0
+    solver_v2.state = state0
 
-    s1 = state0
-    s2 = state0
     for _ in range(num_frames):
-        s1 = jit_v1(s1)
-        s2 = jit_v2(s2)
+        s1 = solver_v1._frame(solver_v1.state)
+        s2 = solver_v2._frame(solver_v2.state)
+        solver_v1.state = s1
+        solver_v2.state = s2
     jax.block_until_ready(s1.x)
     jax.block_until_ready(s2.x)
 

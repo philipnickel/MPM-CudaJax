@@ -42,7 +42,7 @@ def _scatter_stencil(grid, nodes, values, G):
 
 
 @ct.kernel
-def _p2g_home_cell_kernel(
+def cutile_v3_p2g_kernel(
     x,
     v,
     C,
@@ -120,7 +120,7 @@ def cutile_p2g_v3(
 
     grid = jnp.zeros((g, g, g, GRID_CHANNELS), dtype=jnp.float32)
     cells_per_axis = g + 1
-    kernel = _p2g_home_cell_kernel
+    kernel = cutile_v3_p2g_kernel
     if kernel_hints:
         kernel = kernel.replace_hints(**kernel_hints)
     grid = cutile_call(

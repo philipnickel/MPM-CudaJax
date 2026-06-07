@@ -87,14 +87,15 @@ vulture = ">=2.16,<3"
 platforms = ["linux-64", "linux-aarch64"]
 
 [tool.pixi.feature.gpu.dependencies]
-cuda-version = "12.*"
+cuda-version = "13.*"
 cuda-nvcc = "*"
-nsight-compute = ">=2025.2,<2025.3"
+nsight-compute = ">=2026.2,<2026.3"
 gxx = "*"
 setuptools = "<81"
 
 [tool.pixi.feature.gpu.pypi-dependencies]
 nsight-python = "*"
+nvtx = "*"
 warp-lang = "==1.14.0"
 cuda-tile = { version = ">=1.4.0, <2", extras = ["tileiras"] }
 jax = { version = ">=0.10.1, <0.11", extras = ["cuda13"] }
@@ -109,12 +110,13 @@ JAX_PLATFORMS = "cuda"
 # lax loop) are replayed as one graph per substep. Was an opt-in per-kernel flag
 # (cuda_v3 cuda_graph=true); now on for every kernel in the default env.
 XLA_FLAGS = "--xla_gpu_enable_command_buffer=FUSION,CUSTOM_CALL,WHILE"
+JAX_TRACEBACK_IN_LOCATIONS_LIMIT = "-1"
 JAX_COMPILATION_CACHE_DIR = "$PIXI_PROJECT_ROOT/.jax_cache"
 JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS = "0"
 JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES = "0"
 
 [tool.pixi.feature.gpu.system-requirements]
-cuda = "12.0"
+cuda = "13.0"
 # Warp 1.14 ships a manylinux_2_34 aarch64 wheel (GH200) and a manylinux_2_28
 # x86_64 wheel (H100). Declare the glibc floor so uv accepts the aarch64 wheel.
 libc = { family = "glibc", version = "2.34" }

@@ -1,6 +1,6 @@
 # Dedicated XProf trace run: the standard benchmark preset, shortened to a
 # couple of frames so the capture stays small. Profiling is on and rendering
-# off. Traces land in traces/<backend>/ (+ optimized_hlo.txt); view with
+# off. Traces land in traces/<backend>/; view with
 #   pixi run xprof --logdir traces
 #
 #   pixi run python simulate.py -cn trace backend=cutile_v3
@@ -15,7 +15,6 @@ render:
 
 profile:
   enabled: true
-  dump_hlo: true   # write optimized_hlo.txt (ops carry op_name scope + source) next to the trace
 
 sim:
   steps_per_frame: 5

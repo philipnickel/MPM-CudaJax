@@ -6,7 +6,7 @@
 #   pixi run python simulate.py -cn config sim=benchmark \
 #       backend=cuda_v3 material=jelly render.enabled=false
 num_frames: 1
-steps_per_frame: 100
+steps_per_frame: 20
 n_particles: 10000000
 initial_velocity: [0.0, 0.0, 0.0]
 num_grids: 64 # even grid required by the super-cell-tiled cuTile/CUDA kernels

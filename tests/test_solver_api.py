@@ -58,6 +58,17 @@ def test_step_returns_and_mutates_state():
     assert not jnp.array_equal(s.state.x, x0)
 
 
+def test_step_matches_frame_when_frame_has_one_substep():
+    staged = _make_solver(steps_per_frame=1)
+    framed = _make_solver(steps_per_frame=1)
+
+    staged.step()
+    framed.state = framed._frame(framed.state)
+
+    for staged_leaf, framed_leaf in zip(staged.state, framed.state, strict=True):
+        assert jnp.allclose(staged_leaf, framed_leaf, rtol=1e-5, atol=1e-6)
+
+
 def test_run_uses_configured_frames_and_can_capture_initial_states():
     s = _make_solver(steps_per_frame=1)
     s.num_frames = 2
@@ -79,11 +90,34 @@ def test_run_without_capture_returns_no_frames():
     assert elapsed >= 0
 
 
-def test_reset_restores_state():
-    s = _make_solver()
+def test_run_can_use_staged_steps():
+    s = _make_solver(steps_per_frame=1)
+    s.num_frames = 1
+
+    frames, elapsed = s.run(capture_frames=False, progress=False, staged=True)
+
+    assert frames == []
+    assert elapsed >= 0
+
+
+def test_run_can_reuse_explicit_warmup():
+    s = _make_solver(steps_per_frame=1)
+    s.num_frames = 1
+
+    s.warmup()
+    frames, elapsed = s.run(capture_frames=False, progress=False)
+
+    assert frames == []
+    assert elapsed >= 0
+
+
+def test_warmup_can_compile_staged_steps():
+    s = _make_solver(steps_per_frame=1)
     init = s.state
-    s.step()
-    s.reset_to_initial()
+
+    out = s.warmup(staged=True)
+
+    assert out is init
     assert s.state is init
 
 

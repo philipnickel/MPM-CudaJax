@@ -28,6 +28,7 @@ from mpm_jax.p2g.cutile.v3 import (
     PARTICLES_PER_TILE as V3_PARTICLES_PER_TILE,
     cutile_p2g_v3,
 )
+from mpm_jax.profiling import block_until_ready
 from mpm_jax.types import MPMParams, MPMState
 
 
@@ -103,22 +104,6 @@ def _make_state(sim):
     return MPMState(x=x, v=v, C=C, F=F), stress
 
 
-def _ready(result):
-    grid_mv, grid_m = result
-    grid_mv.block_until_ready()
-    grid_m.block_until_ready()
-
-
-def _prepare_v3(params, state, stress):
-    prepared = home_cell_order(params, state, stress)
-    prepared.x.block_until_ready()
-    prepared.v.block_until_ready()
-    prepared.C.block_until_ready()
-    prepared.stress.block_until_ready()
-    prepared.bucket_bounds.block_until_ready()
-    return prepared
-
-
 def _runner_v1(params, cfg):
     @jax.jit
     def run(x, v, C, stress):
@@ -165,11 +150,11 @@ def _runner_v3(params, cfg):
 def _time_config(cfg, params, inputs, warmups, repeats):
     runner = _runner_v1(params, cfg) if cfg.backend == "v1" else _runner_v3(params, cfg)
     for _ in range(warmups):
-        _ready(runner(*inputs))
+        block_until_ready(runner(*inputs))
 
     start = time.perf_counter()
     for _ in range(repeats):
-        _ready(runner(*inputs))
+        block_until_ready(runner(*inputs))
     mean_s = (time.perf_counter() - start) / repeats
     return mean_s
 
@@ -253,7 +238,7 @@ def main():
     prepared_v3 = None
     if "v3" in {item.strip() for item in args.backends.split(",")}:
         logger.info("Preparing home-cell sorted v3 inputs")
-        prepared_v3 = _prepare_v3(params, state, stress)
+        prepared_v3 = block_until_ready(home_cell_order(params, state, stress))
 
     results = []
     for cfg in _configs(args):

@@ -46,7 +46,7 @@ pixi run python simulate.py -cn config sim=benchmark \
 
 One environment is defined in `[tool.pixi.environments]` in `pyproject.toml`:
 
-- `default` — Linux only (`linux-64`, `linux-aarch64`) and GPU-first. **JAX runs on CUDA 13** (PyPI `jax[cuda13]`); `cuda-tile[tileiras]` (PyPI) is the cuTile runtime the `cutile` backend requires; `warp-lang==1.14.0` (now used only by the optional Warp OpenGL renderer, not by any P2G kernel) and `nsight-python` are PyPI too. conda-forge supplies the `cuda-nvcc` (**CUDA 12.x**) + `gxx` toolchain that compiles the FFI `.cu` kernels and the nanobind capsule module, plus `nsight-compute`. So the *build* toolchain is CUDA 12.x while the JAX *runtime* is CUDA 13 — they coexist and the FFI kernels load fine on the cuda13 runtime. The GPU activation block sets `JAX_PLATFORMS=cuda` + a persistent JAX compile cache (`.jax_cache/`). No `module load` required on DTU HPC.
+- `default` — Linux only (`linux-64`, `linux-aarch64`) and GPU-first. **JAX runs on CUDA 13** (PyPI `jax[cuda13]`); `cuda-tile[tileiras]` (PyPI) is the cuTile runtime the `cutile` backend requires; `warp-lang==1.14.0` (now used only by the optional Warp OpenGL renderer, not by any P2G kernel) and `nsight-python` are PyPI too. conda-forge supplies the `cuda-nvcc` (**CUDA 13.x**) + `gxx` toolchain that compiles the FFI `.cu` kernels and the nanobind capsule module, plus `nsight-compute`. The GPU activation block sets `JAX_PLATFORMS=cuda` + a persistent JAX compile cache (`.jax_cache/`). No `module load` required on DTU HPC.
 
 Common patterns:
 
@@ -89,7 +89,7 @@ conf/                  Hydra config groups
   sweep_*.yaml         pre-baked Hydra multirun sweeps
 src/mpm_jax/
   types.py             MPMState, MPMParams
-  solver.py            RuntimeConfig + MPMSolver + build_backend_frame (per-frame loop) + get_particles
+  solver.py            RuntimeConfig + MPMSolver + staged/frame stepping + get_particles
   constitutive.py      StVK elastic stress (the jelly material), SVD-free
   g2p_scan.py          JAX baseline G2P: lax.scan over 27 offsets + MLS C=∇v (shared by ALL kernels)
   grid.py              grid_update: momentum normalise + gravity + damping; build_grid_x
@@ -124,11 +124,12 @@ Three embarrassingly parallel phases per substep:
 `MPMSolver` (in `src/mpm_jax/solver.py`) is a plain Python class wrapping the functional JAX core:
 
 - Built once from `params`, an `elasticity_fn`, a `Backend`, and `steps_per_frame`. Array state is mutated in place by the driver API; the backend, sticky-floor mask, closures, and the compiled `_frame` are fixed for the solver's lifetime. The solver is never a JAX argument — only `state` (an `MPMState` pytree) is traced — so it needs no pytree machinery.
-- `step()` advances one frame (= `steps_per_frame` substeps) by calling
-  `_frame(self.state)` and mutating `self.state`.
+- `step()` advances one host-driven substep using individually jitted stage
+  callables and mutates `self.state`; `_frame` advances one configured frame by
+  running a jitted `lax.fori_loop` over the same pure substep.
 - `run(capture_frames=...)` drives the configured frame loop, including warmup,
   timing, optional frame capture, and final synchronization.
-- The `steps_per_frame` substeps run inside `build_backend_frame` as a single `lax.fori_loop`.
+- The `steps_per_frame` substeps run as a single jitted `lax.fori_loop` over `MPMSolver.step_state`.
 
 ### Backend Variants
 
@@ -170,8 +171,27 @@ pixi run python simulate.py backend=cutile_v3 material=jelly sim=benchmark rende
 # Override sim params
 pixi run python simulate.py sim.n_particles=50000 sim.num_grids=64
 
-# Nsight Python profiler (per-stage kernel analysis)
-pixi run python profile_nsight.py -cn nsight_profile backend=jax material=jelly nsight.phase=p2g sim.n_particles=4096
+# Nsight Python profiler (NCU metrics for one target: frame, p2g, prepare, scatter)
+pixi run python profile_nsight.py -cn nsight_profile backend=cutile_v3 nsight.target=scatter sim.n_particles=4096
+
+# Raw NCU report for one NVTX-marked target. Use process-scoped NVTX because
+# JAX may launch CUDA work from helper threads.
+pixi run ncu --nvtx --nvtx-push-pop-scope process \
+  --nvtx-include "mpm_cudajax@cutile_v3_scatter/" \
+  --metrics gpu__time_duration.sum --force-overwrite \
+  -o outputs/ncu/cutile_v3_scatter \
+  python -S tools/ncu_p2g.py --target scatter backend=cutile_v3 sim.n_particles=4096
+
+# Interactive NCU GUI: launch the Pixi env Python directly, not `pixi`.
+# simulate.py warms once, then marks the measured solve loop with NVTX and
+# staged mode marks each substep stage with NVTX.
+# sim=benchmark is one frame with one substep for focused interactive profiling.
+# For richer JAX/XLA annotations, override XLA_FLAGS=--xla_gpu_enable_command_buffer=
+
+# Cleaner NCU API stream: one physical substep with each stage jitted separately.
+XLA_FLAGS=--xla_gpu_enable_command_buffer= \
+pixi run python simulate.py sim=benchmark backend=cutile_v3 render.enabled=false \
+  profile.step_mode=staged
 
 # Sweeps (Hydra multirun)
 pixi run python simulate.py -cn sweep_baseline    # JAX-only scaling
@@ -215,8 +235,10 @@ CMake auto-detects the local GPU arch when `MPM_CUDA_ARCH` is unset.
   6. Rebuild the editable package metadata after module/package shape changes: `pixi reinstall mpm-cudajax`.
 - **Adding a new cuTile-in-JAX kernel:** put the cuTile kernel + `cutile_call` bridge in a dedicated module under `src/mpm_jax/p2g/cutile/`, add a backend implementation under `src/mpm_jax/p2g/backends/`, and decorate it with `hydra_zen.store(..., group="backend")`.
 - Constitutive models are Hydra-instantiated (`material.elasticity._target_`); the sticky floor boundary is fixed in `solver.py`.
-- **No `block_until_ready` inside the timed region when `render.enabled=false`.** Timing-only runs dispatch all frames back-to-back and sync exactly once after the loop; elapsed/num_frames is the average. Per-stage breakdown comes from `profile_nsight.py`, not from `simulate.py`'s output.
-- XLA command-buffer / CUDA-Graph capture is enabled for **all** kernels via `XLA_FLAGS` in the GPU activation block (`--xla_gpu_enable_command_buffer=FUSION,CUSTOM_CALL,WHILE`), so it is always on under `pixi run`. There is no per-kernel `cuda_graph` flag anymore.
+- **No `block_until_ready` inside the timed region when `render.enabled=false`.** Timing-only runs dispatch all frames back-to-back and sync exactly once after the loop; elapsed/num_frames is the average. Per-stage breakdown comes from `profile_nsight.py` / `tools/ncu_p2g.py`, not from `simulate.py`'s output.
+- `simulate.py` calls `solver.warmup()` before entering its profiled solve range. The measured loop is wrapped with NVTX (`mpm_cudajax@<backend>_solve`); staged mode also marks `elasticity`, `prepare`, `scatter`, `grid_update`, and `g2p`. `sim=benchmark` is one frame with one substep, and cuTile kernels are named `cutile_v1_p2g_kernel...` / `cutile_v3_p2g_kernel...` in Nsight Compute.
+- Profiling targets are built in `src/mpm_jax/profiling/p2g.py`: `frame` is the full compiled solver frame, `p2g` is elasticity + prepare/sort + scatter, `prepare` is elasticity + backend ordering, and `scatter` profiles the backend P2G scatter with prepared inputs precomputed outside the profiling range.
+- XLA command-buffer / CUDA-Graph capture is enabled for **all** kernels via `XLA_FLAGS` in the GPU activation block (`--xla_gpu_enable_command_buffer=FUSION,CUSTOM_CALL,WHILE`), so it is always on under `pixi run`. There is no per-kernel `cuda_graph` flag anymore. For profiling runs where richer JAX/XLA annotations matter more than exact graph-captured timing, temporarily override `XLA_FLAGS=--xla_gpu_enable_command_buffer=`.
 - Lint with ruff (config in `ruff.toml`); `I` is allowed as a variable name (identity matrix), and `tests/*` skips E402/F401.
 
 ## Don't

@@ -16,11 +16,11 @@ from copy import deepcopy
 from pathlib import Path
 
 import hydra
-import jax
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
 import mpm_jax.p2g.backends as backend_configs
+from mpm_jax.profiling import block_until_ready, build_profile_target
 from mpm_jax.solver import MPMSolver
 
 logger = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ def _optional_module(name):
 nsight = _optional_module("nsight")
 
 _UNSUPPORTED_ANALYZE_CONFIG_KEYS = {"configs"}
-_SCRIPT_NSIGHT_KEYS = {"phase", "write_json", "plot", "sweep", "configs", "analyze"}
+_SCRIPT_NSIGHT_KEYS = {"target", "write_json", "plot", "sweep", "configs", "analyze"}
 _PROFILE_BACKEND_CHOICE_KEY = "_profile_backend_choice"
 _SPEED_OF_LIGHT_METRICS = [
     "gpu__time_duration.sum",
@@ -93,15 +93,11 @@ _METRIC_PRESETS = {
 }
 
 
-def _backend_choices() -> tuple[str, ...]:
-    return backend_configs.backend_choices()
-
-
 def _normalize_backend_choice(value) -> str:
     if not isinstance(value, str):
         raise RuntimeError("Backend choices must be Hydra config-group names.")
     choice = value.strip()
-    supported = _backend_choices()
+    supported = backend_configs.backend_choices()
     if choice not in supported:
         raise RuntimeError(
             f"Unsupported backend choice {value!r}. "
@@ -110,18 +106,14 @@ def _normalize_backend_choice(value) -> str:
     return choice
 
 
-def _backend_config(choice: str) -> DictConfig:
-    return backend_configs.backend_config(_normalize_backend_choice(choice))
-
-
 def _backend_choice_from_backend_cfg(backend_cfg) -> str:
     target = backend_cfg.get("_target_", None)
-    for choice in _backend_choices():
-        if target == _backend_config(choice).get("_target_", None):
+    for choice in backend_configs.backend_choices():
+        if target == backend_configs.backend_config(choice).get("_target_", None):
             return choice
     raise RuntimeError(
         "Could not infer backend choice from cfg.backend. "
-        "Use one of: " + ", ".join(_backend_choices())
+        "Use one of: " + ", ".join(backend_configs.backend_choices())
     )
 
 
@@ -145,39 +137,15 @@ def _require_nsight():
     return nsight
 
 
-def _build_p2g_stage(cfg: DictConfig):
-    """Isolate the P2G as a profiled callable, reusing the constructed solver.
-
-    Builds the solver from the Hydra-instantiated runtime config, then
-    runs just elasticity -> backend.prepare (sort) -> backend.scatter
-    on the solver's own params/state/fns — no duplicated construction.
-    """
+def _profile_runner(cfg: DictConfig, nsight):
     solver = MPMSolver(hydra.utils.instantiate(cfg.solver))
-    params, backend = solver.params, solver.backend
-    elasticity_fn = solver.elasticity_fn
-    state = solver.state
+    target = build_profile_target(solver, str(cfg.nsight.get("target", "p2g")))
 
-    @jax.jit
-    def jit_p2g_stage(state):
-        stress = elasticity_fn(state.F)
-        prepared = backend.prepare(params, state, stress)
-        return backend.scatter(params, prepared)
+    def run_once():
+        with nsight.annotate(target.annotation):
+            block_until_ready(target.run())
 
-    warmup = jit_p2g_stage(state)
-    jax.block_until_ready(warmup)
-    return jit_p2g_stage, state, backend.name
-
-
-def _p2g_runner(cfg: DictConfig, nsight):
-    jit_p2g_stage, state, backend_name = _build_p2g_stage(cfg)
-    annotation_name = f"{backend_name}_p2g"
-
-    def run_p2g_once():
-        with nsight.annotate(annotation_name):
-            out = jit_p2g_stage(state)
-            jax.block_until_ready(out)
-
-    return run_p2g_once
+    return run_once
 
 
 def _variant_value(variant: Mapping, path: str, default):
@@ -211,7 +179,7 @@ def _merge_variant_cfg(
     variant_cfg.sim.n_particles = int(n_particles)
     variant_cfg.sim.num_grids = int(num_grids)
     variant_cfg.sim.steps_per_frame = int(steps_per_frame)
-    variant_cfg.backend = _backend_config(backend_choice)
+    variant_cfg.backend = backend_configs.backend_config(backend_choice)
     variant_cfg[_PROFILE_BACKEND_CHOICE_KEY] = backend_choice
     variant_cfg.solver.material = "${material}"
     variant_cfg.solver.sim = "${sim}"
@@ -621,6 +589,7 @@ def _nsight_analyze_kwargs(cfg: DictConfig, run_dir: Path, backend_choice: str):
 
     kwargs = dict(kwargs)
     kwargs.setdefault("runs", 1)
+    kwargs.setdefault("replay_mode", "range")
     _expand_metric_presets(kwargs)
     kwargs["derive_metric"] = _derive_metric(
         kwargs.get("derive_metric"), kwargs["metrics"]
@@ -630,7 +599,10 @@ def _nsight_analyze_kwargs(cfg: DictConfig, run_dir: Path, backend_choice: str):
     )
     kwargs.setdefault("output", "progress")
     kwargs.setdefault("output_csv", True)
-    kwargs.setdefault("output_prefix", str(run_dir / f"nsight_{backend_choice}_p2g_"))
+    target_name = str(cfg.nsight.get("target", "p2g"))
+    kwargs.setdefault(
+        "output_prefix", str(run_dir / f"nsight_{backend_choice}_{target_name}_")
+    )
     kwargs.setdefault("configs", _nsight_configs(cfg))
     return kwargs
 
@@ -742,9 +714,6 @@ def _disable_editable_pth_for_nsight():
 def main(cfg: DictConfig):
     nsight = _require_nsight()
     backend_choice = _backend_choice_from_cfg(cfg)
-    phase = str(cfg.nsight.get("phase", "p2g"))
-    if phase != "p2g":
-        raise RuntimeError("profile_nsight.py now supports only nsight.phase=p2g.")
 
     run_dir = Path(HydraConfig.get().runtime.output_dir).resolve()
     _prepare_nsight_child_python(run_dir)
@@ -760,7 +729,7 @@ def main(cfg: DictConfig):
             num_grids=num_grids,
             steps_per_frame=steps_per_frame,
         )
-        launcher = _p2g_runner(profile_cfg, nsight)
+        launcher = _profile_runner(profile_cfg, nsight)
         launcher()
 
     profiled_variant = nsight.analyze.kernel(**analyze_kwargs)(profiled_variant)

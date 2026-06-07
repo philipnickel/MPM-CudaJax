@@ -1,8 +1,7 @@
 # Focused single-substep capture for inspecting the JAX P2G fusions/HLO in
 # detail. One backend, one frame, one substep -> the smallest possible XLA
-# module, so the XProf Graph Viewer / Op Profile and the dumped optimized HLO
-# show the P2G fusion structure cleanly. Writes to traces/<label>/ (separate
-# from the backend-comparison runs) plus optimized_hlo.txt alongside it.
+# module, so the XProf Graph Viewer / Op Profile show the P2G fusion structure
+# cleanly. Writes to traces/<label>/ separate from the backend-comparison runs.
 #
 #   pixi run python simulate.py -cn trace_substep
 #   pixi run xprof --logdir traces      # -> "jax_p2g_substep" run, Graph Viewer
@@ -17,7 +16,6 @@ render:
 profile:
   enabled: true
   label: jax_p2g_substep
-  dump_hlo: true
 
 # backend defaults to jax (conf/config.yaml); override on the CLI for others.
 

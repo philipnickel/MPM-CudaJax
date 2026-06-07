@@ -7,7 +7,7 @@ render:
   enabled: false
 
 nsight:
-  phase: p2g
+  target: p2g
   write_json: true
   sweep: null
   configs: null
@@ -16,5 +16,6 @@ nsight:
     filename: nsight_plot.png
   analyze:
     runs: 1
+    replay_mode: range
     metric_preset: time
     derive_metric: throughput

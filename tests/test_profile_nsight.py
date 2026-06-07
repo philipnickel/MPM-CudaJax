@@ -6,10 +6,23 @@ from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
 import profile_nsight
+import mpm_jax.p2g.backends as backend_configs
+from mpm_jax.profiling import build_profile_target
 from mpm_jax.solver import MPMSolver
 
 
 CONF_DIR = Path(__file__).resolve().parents[1] / "conf"
+
+
+class _NullAnnotation:
+    def __init__(self, name):
+        self.name = name
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exc_type, _exc, _tb):
+        return False
 
 
 def _compose_config(config_name="config", overrides=None):
@@ -27,7 +40,7 @@ def _compose_config(config_name="config", overrides=None):
         OmegaConf.set_struct(cfg, False)
         cfg.nsight = OmegaConf.create(
             {
-                "phase": "p2g",
+                "target": "p2g",
                 "write_json": False,
                 "plot": {"enabled": False},
                 "sweep": None,
@@ -39,7 +52,7 @@ def _compose_config(config_name="config", overrides=None):
 
 
 def test_backend_choices_come_from_registered_hydra_configs():
-    assert set(profile_nsight._backend_choices()) == {
+    assert set(backend_configs.backend_choices()) == {
         "jax",
         "cuda_v1",
         "cuda_v2",
@@ -53,20 +66,32 @@ def test_backend_choices_come_from_registered_hydra_configs():
 def test_nsight_profile_config_composes():
     cfg = _compose_config("nsight_profile")
 
-    assert cfg.nsight.phase == "p2g"
+    assert cfg.nsight.target == "p2g"
     assert cfg.backend._target_ == "mpm_jax.p2g.backends.jax.JaxBackend"
     assert profile_nsight._nsight_configs(cfg) == [("jax", 8, 16, 1)]
 
 
-def test_p2g_stage_reuses_solver_state_without_extra_particle_prepass():
+def test_profile_target_reuses_solver_state_without_extra_particle_prepass():
     cfg = _compose_config()
 
-    jit_stage, state, backend_name = profile_nsight._build_p2g_stage(cfg)
-    grid_mv, grid_m = jit_stage(state)
+    solver = MPMSolver(hydra.utils.instantiate(cfg.solver))
+    target = build_profile_target(solver, "p2g")
+    grid_mv, grid_m = target.run()
 
-    assert backend_name == "jax"
+    assert target.backend_name == "jax"
     assert grid_mv.shape == (16**3, 3)
     assert grid_m.shape == (16**3,)
+
+
+def test_profile_runner_accepts_scatter_target():
+    cfg = _compose_config()
+    cfg.nsight.target = "scatter"
+
+    runner = profile_nsight._profile_runner(
+        cfg, type("Nsight", (), {"annotate": _NullAnnotation})()
+    )
+
+    runner()
 
 
 def test_sweep_backend_choices_are_hydra_choices():
