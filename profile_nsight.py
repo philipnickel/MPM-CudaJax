@@ -31,6 +31,7 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 
 import mpm_jax.p2g.backends as backend_configs
+import mpm_jax.resolvers  # noqa: F401 - registers ${ppc_grid:N}
 from mpm_jax.solver import MPMSolver
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,11 @@ nsight = _optional_module("nsight")
 
 # Only these top-level nsight.* keys are recognized; anything else is a typo.
 _SCRIPT_NSIGHT_KEYS = {"analyze"}
+# Nsight Python analysis is for one custom P2G scatter kernel per annotation.
+# The JAX baseline lowers to several XLA-generated kernels; use XProf for it.
+_NSIGHT_BACKEND_CHOICES = tuple(
+    choice for choice in backend_configs.backend_choices() if choice != "jax"
+)
 # nsight.analyze.configs is derived from the Hydra config, never user-supplied.
 # Derived metrics are intentionally left to postprocessing.
 _UNSUPPORTED_ANALYZE_CONFIG_KEYS = {
@@ -118,6 +124,14 @@ def _backend_choice_from_cfg(cfg: DictConfig):
 
 def _profile_config(cfg: DictConfig, backend_choice: str):
     """The single (backend, n, g, steps) config tuple this job profiles."""
+    if backend_choice not in _NSIGHT_BACKEND_CHOICES:
+        supported = ", ".join(_NSIGHT_BACKEND_CHOICES)
+        raise RuntimeError(
+            "Nsight Python analysis profiles custom CUDA/cuTile P2G scatter "
+            f"kernels only; backend={backend_choice!r} is not supported. "
+            "Use JAX/XProf tracing for backend='jax', or choose one of: "
+            f"{supported}."
+        )
     return (
         backend_choice,
         int(cfg.sim.n_particles),

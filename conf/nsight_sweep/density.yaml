@@ -1,0 +1,13 @@
+# @package _global_
+# Fixed N=20M, growing grid resolution.
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      backend: cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v3
+      sim.num_grids: 64,84,112,148,196
+
+sim:
+  n_particles: 20000000
+
+tag: nsight_density

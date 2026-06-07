@@ -76,7 +76,7 @@ Key knobs:
 
 ```
 simulate.py            Hydra entry point + timing + GIF rendering
-profile_nsight.py      Nsight Python profiler for per-stage and per-kernel analysis
+profile_nsight.py      Nsight Python profiler for custom CUDA/cuTile P2G kernels
 postprocessing/        Analysis tooling (top-level, NOT in the installed mpm_jax package; plotting deps only)
   callbacks.py         ScalingPlotCallback: aggregate sweep results.json -> CSV + scaling plots
 pyproject.toml         deps + scikit-build-core build + default Pixi GPU env + tasks
@@ -152,7 +152,9 @@ Current kernel names:
 
 Material baseline:
 - `material=jelly` is the only material: StVK elastic stress (closed-form, SVD-free), no plasticity. (The earlier StVK/Drucker-Prager *sand* path and its in-repo Jacobi SVD were removed — jelly never needed them, and the SVD's only consumer was sand's plasticity.)
-- The cuTile backend is part of the same JAX loop as the CUDA/JAX variants, so ordinary benchmark timing and `profile_nsight.py` apply.
+- The cuTile backend is part of the same JAX loop as the CUDA/JAX variants, so
+  ordinary benchmark timing applies. `profile_nsight.py` is only for custom
+  CUDA/cuTile P2G scatter kernels; use XProf tracing for `backend=jax`.
 
 ## Common commands
 
@@ -177,28 +179,26 @@ pixi run python simulate.py sim.n_particles=50000 sim.num_grids=64
 # Benchmark P2G prepare/scatter and full solver ms/step at G=96, N=10M.
 pixi run python tools/benchmark_p2g_substeps.py
 
-# Nsight Python profiler (direct NCU metrics for the warmed P2G scatter path).
-# conf/nsight_profile.yaml owns the default nsight.analyze.metrics list; override
-# nsight.analyze.metrics=[...] directly for focused collection.
+# Nsight Python profiler (direct NCU metrics for warmed custom P2G scatter).
+# Use only CUDA/cuTile backends here; use XProf tracing for backend=jax.
+# conf/nsight_metrics/{timing,roofline,full}.yaml owns the metric presets;
+# override nsight.analyze.metrics=[...] directly for focused collection.
 pixi run python profile_nsight.py -cn nsight_profile backend=cutile_v3 sim.n_particles=4096
 
-# Cross-backend analysis: ONE Hydra job profiles ONE backend; sweep via Hydra
-# multirun (-m), like simulate.py. Each job appends ProfileResults.to_dataframe()
-# rows to sweep-level results.parquet; nsight_plots.py loads them,
-# derives analysis columns, and renders roofline/atomics/occupancy/scheduler
-# (+ roofline_scaling for scale sweeps). nsight_profile.yaml defaults:
-# replay_mode=kernel, known cuTile XLA wrappers ignored, and no default kernel
-# combiner, so Nsight Python enforces one warmed scatter kernel per annotation.
-pixi run python profile_nsight.py -cn nsight_profile -m \
-  backend=cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v3
-pixi run python postprocessing/nsight_plots.py \
-  outputs/nsight/<gpu>/sweeps/<date>/<time>/results.parquet -o figures/nsight/<gpu>/
+# Cross-backend analysis: nsight_sweep configs define serial Hydra multiruns
+# over custom CUDA/cuTile backends only. Each job appends
+# ProfileResults.to_dataframe() rows to sweep-level results.parquet; the
+# nsight_plot callback loads that authoritative parquet and renders
+# roofline/atomics/occupancy/scheduler (+ roofline_scaling for scale sweeps).
+pixi run python profile_nsight.py -cn nsight_profile nsight_sweep=single_point
 
 # Scaling roofline trajectories (adds roofline_scaling.png; axis auto-detected):
 #   load: fixed grid, growing N (throughput vs problem size, NOT strong scaling)
-#         -> sim.n_particles=1250000,2500000,5000000,10000000
+#         -> nsight_sweep=particle_count
 #   weak: fixed ppc, grid+N grow together
-#         -> scale=weak_g64,weak_g96,weak_g128,weak_g160
+#         -> nsight_sweep=weak
+pixi run python profile_nsight.py -cn nsight_profile nsight_sweep=particle_count
+pixi run python profile_nsight.py -cn nsight_profile nsight_sweep=weak
 
 # Interactive NCU GUI: launch through Pixi so runtime env vars are inherited.
 # simulate.py warms once, then marks the measured jitted frame loop with NVTX.
@@ -254,9 +254,12 @@ pixi run sim    # smoke-test
 - Constitutive models are Hydra-instantiated (`material.elasticity._target_`); the sticky floor boundary is fixed in `solver.py`.
 - **No `block_until_ready` inside the timed region when `render.enabled=false`.** Timing-only runs dispatch all frames back-to-back and sync exactly once after the loop; elapsed/num_frames is the average. Per-stage breakdown comes from `profile_nsight.py`, not from `simulate.py`'s output.
 - `simulate.py` calls `solver.warmup()` before entering its profiled solve range. The measured jitted frame loop is wrapped with NVTX (`mpm_cudajax@<backend>_solve`). `sim=benchmark` is one frame with 50 substeps, and cuTile kernels are named `cutile_v1_p2g_kernel...` / `cutile_v3_p2g_kernel...` in Nsight Compute.
-- `profile_nsight.py` profiles the warmed backend P2G scatter path directly:
+- `profile_nsight.py` profiles the warmed custom CUDA/cuTile P2G scatter path directly:
   solver construction and backend `prepare()` run outside the annotated region,
   then the jitted scatter call is annotated as `<backend>_p2g`.
+- Nsight sweeps are serial Hydra multiruns selected with `nsight_sweep=*`.
+  Per-job appends to `results.parquet` are the intended aggregation path;
+  `NsightPlotCallback` requires that file and does not reconstruct it.
 - There is no project-level `XLA_FLAGS` command-buffer override in the default Pixi env. JAX uses the pinned `jaxlib` defaults; XProf tracing uses `jax.profiler.ProfileOptions`, including CUPTI graph tracing, in that same default environment.
 - Lint with ruff (config in `ruff.toml`); `I` is allowed as a variable name (identity matrix), and `tests/*` skips E402/F401.
 

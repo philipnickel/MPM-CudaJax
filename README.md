@@ -213,38 +213,38 @@ Plots and per-plot summary CSVs are written to `figures/sweeps/<gpu-kind>/`.
 
 ### Nsight Compute
 
-Use the dedicated Nsight Python entrypoint for NCU metrics on the P2G scatter
-kernel. The profiler prepares inputs outside the annotation, warms the jitted
-scatter once, then profiles the warmed P2G scatter call:
+Use the dedicated Nsight Python entrypoint for NCU metrics on the custom
+CUDA/cuTile P2G scatter kernels. Do not use this path for `backend=jax`; the JAX
+baseline lowers to several XLA-generated kernels and belongs in the XProf trace
+workflow below. The profiler prepares inputs outside the annotation, warms the
+jitted scatter once, then profiles the warmed P2G scatter call:
 
 ```bash
 pixi run python profile_nsight.py -cn nsight_profile \
     backend=cutile_v3 sim.n_particles=4096
 ```
 
-`conf/nsight_profile.yaml` owns the direct NCU metric list passed to
-`nsight.analyze.metrics`; override it directly with
-`nsight.analyze.metrics=[...]` for focused runs. The default list includes the
-NCU counters needed by the postprocessing roofline, atomics, occupancy, and
-scheduler plots.
+`conf/nsight_metrics/` owns the direct NCU metric presets passed to
+`nsight.analyze.metrics`: `timing`, `roofline`, and `full` (the default). You
+can still override `nsight.analyze.metrics=[...]` directly for focused runs.
+The `full` preset includes the NCU counters needed by the roofline, atomics,
+occupancy, and scheduler plots.
 
 **Cross-backend analysis figures** (hierarchical fp32 roofline, atomic-scatter,
 occupancy, warp-stall breakdown) for the custom P2G kernels. One Hydra job
-profiles one backend variant; sweep across backends with **Hydra multirun** (`-m`),
-exactly like `simulate.py`. Each job calls `ProfileResults.to_dataframe()`, writes
-the processed `nsight-python` metric-row DataFrame to `nsight_metrics.parquet`
-in its Hydra output dir, and appends those rows to sweep-level `results.parquet`
-under `outputs/nsight/<gpu>/sweeps/<date>/<time>/`. The `.ncu-rep` report from
-Nsight Compute is saved in the same per-job Hydra output dir.
-`postprocessing/nsight_plots.py` loads `results.parquet`, derives analysis
-columns, and renders the figures:
+profiles one backend variant; the `conf/nsight_sweep/` group defines serial
+Hydra multiruns over the custom backends. Each job calls
+`ProfileResults.to_dataframe()`, writes the processed `nsight-python` metric-row
+DataFrame to `nsight_metrics.parquet` in its Hydra output dir, and appends those
+rows to sweep-level `results.parquet` under
+`outputs/nsight/<gpu>/sweeps/<date>/<time>/`. The `.ncu-rep` report from Nsight
+Compute is saved in the same per-job Hydra output dir. At multirun end,
+`conf/nsight_plot/standard.yaml` installs `NsightPlotCallback`, which loads that
+authoritative `results.parquet` with pandas and renders the figures:
 
 ```bash
 # Single operating point (all 6 custom kernels at the benchmark resolution):
-pixi run python profile_nsight.py -cn nsight_profile -m \
-    backend=cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v3
-pixi run python postprocessing/nsight_plots.py \
-    outputs/nsight/<gpu>/sweeps/<date>/<time>/results.parquet -o figures/nsight/<gpu>/
+pixi run python profile_nsight.py -cn nsight_profile nsight_sweep=single_point
 ```
 
 The default `nsight_profile.yaml` uses `replay_mode=kernel`, drops known tiny XLA
@@ -260,14 +260,14 @@ direction of increasing scale. The axis is auto-detected from what varies:
 ```bash
 # Load sweep (throughput vs problem size): fixed grid, growing particle count
 # (raises ppc/density). Resources are constant, so this is NOT strong scaling.
-pixi run python profile_nsight.py -cn nsight_profile -m \
-    backend=cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v3 \
-    sim.n_particles=1250000,2500000,5000000,10000000
+pixi run python profile_nsight.py -cn nsight_profile nsight_sweep=particle_count
 
 # Weak scaling: fixed particles-per-cell (~8.49), grid + N grow together.
-pixi run python profile_nsight.py -cn nsight_profile -m \
-    backend=cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v3 \
-    scale=weak_g64,weak_g96,weak_g128,weak_g160
+pixi run python profile_nsight.py -cn nsight_profile nsight_sweep=weak
+
+# Manual re-render from an existing aggregate:
+pixi run python postprocessing/nsight_plots.py \
+    outputs/nsight/<gpu>/sweeps/<date>/<time>/results.parquet -o figures/nsight/<gpu>/
 ```
 
 For interactive Nsight Compute, launch the GUI through Pixi so the profiled

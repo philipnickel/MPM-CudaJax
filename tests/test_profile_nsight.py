@@ -4,6 +4,8 @@ from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
 import profile_nsight
+from postprocessing.callbacks import NsightPlotCallback
+from postprocessing.nsight_plots import render_nsight_figures
 import mpm_jax.p2g.backends as backend_configs
 
 
@@ -12,7 +14,6 @@ CONF_DIR = Path(__file__).resolve().parents[1] / "conf"
 
 def _compose_config(config_name="config", overrides=None):
     overrides = [
-        "backend=jax",
         "sim.n_particles=8",
         "sim.num_grids=16",
         "sim.steps_per_frame=1",
@@ -31,6 +32,15 @@ def _compose_config(config_name="config", overrides=None):
     return cfg
 
 
+def _compose_config_with_hydra(config_name="config", overrides=None):
+    with initialize_config_dir(version_base=None, config_dir=str(CONF_DIR)):
+        return compose(
+            config_name=config_name,
+            overrides=overrides or [],
+            return_hydra_config=True,
+        )
+
+
 def test_backend_choices_come_from_registered_hydra_configs():
     assert set(backend_configs.backend_choices()) == {
         "jax",
@@ -44,14 +54,28 @@ def test_backend_choices_come_from_registered_hydra_configs():
 
 
 def test_nsight_profile_config_composes():
-    cfg = _compose_config("nsight_profile")
+    cfg = _compose_config("nsight_profile", overrides=["backend=cuda_v1"])
 
-    assert cfg.backend._target_ == "mpm_jax.p2g.backends.jax.JaxBackend"
-    assert profile_nsight._profile_config(cfg, "jax") == ("jax", 8, 16, 1)
+    assert cfg.backend._target_ == "mpm_jax.p2g.backends.cuda.CudaV1Backend"
+    assert profile_nsight._profile_config(cfg, "cuda_v1") == ("cuda_v1", 8, 16, 1)
+
+
+def test_nsight_profile_rejects_jax_backend():
+    cfg = _compose_config("nsight_profile", overrides=["backend=jax"])
+
+    try:
+        profile_nsight._profile_config(cfg, "jax")
+    except RuntimeError as exc:
+        assert "custom CUDA/cuTile P2G scatter kernels only" in str(exc)
+        assert "XProf" in str(exc)
+    else:
+        raise AssertionError("backend=jax should not be valid for Nsight analysis")
 
 
 def test_profile_config_reads_sim_axes():
-    cfg = _compose_config(overrides=["sim.n_particles=12", "sim.num_grids=40"])
+    cfg = _compose_config(
+        overrides=["backend=cuda_v3", "sim.n_particles=12", "sim.num_grids=40"]
+    )
     assert profile_nsight._profile_config(cfg, "cuda_v3") == ("cuda_v3", 12, 40, 1)
 
 
@@ -63,17 +87,147 @@ def test_backend_choice_from_cfg_infers_from_backend_target():
 
 
 def test_analyze_kwargs_carry_single_config_and_callables(tmp_path):
-    cfg = _compose_config("nsight_profile")
-    profile_config = profile_nsight._profile_config(cfg, "jax")
+    cfg = _compose_config("nsight_profile", overrides=["backend=cuda_v1"])
+    profile_config = profile_nsight._profile_config(cfg, "cuda_v1")
 
     kwargs = profile_nsight._nsight_analyze_kwargs(cfg, tmp_path, profile_config)
 
-    assert kwargs["configs"] == [("jax", 8, 16, 1)]
+    assert kwargs["configs"] == [("cuda_v1", 8, 16, 1)]
     assert "derive_metric" not in kwargs
     assert kwargs["replay_mode"] == "kernel"
     assert kwargs["combine_kernel_metrics"] is None
     assert kwargs["output_csv"] is False
     assert "gpu__time_duration.sum" in kwargs["metrics"]
+
+
+def test_nsight_metric_presets_compose():
+    full = _compose_config("nsight_profile", overrides=["backend=cuda_v1"])
+    timing = _compose_config(
+        "nsight_profile", overrides=["backend=cuda_v1", "nsight_metrics=timing"]
+    )
+    roofline = _compose_config(
+        "nsight_profile", overrides=["backend=cuda_v1", "nsight_metrics=roofline"]
+    )
+
+    assert "gpu__time_duration.sum" in full.nsight.analyze.metrics
+    assert list(timing.nsight.analyze.metrics) == ["gpu__time_duration.sum"]
+    assert "dram__bytes.sum" in roofline.nsight.analyze.metrics
+    assert "launch__registers_per_thread" not in roofline.nsight.analyze.metrics
+
+
+def test_nsight_sweep_configs_exclude_jax_and_use_direct_axes():
+    valid_backends = set(backend_configs.backend_choices()) - {"jax"}
+    expectations = {
+        "single_point": {},
+        "particle_count": {
+            "sweep_axis": "sim.n_particles",
+            "fixed": ("sim.num_grids", 96),
+            "tag": "nsight_particle_count",
+        },
+        "density": {
+            "sweep_axis": "sim.num_grids",
+            "fixed": ("sim.n_particles", 20_000_000),
+            "tag": "nsight_density",
+        },
+        "weak": {
+            "sweep_axis": "sim.n_particles",
+            "fixed": ("sim.num_grids", "${ppc_grid:${sim.n_particles}}"),
+            "tag": "nsight_weak",
+        },
+    }
+    for sweep, expected in expectations.items():
+        cfg = _compose_config_with_hydra(
+            "nsight_profile", overrides=[f"nsight_sweep={sweep}"]
+        )
+        params = cfg.hydra.sweeper.params
+        backend_choices = params.backend.split(",")
+        assert backend_choices
+        assert "jax" not in backend_choices
+        assert set(backend_choices).issubset(valid_backends)
+        assert "scale" not in params
+        if expected:
+            sweep_values = params[expected["sweep_axis"]].split(",")
+            assert sweep_values
+            assert [int(v) for v in sweep_values] == sorted(int(v) for v in sweep_values)
+            key, value = expected["fixed"]
+            if isinstance(value, str):
+                raw_cfg = OmegaConf.to_container(cfg, resolve=False)
+                current = raw_cfg
+                for part in key.split("."):
+                    current = current[part]
+                assert current == value
+            else:
+                assert OmegaConf.select(cfg, key) == value
+            assert cfg.tag == expected["tag"]
+
+
+def test_nsight_plot_callback_requires_aggregate_parquet(tmp_path):
+    callback = NsightPlotCallback()
+    cfg = OmegaConf.create({"hydra": {"sweep": {"dir": str(tmp_path)}}})
+
+    try:
+        callback.on_multirun_end(cfg)
+    except FileNotFoundError as exc:
+        assert "results.parquet" in str(exc)
+    else:
+        raise AssertionError("NsightPlotCallback must require results.parquet")
+
+
+def test_render_nsight_figures_from_parquet(tmp_path):
+    import pandas as pd
+
+    rows = []
+    for backend, boost in [("cuda_v1", 1.0), ("cuda_v2", 1.4)]:
+        for n_particles, mult in [(1000, 1.0), (2000, 1.3)]:
+            rows.append(
+                {
+                    "backend": backend,
+                    "target": "p2g",
+                    "n_particles": n_particles,
+                    "num_grids": 16,
+                    "gflops_per_s": 500.0 * boost * mult,
+                    "peak_compute_gflops": 19000.0,
+                    "peak_l1_gbps": 120000.0,
+                    "peak_l2_gbps": 8000.0,
+                    "peak_hbm_gbps": 1600.0,
+                    "ai_l1_flop_per_byte": 2.0 * mult,
+                    "ai_l2_flop_per_byte": 1.0 * mult,
+                    "ai_hbm_flop_per_byte": 0.25 * mult,
+                }
+            )
+    path = tmp_path / "results.parquet"
+    pd.DataFrame(rows).to_parquet(path, index=False)
+
+    written = render_nsight_figures(
+        path,
+        tmp_path / "figures",
+        plots=["roofline_scaling"],
+        style={"theme": "whitegrid", "context": "paper"},
+    )
+
+    assert [p.name for p in written] == ["roofline_scaling.png"]
+    assert written[0].exists()
+
+
+def test_render_nsight_figures_skips_missing_metric_plots(tmp_path):
+    import pandas as pd
+
+    path = tmp_path / "results.parquet"
+    pd.DataFrame(
+        {
+            "backend": ["cuda_v1"],
+            "target": ["p2g"],
+            "n_particles": [8],
+            "num_grids": [16],
+            "Metric": ["gpu__time_duration.sum"],
+            "AvgValue": [1000.0],
+        }
+    ).to_parquet(path, index=False)
+
+    written = render_nsight_figures(path, tmp_path / "figures")
+
+    assert written == []
+    assert not list((tmp_path / "figures").glob("*.png"))
 
 
 def test_results_dataframe_adds_config_metadata(tmp_path):

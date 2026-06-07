@@ -19,8 +19,8 @@ The main entry points are:
 
 - `simulate.py` - Hydra entry point for simulation, benchmark timing, and GIF
   rendering.
-- `profile_nsight.py` - Nsight Python profiling for warmed backend P2G scatter
-  analysis.
+- `profile_nsight.py` - Nsight Python profiling for warmed custom CUDA/cuTile
+  P2G scatter kernels; use XProf tracing for the JAX baseline.
 - `src/mpm_jax/solver.py` - Equinox-based `MPMSolver`.
 - `src/mpm_jax/p2g/backends/` - Hydra-registered P2G backend implementations.
 - `src/mpm_jax/grid.py`, `src/mpm_jax/p2g/sort.py` - pure-math helpers (grid
@@ -60,6 +60,8 @@ pixi run python simulate.py backend=jax
 pixi run python simulate.py backend=cuda_v3 material=jelly
 pixi run python simulate.py sim=benchmark backend=cutile_v3 render.enabled=false
 pixi run python profile_nsight.py -cn nsight_profile backend=cutile_v3
+pixi run python profile_nsight.py -cn nsight_profile nsight_sweep=single_point
+pixi run python profile_nsight.py -cn nsight_profile nsight_sweep=weak
 pixi run python simulate.py -cn sweep_particle_count
 pixi run python simulate.py -cn sweep_particle_density
 pixi run python simulate.py -cn sweep_weak_scaling
