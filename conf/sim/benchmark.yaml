@@ -10,7 +10,7 @@ num_frames: 1
 steps_per_frame: 50
 n_particles: 10000000
 initial_velocity: [0.0, 0.0, 0.0]
-num_grids: 132 # even & divisible by the super-cell width (4); ~8.4 ppc at 10M
+num_grids: 96 # even & divisible by the super-cell width (4); ~8.4 ppc at 10M
 dt: 5.0e-5 # CFL: c=sqrt(E/rho)~45 m/s, dx~=7.6e-3 -> dt_max~1.7e-4; 5e-5 is safe
 gravity: [0.0, 0.0, -9.8]
 rho: 1000.0

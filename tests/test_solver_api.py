@@ -49,24 +49,26 @@ def test_solver_validates_backend_against_runtime_num_grids(monkeypatch):
         MPMSolver(RuntimeConfig(material=material, sim=sim, backend=backend))
 
 
-def test_step_returns_and_mutates_state():
+def test_run_advances_state():
     s = _make_solver()
     x0 = s.state.x
-    out = s.step()
-    assert out is s.state
+    frames, elapsed = s.run(capture_frames=False, progress=False)
+
+    assert frames == []
+    assert elapsed >= 0
     assert s.state.x.shape == x0.shape
     assert not jnp.array_equal(s.state.x, x0)
 
 
-def test_step_matches_frame_when_frame_has_one_substep():
-    staged = _make_solver(steps_per_frame=1)
+def test_frame_matches_one_substep_transition_when_configured_for_one_substep():
+    direct = _make_solver(steps_per_frame=1)
     framed = _make_solver(steps_per_frame=1)
 
-    staged.step()
+    direct.state = direct.step_state(direct.state)
     framed.state = framed._frame(framed.state)
 
-    for staged_leaf, framed_leaf in zip(staged.state, framed.state, strict=True):
-        assert jnp.allclose(staged_leaf, framed_leaf, rtol=1e-5, atol=1e-6)
+    for direct_leaf, framed_leaf in zip(direct.state, framed.state, strict=True):
+        assert jnp.allclose(direct_leaf, framed_leaf, rtol=1e-5, atol=1e-6)
 
 
 def test_run_uses_configured_frames_and_can_capture_initial_states():
@@ -90,16 +92,6 @@ def test_run_without_capture_returns_no_frames():
     assert elapsed >= 0
 
 
-def test_run_can_use_staged_steps():
-    s = _make_solver(steps_per_frame=1)
-    s.num_frames = 1
-
-    frames, elapsed = s.run(capture_frames=False, progress=False, staged=True)
-
-    assert frames == []
-    assert elapsed >= 0
-
-
 def test_run_can_reuse_explicit_warmup():
     s = _make_solver(steps_per_frame=1)
     s.num_frames = 1
@@ -111,11 +103,11 @@ def test_run_can_reuse_explicit_warmup():
     assert elapsed >= 0
 
 
-def test_warmup_can_compile_staged_steps():
+def test_warmup_compiles_frame_and_resets_state():
     s = _make_solver(steps_per_frame=1)
     init = s.state
 
-    out = s.warmup(staged=True)
+    out = s.warmup()
 
     assert out is init
     assert s.state is init

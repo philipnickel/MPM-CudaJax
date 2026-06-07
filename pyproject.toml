@@ -105,15 +105,15 @@ nsys-jax = { git = "https://github.com/NVIDIA/JAX-Toolbox.git", subdirectory = "
 
 [tool.pixi.feature.gpu.activation.env]
 JAX_PLATFORMS = "cuda"
-# Enable XLA command-buffer (CUDA Graph) capture for the whole frame loop:
-# FUSION + CUSTOM_CALL (the FFI/cuTile scatters & fused G2P) + WHILE (the substep
-# lax loop) are replayed as one graph per substep. Was an opt-in per-kernel flag
-# (cuda_v3 cuda_graph=true); now on for every kernel in the default env.
-XLA_FLAGS = "--xla_gpu_enable_command_buffer=FUSION,CUSTOM_CALL,WHILE"
 JAX_TRACEBACK_IN_LOCATIONS_LIMIT = "-1"
 JAX_COMPILATION_CACHE_DIR = "$PIXI_PROJECT_ROOT/.jax_cache"
 JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS = "0"
 JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES = "0"
+# JAX GPU performance tips: single-host multi-device NCCL tuning. Single-GPU
+# runs do not use these, and the JAX docs do not recommend them for multi-host.
+NCCL_LL128_BUFFSIZE = "-2"
+NCCL_LL_BUFFSIZE = "-2"
+NCCL_PROTO = "SIMPLE,LL,LL128"
 
 [tool.pixi.feature.gpu.system-requirements]
 cuda = "13.0"

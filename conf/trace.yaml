@@ -6,16 +6,16 @@
 #   pixi run python simulate.py -cn trace backend=cutile_v3
 #   pixi run python simulate.py -cn trace -m backend=jax,cuda_v3,cutile_v3
 defaults:
-  - config
-  - override /sim: benchmark
-  - _self_
+    - config
+    - override /sim: benchmark
+    - _self_
 
 render:
-  enabled: false
+    enabled: false
 
 profile:
-  enabled: true
+    enabled: true
 
 sim:
-  steps_per_frame: 5
-  num_frames: 2
+    steps_per_frame: 3
+    num_frames: 2

@@ -1,44 +1,8 @@
-# Trace collection disables CUDA graphs so kernels are visible to the profiler
-# (graphs hide them inside cuGraphLaunch -> empty GPU timeline). XLA reads
-# XLA_FLAGS once, at backend init during the jax imports below, so the flag must
-# be flipped here -- before importing jax, hence too early for the Hydra config
-# (we sniff argv for the trace configs / an explicit profile.enabled=true).
-# ruff: noqa: E402
-import os
-import re
-import sys
-
-
-def _disable_command_buffers_for_trace(argv):
-    if any("disable_command_buffers=false" in a.lower() for a in argv):
-        return
-    cfg_name = "config"
-    for i, a in enumerate(argv):
-        if a in ("-cn", "--config-name") and i + 1 < len(argv):
-            cfg_name = argv[i + 1]
-        elif a.startswith(("--config-name=", "-cn=")):
-            cfg_name = a.split("=", 1)[1]
-    if cfg_name not in ("trace", "trace_substep") and not any(
-        "profile.enabled=true" in a.lower() for a in argv
-    ):
-        return
-    flags = os.environ.get("XLA_FLAGS", "")
-    if "--xla_gpu_enable_command_buffer" in flags:
-        flags = re.sub(
-            r"--xla_gpu_enable_command_buffer=\S*",
-            "--xla_gpu_enable_command_buffer=",
-            flags,
-        )
-    else:
-        flags = f"{flags} --xla_gpu_enable_command_buffer=".strip()
-    os.environ["XLA_FLAGS"] = flags
-
-
-_disable_command_buffers_for_trace(sys.argv)
-
 import csv
 import json
 import logging
+import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -62,9 +26,6 @@ def _slugify(value):
 
 
 def _current_gpu_kind():
-    override = os.environ.get("MPM_GPU_KIND")
-    if override:
-        return _slugify(override)
     try:
         result = subprocess.run(
             [
@@ -86,12 +47,12 @@ def _current_gpu_kind():
 OmegaConf.register_new_resolver("gpu_kind", _current_gpu_kind, replace=True)
 
 
-def _analysis_csv_path(metrics):
+def _analysis_csv_path(metrics):  # this should not be needed.
     job_num = metrics.get("hydra_job_num")
     if job_num is None:
         return None
     original_cwd = Path(hydra.utils.get_original_cwd())
-    sweep_dir = Path(metrics["hydra_sweep_dir"])
+    sweep_dir = Path(metrics["hydra_sweep_dir"])  # doesn't belong in metrics...
     if not sweep_dir.is_absolute():
         sweep_dir = original_cwd / sweep_dir
     try:
@@ -102,7 +63,9 @@ def _analysis_csv_path(metrics):
     return sweep_root / "results.csv"
 
 
-def _write_csv_row(path, metrics):
+def _write_csv_row(
+    path, metrics
+):  # this should not be needed. metrics should be a dataclass that can be serialized directly and saved..
     path.parent.mkdir(parents=True, exist_ok=True)
     write_header = not path.exists() or path.stat().st_size == 0
     with path.open("a", newline="") as f:
@@ -114,12 +77,12 @@ def _write_csv_row(path, metrics):
 
 def _write_metrics(run_dir, metrics):
     results_path = Path(run_dir) / "results.json"
-    metrics["results_json_path"] = str(results_path)
+    metrics["results_json_path"] = str(results_path)  # not needed
 
     analysis_csv_path = _analysis_csv_path(metrics)
     metrics["analysis_csv_path"] = (
         str(analysis_csv_path) if analysis_csv_path else None
-    )
+    )  # not needed
 
     results_path.write_text(json.dumps(metrics, indent=2))
     (Path(run_dir) / "metrics.jsonl").write_text(json.dumps(metrics) + "\n")
@@ -141,29 +104,16 @@ def main(cfg: DictConfig):
 
     profile_cfg = cfg.get("profile", {})
     profile_enabled = bool(profile_cfg.get("enabled", False))
-    step_mode = str(profile_cfg.get("step_mode", "frame"))
-    if step_mode not in {"frame", "staged"}:
-        raise ValueError("profile.step_mode must be 'frame' or 'staged'.")
-    staged = step_mode == "staged"
-
-    if profile_enabled:
-        logger.info(
-            "Trace collection: XLA_FLAGS=%r", os.environ.get("XLA_FLAGS", "")
-        )
 
     solver = MPMSolver(hydra.utils.instantiate(cfg.solver))
 
     # Warmup (JIT compilation) always runs outside any trace.
-    solver.warmup(int(profile_cfg.get("warmup_frames", 1)), staged=staged)
+    solver.warmup(int(profile_cfg.get("warmup_frames", 1)))
 
     def run_measured_solve():
         solve_range = f"{solver.backend.name}_solve"
         with nvtx.annotate(solve_range, domain=NVTX_DOMAIN):
-            return solver.run(
-                capture_frames=render_enabled,
-                staged=staged,
-                profile_stages=staged,
-            )
+            return solver.run(capture_frames=render_enabled)
 
     if profile_enabled:
         # Traces live in a shared top-level dir (one run per label) so
@@ -234,7 +184,7 @@ def main(cfg: DictConfig):
             width=int(render_cfg.get("width", 960)),
             height=int(render_cfg.get("height", 720)),
         )
-        metrics["render_path"] = export_path
+        metrics["render_path"] = export_path  # not needed
     elif not render_enabled:
         logger.info("Rendering disabled.")
 

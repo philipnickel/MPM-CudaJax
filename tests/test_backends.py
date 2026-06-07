@@ -89,4 +89,4 @@ def test_hydra_instantiates_runtime_config_and_solver():
     solver = MPMSolver(hydra.utils.instantiate(cfg.solver))
     assert isinstance(solver, MPMSolver)
     assert solver.backend.name == "jax"
-    solver.step()
+    solver.run(capture_frames=False, progress=False)

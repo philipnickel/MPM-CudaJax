@@ -22,9 +22,7 @@ tag: jelly
 profile:
     enabled: false
     label: null # trace run name (null -> backend name); set to keep a focused capture separate
-    disable_command_buffers: true # graphs hide kernels from the profiler; turn them off during capture
     warmup_frames: 1 # throwaway frames before the trace starts
-    step_mode: frame # frame = jitted fori_loop; staged = per-stage jitted substeps
     options: # splatted onto jax.profiler.ProfileOptions via setattr
         host_tracer_level: 2 # 0 off, 1 user events, 2 high-level, 3 verbose
         python_tracer_level: 1 # 1 -> Python source attribution (0 to reduce overhead)
@@ -56,4 +54,3 @@ hydra:
                 exclude_keys:
                     - render.enabled
                     - profile.enabled
-                    - profile.step_mode

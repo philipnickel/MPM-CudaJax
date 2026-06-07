@@ -1,11 +1,9 @@
 import time
-from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import Any, NamedTuple
+from typing import Any
 
 import jax
 import jax.numpy as jnp
-import nvtx
 import numpy as np
 from hydra.utils import instantiate as hydra_instantiate
 from omegaconf import DictConfig
@@ -13,7 +11,6 @@ from tqdm import tqdm
 
 from mpm_jax.p2g.backends.common import g2p_mls
 from mpm_jax.grid import build_grid_x, grid_update
-from mpm_jax.profiling import NVTX_DOMAIN, block_until_ready
 from mpm_jax.types import MPMParams, MPMState
 
 
@@ -53,45 +50,6 @@ def _g2p_stage(params, prepared, grid_v):
         return MPMState(*g2p_mls(params, prepared, grid_v))
 
 
-class StagedStepFns(NamedTuple):
-    elasticity: Any
-    prepare: Any
-    scatter: Any
-    grid_update: Any
-    g2p: Any
-
-
-def build_staged_step(params, elasticity_fn, backend, sticky_floor):
-    """Build per-stage JIT callables for one host-driven MPM substep."""
-    @jax.jit
-    def elasticity(state):
-        return _elasticity_stage(state, elasticity_fn)
-
-    @jax.jit
-    def prepare(state, stress):
-        return _prepare_stage(params, backend, state, stress)
-
-    @jax.jit
-    def scatter(prepared):
-        return _scatter_stage(params, backend, prepared)
-
-    @jax.jit
-    def update_grid(grid_mv, grid_m):
-        return _grid_update_stage(params, sticky_floor, grid_mv, grid_m)
-
-    @jax.jit
-    def g2p(prepared, grid_v):
-        return _g2p_stage(params, prepared, grid_v)
-
-    return StagedStepFns(
-        elasticity=elasticity,
-        prepare=prepare,
-        scatter=scatter,
-        grid_update=update_grid,
-        g2p=g2p,
-    )
-
-
 @dataclass
 class RuntimeConfig:
     """Hydra-instantiated runtime config for constructing an MPMSolver."""
@@ -107,7 +65,7 @@ class MPMSolver:
     A plain Python object: array state (`state`) is mutated in place by the
     driver API, while the backend object, constitutive closure, sticky-floor
     mask, and the compiled `_frame` are fixed for the solver's lifetime. The
-    solver itself is never a JAX argument — only `state` (an `MPMState` pytree)
+    solver itself is never a JAX argument -- only `state` (an `MPMState` pytree)
     is traced; the backend/fns are baked into `_frame`'s closure at build time.
     So no pytree machinery is needed here.
     """
@@ -172,9 +130,6 @@ class MPMSolver:
         )
         self.backend = backend
         self._sticky_floor = build_grid_x(params.num_grids)[:, 2] * params.dx < 0.02
-        self._stages = build_staged_step(
-            params, self.elasticity_fn, backend, self._sticky_floor
-        )
 
         @jax.jit
         def frame(state):
@@ -195,57 +150,7 @@ class MPMSolver:
         grid_v = _grid_update_stage(self.params, self._sticky_floor, grid_mv, grid_m)
         return _g2p_stage(self.params, prepared, grid_v)
 
-    def step(self, *, profile=False):
-        """Advance one host-driven substep using individually jitted stages."""
-        stages = self._stages
-        with (
-            nvtx.annotate(f"{self.backend.name}_elasticity", domain=NVTX_DOMAIN)
-            if profile
-            else nullcontext()
-        ):
-            stress = stages.elasticity(self.state)
-            if profile:
-                stress = block_until_ready(stress)
-
-        with (
-            nvtx.annotate(f"{self.backend.name}_prepare", domain=NVTX_DOMAIN)
-            if profile
-            else nullcontext()
-        ):
-            prepared = stages.prepare(self.state, stress)
-            if profile:
-                prepared = block_until_ready(prepared)
-
-        with (
-            nvtx.annotate(f"{self.backend.name}_scatter", domain=NVTX_DOMAIN)
-            if profile
-            else nullcontext()
-        ):
-            grid_mv, grid_m = stages.scatter(prepared)
-            if profile:
-                grid_mv, grid_m = block_until_ready((grid_mv, grid_m))
-
-        with (
-            nvtx.annotate(f"{self.backend.name}_grid_update", domain=NVTX_DOMAIN)
-            if profile
-            else nullcontext()
-        ):
-            grid_v = stages.grid_update(grid_mv, grid_m)
-            if profile:
-                grid_v = block_until_ready(grid_v)
-
-        with (
-            nvtx.annotate(f"{self.backend.name}_g2p", domain=NVTX_DOMAIN)
-            if profile
-            else nullcontext()
-        ):
-            self.state = stages.g2p(prepared, grid_v)
-            if profile:
-                self.state = block_until_ready(self.state)
-
-        return self.state
-
-    def warmup(self, n=1, *, staged=False):
+    def warmup(self, n=1):
         """Run ``n`` throwaway frames to trigger JIT compilation, then reset.
 
         A standalone step the caller invokes before timing/tracing — keeping it
@@ -253,15 +158,12 @@ class MPMSolver:
         captures one-time compilation.
         """
         for _ in range(max(1, int(n))):
-            if staged:
-                self.step()
-            else:
-                self.state = self._frame(self.state)
+            self.state = self._frame(self.state)
         jax.block_until_ready(self.state.x)
         self.state = self._init_state
         return self.state
 
-    def run(self, *, capture_frames, progress=True, staged=False, profile_stages=False):
+    def run(self, *, capture_frames, progress=True):
         """Drive the frame loop and return ``(frames, elapsed_s)``.
 
         Each frame is wrapped in a ``StepTraceAnnotation`` so an enclosing
@@ -278,11 +180,7 @@ class MPMSolver:
             if capture_frames:
                 frames.append(np.array(self.state.x))
             with jax.profiler.StepTraceAnnotation("frame", step_num=i):
-                if staged:
-                    for _ in range(self.steps_per_frame):
-                        self.step(profile=profile_stages)
-                else:
-                    self.state = self._frame(self.state)
+                self.state = self._frame(self.state)
         jax.block_until_ready(self.state.x)
 
         return frames, time.perf_counter() - t0

@@ -5,7 +5,7 @@ import jax.numpy as jnp
 from mpm_jax.constitutive import stvk_elasticity_jacobi
 from mpm_jax.grid import build_grid_x
 from mpm_jax.p2g.backends import JaxBackend
-from mpm_jax.solver import MPMSolver, RuntimeConfig
+from mpm_jax.solver import MPMSolver, RuntimeConfig, _grid_update_stage
 
 
 def _solver(num_grids):
@@ -31,7 +31,9 @@ def test_sticky_boundary_zeroes_velocity_below_surface():
     solver = _solver(num_grids)
     grid_x = build_grid_x(num_grids)
     grid_mv = jnp.ones((num_grids**3, 3))
-    result = solver._stages.grid_update(grid_mv, jnp.ones((num_grids**3,)))
+    result = _grid_update_stage(
+        solver.params, solver._sticky_floor, grid_mv, jnp.ones((num_grids**3,))
+    )
 
     below = grid_x[:, 2] * solver.params.dx < 0.02
     assert jnp.allclose(result[below], 0.0)
@@ -44,7 +46,7 @@ def test_sticky_boundary_keeps_above_floor_normalized_velocity():
     grid_x = build_grid_x(num_grids)
     grid_mv = jnp.ones((num_grids**3, 3)) * 4.0
     grid_m = jnp.ones((num_grids**3,)) * 2.0
-    result = solver._stages.grid_update(grid_mv, grid_m)
+    result = _grid_update_stage(solver.params, solver._sticky_floor, grid_mv, grid_m)
 
     above = grid_x[:, 2] * solver.params.dx >= 0.02
     assert jnp.allclose(result[above], 2.0)

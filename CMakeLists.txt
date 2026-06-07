@@ -1,11 +1,8 @@
 cmake_minimum_required(VERSION 3.24)
 project(mpm_cuda LANGUAGES CXX)
 
-# CUDA arch: respect MPM_CUDA_ARCH env (e.g. sm_86 / sm_90), else autodetect.
-if(DEFINED ENV{MPM_CUDA_ARCH})
-    string(REPLACE "sm_" "" _arch "$ENV{MPM_CUDA_ARCH}")
-    set(CMAKE_CUDA_ARCHITECTURES "${_arch}" CACHE STRING "CUDA architectures" FORCE)
-elseif(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+# CUDA arch: respect an explicit CMAKE_CUDA_ARCHITECTURES cache value, else autodetect.
+if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
     set(CMAKE_CUDA_ARCHITECTURES native CACHE STRING "CUDA architectures")
 endif()
 

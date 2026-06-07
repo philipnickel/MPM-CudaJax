@@ -4,9 +4,6 @@ The native ``mpm_jax.p2g.cuda._p2g_ffi`` extension is built by scikit-build-core
 CMake (see CMakeLists.txt). In editable Pixi environments,
 ``editable.rebuild=true`` lets scikit-build-core incrementally rebuild changed
 CUDA or binding sources when the extension module is imported.
-
-Override the CUDA architecture at build time with ``MPM_CUDA_ARCH=sm_86``
-(default: ``native``).
 """
 
 import importlib

@@ -8,8 +8,8 @@ compilation is sufficient and where custom kernels win.
 The solver is **constructed from config** by Hydra-instantiating `cfg.solver`
 into a `RuntimeConfig` and passing it to `MPMSolver`: the `backend` config
 targets the backend class directly, and `MPMSolver` builds params, particles,
-boundaries, and initial state. `solver.step()` advances one staged substep;
-`solver.run(capture_frames=...)` drives configured jitted frames by default.
+boundaries, and initial state. `solver.run(capture_frames=...)` drives the
+configured jitted frame loop.
 
 ## Quickstart
 
@@ -75,12 +75,9 @@ CUDA kernels are built by [scikit-build-core](https://scikit-build-core.readthed
 handlers for the CUDA FFI targets, and registers them with
 `jax.ffi.register_ffi_target`.
 
-Override the CUDA architecture at install time:
-```bash
-MPM_CUDA_ARCH=sm_86 pixi install     # Ampere
-MPM_CUDA_ARCH=sm_90 pixi install     # Hopper
-# default is 'native' (CMake auto-detects the local GPU)
-```
+CMake defaults to `native` CUDA architecture autodetection during `pixi install`.
+Cross-build hosts that need a fixed architecture should set that in Pixi
+task/environment configuration, not by prefixing ad hoc run commands.
 
 **DTU HPC:** no `module load` is needed for this Pixi environment — conda-forge
 ships `cuda-nvcc`, `gxx`, and CUDA runtime libraries inside the default env.
@@ -119,7 +116,7 @@ pixi run python simulate.py sim.n_particles=1000000 sim.num_grids=64
 | `jax` | The JAX/XLA baseline: `lax.scan` over the 27 offsets for **both** P2G and G2P, unified MLS-MPM G2P (APIC affine `C` reused as ∇v), closed-form StVK stress. Every other kernel reuses this G2P, so only the P2G varies. |
 | `cuda_v1` | CUDA P2G (one thread/particle, global `atomicAdd`) + JAX baseline G2P. |
 | `cuda_v2` | CUDA warp-shuffle coalesced P2G + JAX baseline G2P. |
-| `cuda_v3` | CUDA Morton-sorted P2G + JAX baseline G2P. (XLA command-buffer / CUDA-Graph capture is on for every kernel via the default env's `XLA_FLAGS`.) |
+| `cuda_v3` | CUDA Morton-sorted P2G + JAX baseline G2P. |
 | `cuda_v4` | CUDA super-cell-owned grid tile P2G + JAX baseline G2P. |
 | `cutile_v1` | cuTile direct 27-stencil scatter comparison backend. |
 | `cutile_v3` | cuTile home-cell tiled P2G with local 27-node reduction + JAX baseline G2P. Requires `cuda-tile`. |
@@ -136,10 +133,9 @@ The solver is class-based:
 
 - **`MPMSolver`** is a plain Python class. Particle/grid state is mutated in
   place by the driver API; the backend, constitutive closure, sticky-floor mask,
-  staged callables, and compiled `_frame` are fixed for the solver's lifetime.
-  `step()` advances one substep with individually jitted stages; `_frame`
-  advances `steps_per_frame` substeps as a single XLA program via a `lax.fori_loop`
-  over the same pure substep, and `run()` uses `_frame` by default.
+  and compiled `_frame` are fixed for the solver's lifetime. `_frame` advances
+  `steps_per_frame` substeps as a single XLA program via a `lax.fori_loop` over
+  the pure substep, and `run()` drives that compiled frame loop.
 
 Construction (`RuntimeConfig` + `MPMSolver` in `src/mpm_jax/solver.py`):
 - Hydra instantiates `cfg.solver` into `RuntimeConfig`; backend choices are Python-backed hydra-zen registrations in `src/mpm_jax/p2g/backends/`, with each backend passing `num_grids` for validation. `simulate.py` / `profile_nsight.py` import `mpm_jax.p2g.backends` before composition, then call `MPMSolver(hydra.utils.instantiate(cfg.solver))`.
@@ -266,67 +262,32 @@ pixi run python profile_nsight.py -cn nsight_profile -m \
     scale=weak_g64,weak_g96,weak_g128,weak_g160 nsight.target=scatter
 ```
 
-For interactive Nsight Compute, launch `simulate.py` directly with the Pixi env
-Python. `simulate.py` warms once, then wraps only the measured solve loop in
-an NVTX range. In the GUI, enable NVTX support, leave CPU call stack off, set
-cache control to "Flush All" for a first reproducible report, keep Import SASS
+For interactive Nsight Compute, launch the GUI through Pixi so the profiled
+process inherits the default runtime environment.
+`simulate.py` warms once, then wraps only the measured solve loop in an NVTX
+range. In the GUI, enable NVTX support, leave CPU call stack off, set cache
+control to "Flush All" for a first reproducible report, keep Import SASS
 enabled, and set Import Source to yes when you want source pages:
 
 ```text
 Application Executable: /root/MPM-CudaJax/.pixi/envs/default/bin/python
 Working Directory:      /root/MPM-CudaJax
-Arguments:              simulate.py sim=benchmark backend=cutile_v3 render.enabled=false profile.step_mode=staged
+Arguments:              simulate.py sim=benchmark backend=cutile_v3 render.enabled=false
 ```
 
 The `sim=benchmark` preset is one frame with one substep, so the measured solve
-range stays small. `profile.step_mode=staged` makes the live solver run one
-substep through individually jitted stages with NVTX ranges around
-`elasticity`, `prepare`, `scatter`, `grid_update`, and `g2p`.
-In the API Stream, use **Run to Next Range Start** to land on the
-`cutile_v3_solve` / `cutile_v3_scatter` NVTX ranges, then **Run to Next Kernel**
-and **Profile Kernel**. The cuTile kernel names show up as
+range is the jitted frame. In the API Stream, use **Run to Next Range Start** to
+land on the `cutile_v3_solve` NVTX range, then **Run to Next Kernel** and
+**Profile Kernel**. The cuTile kernel names show up as
 `cutile_v1_p2g_kernel...` or `cutile_v3_p2g_kernel...`; earlier kernels in the
-same scatter range are JAX/XLA helper kernels.
-For fuller JAX/XLA source-location metadata while profiling, paste this into the
-GUI environment editor, one variable per row:
-
-```text
-JAX_PLATFORMS=cuda
-JAX_TRACEBACK_IN_LOCATIONS_LIMIT=-1
-XLA_PYTHON_CLIENT_PREALLOCATE=false
-XLA_FLAGS=--xla_gpu_enable_command_buffer=
-JAX_COMPILATION_CACHE_DIR=/root/MPM-CudaJax/.jax_cache
-JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0
-JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES=0
-```
-
-If the GUI shows a single text field, paste the same environment as a
-semicolon-separated list:
-
-```text
-JAX_PLATFORMS=cuda;JAX_TRACEBACK_IN_LOCATIONS_LIMIT=-1;XLA_PYTHON_CLIENT_PREALLOCATE=false;XLA_FLAGS=--xla_gpu_enable_command_buffer=;JAX_COMPILATION_CACHE_DIR=/root/MPM-CudaJax/.jax_cache;JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0;JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES=0;
-```
-
-For graph-captured benchmark behavior instead, use
-`XLA_FLAGS=--xla_gpu_enable_command_buffer=FUSION,CUSTOM_CALL,WHILE`.
-
-For a cleaner Nsight Compute API stream, use staged solver mode. It builds the
-same Hydra-selected solver, warms the per-stage JITs, then runs
-`solver.step(profile=True)` through `simulate.py` with NVTX ranges around
-`elasticity`, `prepare`, `scatter`, `grid_update`, and `g2p`:
-
-```bash
-XLA_FLAGS=--xla_gpu_enable_command_buffer= \
-pixi run python simulate.py \
-    sim=benchmark backend=cutile_v3 render.enabled=false \
-    profile.step_mode=staged
-```
+same solve range are JAX/XLA helper kernels.
+The GUI environment editor can stay empty; Pixi owns the runtime environment.
 
 ### JAX / XProf
 
 The JAX profiler captures the trace; **[XProf](https://openxla.org/xprof)** is
 the viewer. There is a baked-in `conf/trace.yaml`: the standard `sim=benchmark`
-preset shortened to 5 substeps × 2 frames, with profiling on and rendering off.
+preset shortened to 3 substeps x 2 frames, with profiling on and rendering off.
 
 ```bash
 pixi run python simulate.py -cn trace backend=cutile_v3        # one backend
@@ -334,14 +295,12 @@ pixi run python simulate.py -cn trace -m backend=jax,cuda_v3   # several
 ```
 
 Or enable profiling on any run with `profile.enabled=true`. The capture includes
-CUDA streams + graphs, HLO graph/op stats, and memory; warmup (JIT compilation)
-runs outside the trace, and each frame is a `StepTraceAnnotation` step. Traces
-land in `traces/<label>/` (one run per backend, `label` defaults to the backend
-name) so the viewer lists them side by side. `gpu_enable_cupti_activity_graph_trace`
-(on by default) traces kernels *inside* the CUDA graphs.
-
-There's also `conf/trace_substep.yaml` — a single isolated substep
-(`label=jax_p2g_substep`) for inspecting the P2G fusions/HLO in the Graph Viewer.
+CUDA streams, HLO graph/op stats, and memory; warmup (JIT compilation) runs
+outside the trace, and each frame is a `StepTraceAnnotation` step. Traces land in
+`traces/<label>/` (one run per backend, `label` defaults to the backend name) so
+the viewer lists them side by side. If JAX/XLA emits CUDA graphs,
+`gpu_enable_cupti_activity_graph_trace` (on by default) traces kernels *inside*
+those graphs.
 
 **Viewing a remote run via SSH tunnel:**
 
@@ -367,10 +326,11 @@ Top-level fields: `tag`, `render`. All overridable from CLI:
 pixi run python simulate.py sim.n_particles=100000 backend=cuda_v3 render.enabled=false
 ```
 
-XLA command-buffer / CUDA-Graph capture is always on via `XLA_FLAGS` in the
-default env — no per-kernel flag. For profiling runs where richer XLA
-annotations matter more than exact graph-captured timing, temporarily override
-`XLA_FLAGS=--xla_gpu_enable_command_buffer=`.
+Runtime environment variables live in `pyproject.toml`: CUDA/JAX activation,
+single-host multi-device NCCL tuning, and the persistent compile-cache settings
+are in the default `gpu` feature. XProf trace collection uses
+`jax.profiler.ProfileOptions`, including CUPTI graph tracing, with that same
+default environment.
 
 ## Tests
 

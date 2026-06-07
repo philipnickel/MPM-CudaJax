@@ -46,7 +46,7 @@ pixi run python simulate.py -cn config sim=benchmark \
 
 One environment is defined in `[tool.pixi.environments]` in `pyproject.toml`:
 
-- `default` — Linux only (`linux-64`, `linux-aarch64`) and GPU-first. **JAX runs on CUDA 13** (PyPI `jax[cuda13]`); `cuda-tile[tileiras]` (PyPI) is the cuTile runtime the `cutile` backend requires; `warp-lang==1.14.0` (now used only by the optional Warp OpenGL renderer, not by any P2G kernel) and `nsight-python` are PyPI too. conda-forge supplies the `cuda-nvcc` (**CUDA 13.x**) + `gxx` toolchain that compiles the FFI `.cu` kernels and the nanobind capsule module, plus `nsight-compute`. The GPU activation block sets `JAX_PLATFORMS=cuda` + a persistent JAX compile cache (`.jax_cache/`). No `module load` required on DTU HPC.
+- `default` — Linux only (`linux-64`, `linux-aarch64`) and GPU-first. **JAX runs on CUDA 13** (PyPI `jax[cuda13]`); `cuda-tile[tileiras]` (PyPI) is the cuTile runtime the `cutile` backend requires; `warp-lang==1.14.0` (now used only by the optional Warp OpenGL renderer, not by any P2G kernel) and `nsight-python` are PyPI too. conda-forge supplies the `cuda-nvcc` (**CUDA 13.x**) + `gxx` toolchain that compiles the FFI `.cu` kernels and the nanobind capsule module, plus `nsight-compute`. Runtime environment variables live in Pixi feature activation tables in `pyproject.toml`; the default `gpu` feature owns the CUDA/JAX, single-host NCCL, and compile-cache values. No `module load` required on DTU HPC.
 
 Common patterns:
 
@@ -55,6 +55,7 @@ pixi install                                      # default GPU env
 pixi run python simulate.py ...                   # default GPU env
 pixi run test                                     # pytest
 pixi run sim                                      # task alias for `python simulate.py`
+pixi run ncu-ui                                   # Nsight Compute GUI in default env
 pixi run sweep-particles                          # task alias for `simulate.py -cn sweep_particle_count`
 pixi run sweep-density                            # task alias for `simulate.py -cn sweep_particle_density`
 pixi run plot-sweeps                              # plot sweep CSVs into figures/sweeps/
@@ -68,7 +69,7 @@ CUDA kernels in `src/mpm_jax/p2g/cuda/kernels/*.cu` and the tiny capsule binding
 
 Key knobs:
 
-- `MPM_CUDA_ARCH=sm_86` (or `sm_90`, etc.) at install time → CMake picks that arch. Default is `native` (CMake auto-detects the local GPU). Set this before `pixi install` on cross-build hosts.
+- CMake defaults to `native` CUDA architecture autodetection. Cross-build hosts that need a fixed architecture should set that in Pixi task/environment configuration instead of prefixing ad hoc commands.
 - `editable.rebuild = true` in `pyproject.toml` means edits to `.cu`, `.cuh`, or binding `.cc` sources trigger a rebuild when the native extension is next imported. Manual rebuild: `pixi reinstall mpm-cudajax`.
 - `[build-system].requires` pulls in `scikit-build-core>=0.10`, `cmake>=3.24`, `jax>=0.4.20`, and `nanobind` (jax is needed at build time so CMake can `import jax.ffi` to find the FFI headers).
 
@@ -91,7 +92,7 @@ conf/                  Hydra config groups
   sweep_*.yaml         pre-baked Hydra multirun sweeps
 src/mpm_jax/
   types.py             MPMState, MPMParams
-  solver.py            RuntimeConfig + MPMSolver + staged/frame stepping + get_particles
+  solver.py            RuntimeConfig + MPMSolver + jitted frame stepping + get_particles
   constitutive.py      StVK elastic stress (the jelly material), SVD-free
   g2p_scan.py          JAX baseline G2P: lax.scan over 27 offsets + MLS C=∇v (shared by ALL kernels)
   grid.py              grid_update: momentum normalise + gravity + damping; build_grid_x
@@ -144,7 +145,7 @@ Current kernel names:
 | `jax` | MPMSolver | The JAX/XLA baseline. `lax.scan` over the 27 offsets for **both** P2G and G2P, unified MLS-MPM G2P (APIC affine `C` reused as ∇v), closed-form StVK stress (SVD-free). The shared G2P every other kernel reuses — so only P2G varies |
 | `cuda_v1` | MPMSolver | CUDA P2G (one thread/particle, global atomicAdd) + JAX baseline G2P |
 | `cuda_v2` | MPMSolver | CUDA warp-shuffle coalesced P2G + JAX baseline G2P |
-| `cuda_v3` | MPMSolver | CUDA Morton-sorted P2G + JAX baseline G2P (XLA command-buffer / CUDA-Graph capture is on for all kernels via the default env's `XLA_FLAGS`) |
+| `cuda_v3` | MPMSolver | CUDA Morton-sorted P2G + JAX baseline G2P |
 | `cuda_v4` | MPMSolver | CUDA super-cell-owned grid tile P2G + JAX baseline G2P |
 | `cutile_v1` | MPMSolver | cuTile direct 27-stencil scatter comparison backend |
 | `cutile_v3` | MPMSolver | cuTile home-cell tiled P2G with local 27-node reduction + JAX baseline G2P |
@@ -197,16 +198,12 @@ pixi run python postprocessing/nsight_plots.py \
 #   weak: fixed ppc, grid+N grow together
 #         -> scale=weak_g64,weak_g96,weak_g128,weak_g160
 
-# Interactive NCU GUI: launch the Pixi env Python directly, not `pixi`.
-# simulate.py warms once, then marks the measured solve loop with NVTX and
-# staged mode marks each substep stage with NVTX.
+# Interactive NCU GUI: launch through Pixi so runtime env vars are inherited.
+# simulate.py warms once, then marks the measured jitted frame loop with NVTX.
 # sim=benchmark is one frame with one substep for focused interactive profiling.
-# For richer JAX/XLA annotations, override XLA_FLAGS=--xla_gpu_enable_command_buffer=
-
-# Cleaner NCU API stream: one physical substep with each stage jitted separately.
-XLA_FLAGS=--xla_gpu_enable_command_buffer= \
-pixi run python simulate.py sim=benchmark backend=cutile_v3 render.enabled=false \
-  profile.step_mode=staged
+pixi run ncu-ui
+# In the GUI, use app: .pixi/envs/default/bin/python
+# args: simulate.py sim=benchmark backend=cutile_v3 render.enabled=false
 
 # Sweeps (Hydra multirun)
 pixi run python simulate.py -cn sweep_all
@@ -236,11 +233,9 @@ pixi run lint
 The default environment is fully self-contained — no `module load` is needed because conda-forge provides `cuda-nvcc`, `gxx`, and the CUDA runtime libs inside the env.
 
 ```bash
-MPM_CUDA_ARCH=sm_90 pixi install    # build kernels for Hopper (H100)
-pixi run sim                         # smoke-test
+pixi install    # CMake auto-detects the local GPU arch by default
+pixi run sim    # smoke-test
 ```
-
-CMake auto-detects the local GPU arch when `MPM_CUDA_ARCH` is unset.
 
 **Warp 1.14 note:** `warp-lang==1.14.0` (PyPI) is kept in the default env only for the optional Warp OpenGL renderer (`warp.render`); no P2G kernel uses Warp anymore. `libc = { family = "glibc", version = "2.34" }` in `pyproject.toml` lets both the `manylinux_2_34` aarch64 wheel (GH200) and the `manylinux_2_28` x86_64 wheel (H100/A100) resolve correctly.
 
@@ -259,9 +254,9 @@ CMake auto-detects the local GPU arch when `MPM_CUDA_ARCH` is unset.
 - **Adding a new cuTile-in-JAX kernel:** put the cuTile kernel + `cutile_call` bridge in a dedicated module under `src/mpm_jax/p2g/cutile/`, add a backend implementation under `src/mpm_jax/p2g/backends/`, and decorate it with `hydra_zen.store(..., group="backend")`.
 - Constitutive models are Hydra-instantiated (`material.elasticity._target_`); the sticky floor boundary is fixed in `solver.py`.
 - **No `block_until_ready` inside the timed region when `render.enabled=false`.** Timing-only runs dispatch all frames back-to-back and sync exactly once after the loop; elapsed/num_frames is the average. Per-stage breakdown comes from `profile_nsight.py`, not from `simulate.py`'s output.
-- `simulate.py` calls `solver.warmup()` before entering its profiled solve range. The measured loop is wrapped with NVTX (`mpm_cudajax@<backend>_solve`); staged mode also marks `elasticity`, `prepare`, `scatter`, `grid_update`, and `g2p`. `sim=benchmark` is one frame with one substep, and cuTile kernels are named `cutile_v1_p2g_kernel...` / `cutile_v3_p2g_kernel...` in Nsight Compute.
+- `simulate.py` calls `solver.warmup()` before entering its profiled solve range. The measured jitted frame loop is wrapped with NVTX (`mpm_cudajax@<backend>_solve`). `sim=benchmark` is one frame with one substep, and cuTile kernels are named `cutile_v1_p2g_kernel...` / `cutile_v3_p2g_kernel...` in Nsight Compute.
 - Profiling targets are built in `src/mpm_jax/profiling/p2g.py`: `frame` is the full compiled solver frame, `p2g` is elasticity + prepare/sort + scatter, `prepare` is elasticity + backend ordering, and `scatter` profiles the backend P2G scatter with prepared inputs precomputed outside the profiling range.
-- XLA command-buffer / CUDA-Graph capture is enabled for **all** kernels via `XLA_FLAGS` in the GPU activation block (`--xla_gpu_enable_command_buffer=FUSION,CUSTOM_CALL,WHILE`), so it is always on under `pixi run`. There is no per-kernel `cuda_graph` flag anymore. For profiling runs where richer JAX/XLA annotations matter more than exact graph-captured timing, temporarily override `XLA_FLAGS=--xla_gpu_enable_command_buffer=`.
+- There is no project-level `XLA_FLAGS` command-buffer override in the default Pixi env. JAX uses the pinned `jaxlib` defaults; XProf tracing uses `jax.profiler.ProfileOptions`, including CUPTI graph tracing, in that same default environment.
 - Lint with ruff (config in `ruff.toml`); `I` is allowed as a variable name (identity matrix), and `tests/*` skips E402/F401.
 
 ## Don't

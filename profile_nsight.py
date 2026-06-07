@@ -22,7 +22,7 @@ the profiled callable so non-matching child jobs stay cheap.
 
 from __future__ import annotations
 
-# ruff: noqa: E402 -- XLA_FLAGS must be set before importing jax (via mpm_jax).
+# ruff: noqa: E402 -- JAX memory behavior must be set before importing mpm_jax.
 
 import csv
 import importlib
@@ -38,20 +38,6 @@ import hydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
-# NCU's range capture cannot profile cuGraphLaunch, so disable XLA command
-# buffers (CUDA graphs) before jax initializes (it does so during the mpm_jax
-# imports below). XLA reads XLA_FLAGS at backend init; the modified env is also
-# inherited by the NCU child process that re-runs this module.
-_xla_flags = os.environ.get("XLA_FLAGS", "")
-os.environ["XLA_FLAGS"] = (
-    re.sub(
-        r"--xla_gpu_enable_command_buffer=\S*",
-        "--xla_gpu_enable_command_buffer=",
-        _xla_flags,
-    )
-    if "--xla_gpu_enable_command_buffer" in _xla_flags
-    else f"{_xla_flags} --xla_gpu_enable_command_buffer=".strip()
-)
 # JAX pre-allocates ~75% of GPU memory by default, which collides with NCU's own
 # device memory while profiling (CUDA_ERROR_OUT_OF_MEMORY). On-demand allocation
 # keeps the footprint small -- the single-substep targets need little memory.
@@ -89,9 +75,6 @@ def _slugify(value):
 
 
 def _current_gpu_kind():
-    override = os.environ.get("MPM_GPU_KIND")
-    if override:
-        return _slugify(override)
     try:
         result = subprocess.run(
             [
