@@ -3,8 +3,9 @@ import logging
 import os
 
 import hydra
+import jax
 from hydra.core.hydra_config import HydraConfig
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 import mpm_jax.p2g.backends  # noqa: F401 - registers Hydra backend config choices
 from mpm_jax.rendering import render_warp_opengl
@@ -24,7 +25,39 @@ def main(cfg: DictConfig):
     render_enabled = bool(cfg.render.get("enabled", True))
 
     solver = MPMSolver(hydra.utils.instantiate(cfg.solver))
-    frames, elapsed = solver.run(capture_frames=render_enabled)
+
+    profile_cfg = cfg.get("profile", {})
+    profile_enabled = bool(profile_cfg.get("enabled", False))
+
+    # Warmup (JIT compilation) always runs outside any trace.
+    solver.warmup(int(profile_cfg.get("warmup_frames", 1)))
+
+    if profile_enabled:
+        # Traces live in a shared top-level dir (one run per label) so
+        # `xprof --logdir traces` lists them side by side. The label defaults to
+        # the backend name; override `profile.label` to keep a focused capture
+        # (e.g. a single-substep run) out of the backend-comparison runs.
+        traces_root = os.path.join(hydra.utils.get_original_cwd(), "traces")
+        run_label = profile_cfg.get("label") or solver.backend.name
+        trace_dir = os.path.join(traces_root, run_label)
+        os.makedirs(trace_dir, exist_ok=True)
+        if profile_cfg.get("dump_hlo", False):
+            hlo_path = os.path.join(trace_dir, "optimized_hlo.txt")
+            hlo = solver._frame.lower(solver._init_state).compile().as_text()
+            with open(hlo_path, "w") as f:
+                f.write(hlo)
+            logger.info("Wrote optimized HLO (post-fusion) to %s", hlo_path)
+        options = jax.profiler.ProfileOptions()
+        opts_cfg = OmegaConf.to_container(profile_cfg.get("options", {}), resolve=True)
+        for key, value in (opts_cfg or {}).items():
+            setattr(options, key, value)
+        logger.info("Profiling enabled; writing XProf trace to %s", trace_dir)
+        with jax.profiler.trace(trace_dir, profiler_options=options):
+            frames, elapsed = solver.run(capture_frames=render_enabled)
+        logger.info("View/compare: pixi run xprof --logdir %s", traces_root)
+    else:
+        frames, elapsed = solver.run(capture_frames=render_enabled)
+
     metrics = solver.metrics(elapsed)
     metrics["render_enabled"] = render_enabled
 

@@ -137,10 +137,6 @@ sweep-all = "python simulate.py -cn sweep_all"
 # own `pixi install`.
 sync = { args = [{ arg = "host" }], cmd = "rsync -ahz --info=stats1,name0 --exclude=.pixi --exclude=.venv --exclude=build --exclude=dist --exclude=outputs --exclude=multirun --exclude=output --exclude=.jax_cache --exclude=.ruff_cache --exclude=traces --exclude='*.nsys-rep' --exclude='src/mpm_jax/p2g/cuda/_p2g_ffi*.so' --exclude=__pycache__ --exclude='*.sqlite' --exclude='*.egg-info' --exclude=.pytest_cache ./ {{ host }}:~/MPM-CudaJax/" }
 
-# Pull Hydra run outputs back from a remote host (e.g. `pixi run sync-results lambda`).
-# One rsync with include/exclude rules so missing source dirs are silently skipped.
-sync-results = { args = [{ arg = "host" }], cmd = "rsync -ahz --info=stats1,name0 --include='outputs/' --include='outputs/**' --include='multirun/' --include='multirun/**' --include='output/' --include='output/**' --exclude='*' {{ host }}:~/MPM-CudaJax/ ./" }
-
 [tool.pixi.feature.gpu.target.linux-64.pypi-dependencies]
 pyglet = ">=2.0"
 usd-core = ">=26.5, <27"

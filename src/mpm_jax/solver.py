@@ -183,23 +183,39 @@ class MPMSolver:
         self.state = self._frame(self.state)
         return self.state
 
-    def run(self, *, capture_frames, progress=True):
-        self.step()
+    def warmup(self, n=1):
+        """Run ``n`` throwaway frames to trigger JIT compilation, then reset.
+
+        A standalone step the caller invokes before timing/tracing — keeping it
+        out of :meth:`run` means a profiler trace wrapping ``run`` never
+        captures one-time compilation.
+        """
+        for _ in range(max(1, int(n))):
+            self.step()
         jax.block_until_ready(self.state.x)
         self.reset_to_initial()
+        return self.state
 
+    def run(self, *, capture_frames, progress=True):
+        """Drive the frame loop and return ``(frames, elapsed_s)``.
+
+        Each frame is wrapped in a ``StepTraceAnnotation`` so an enclosing
+        profiler trace shows per-frame steps; it is a no-op when no trace is
+        active. Call :meth:`warmup` first for clean timing.
+        """
         frames = []
         frame_iter = range(self.num_frames)
         if progress:  # we will always have progress...
             frame_iter = tqdm(frame_iter, desc="simulate")
 
         t0 = time.perf_counter()
-        for _ in frame_iter:
+        for i in frame_iter:
             if capture_frames:
                 frames.append(
                     np.array(self.state.x)
                 )  # hmm shouldn't this be device arrays optimally?
-            self.step()
+            with jax.profiler.StepTraceAnnotation("frame", step_num=i):
+                self.step()
             if capture_frames:
                 jax.block_until_ready(self.state.x)
         if not capture_frames:

@@ -166,11 +166,55 @@ For an ad-hoc sweep: `pixi run python simulate.py -m sim.n_particles=5000,50000,
 
 ## Profiling
 
+### Nsight (per-kernel)
+
 Use the dedicated Nsight Python entrypoint for per-stage kernel analysis:
 
 ```bash
 pixi run python profile_nsight.py -cn nsight_profile \
     backend=jax material=jelly nsight.phase=p2g sim.n_particles=4096
+```
+
+### JAX / XProf
+
+The JAX profiler captures the trace; **[XProf](https://openxla.org/xprof)** (the
+standalone successor to the old TensorBoard "Profile" plugin) is the viewer —
+you do **not** need TensorBoard, and the TensorBoard-plugin path is flaky.
+
+There is a baked-in `conf/trace.yaml`: the standard `sim=benchmark` preset
+shortened to 5 substeps × 2 frames, with profiling on and rendering off.
+
+```bash
+pixi run python simulate.py -cn trace backend=cutile_v3        # one backend
+pixi run python simulate.py -cn trace -m backend=jax,cuda_v3   # several
+```
+
+Or enable profiling on any run with `profile.enabled=true`. The capture includes
+CUDA streams + graphs, HLO graph/op stats, and memory; warmup (JIT compilation)
+runs outside the trace, and each frame is a `StepTraceAnnotation` step. Traces
+land in `traces/<label>/` (one run per backend, `label` defaults to the backend
+name) so the viewer lists them side by side. `gpu_enable_cupti_activity_graph_trace`
+(on by default) traces kernels *inside* the CUDA graphs — without it,
+command-buffer capture collapses the whole frame into one opaque graph-launch
+event. With `profile.dump_hlo=true` (set in `conf/trace.yaml`) the optimized
+post-fusion HLO is written next to the trace as `optimized_hlo.txt`, where each
+op carries its `op_name` named-scope + source line.
+
+There's also `conf/trace_substep.yaml` — a single isolated substep
+(`label=jax_p2g_substep`) for inspecting the P2G fusions/HLO in the Graph Viewer.
+
+**Reading it:** Op Profile ranks XLA ops by device time with FLOP/bandwidth
+utilization (the roofline signal); GPU Kernel Stats is the flat per-kernel table
+(cleanest for the named CUDA/cuTile kernels). For real hardware counters
+(occupancy, DRAM throughput) use `ncu` — XProf's PM sampling crashes on the
+cuda13/CUPTI stack here.
+
+**Viewing a remote run via SSH tunnel:**
+
+```bash
+ssh -L 6006:localhost:6006 <host>                              # DTU HPC: add -J <login> <compute>
+cd ~/MPM-CudaJax && pixi run xprof --logdir traces --port 6006  # on the remote
+# then open http://localhost:6006 locally
 ```
 
 ## Config
