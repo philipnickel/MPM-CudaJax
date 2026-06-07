@@ -1,0 +1,5 @@
+# @package _global_
+# Weak-scaling point: benchmark active PPC ~= 8.492 at G=192.
+sim:
+    n_particles: 30773854
+    num_grids: 192

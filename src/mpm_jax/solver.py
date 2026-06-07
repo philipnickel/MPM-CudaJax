@@ -291,11 +291,20 @@ class MPMSolver:
         elapsed_s = float(elapsed_s)
         total_steps = self.num_frames * self.steps_per_frame
         particle_steps = self.params.n_particles * total_steps
+        grid_cells = self.params.num_grids**3
+        material_volume = self.params.vol * self.params.n_particles
+        active_grid_cells = material_volume / (self.params.dx**3)
         return {
             "kernel": self.backend.name,
             "material_elasticity": self.material_elasticity,
             "n_particles": self.params.n_particles,
             "num_grids": self.params.num_grids,
+            "dx": self.params.dx,
+            "grid_cells": grid_cells,
+            "material_volume": material_volume,
+            "active_grid_cells": active_grid_cells,
+            "particles_per_grid_cell": self.params.n_particles / grid_cells,
+            "particles_per_active_cell": self.params.n_particles / active_grid_cells,
             "num_frames": self.num_frames,
             "steps_per_frame": self.steps_per_frame,
             "total_steps": total_steps,

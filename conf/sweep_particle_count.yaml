@@ -1,0 +1,22 @@
+# Backend x particle-count sweep at fixed G=96.
+#
+# The scale choices sweep powers of two at G=96:
+#   2^18, 2^19, 2^20, 2^21, 2^22, 2^23, 2^24
+#
+# Run:
+#   pixi run python simulate.py -cn sweep_particle_count
+defaults:
+    - config
+    - override /sim: benchmark
+    - _self_
+
+hydra:
+    mode: MULTIRUN
+    sweeper:
+        params:
+            backend: jax,cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v3
+            scale: count_2p18,count_2p19,count_2p20,count_2p21,count_2p22,count_2p23,count_2p24
+
+render:
+    enabled: false
+tag: sweep_particle_count

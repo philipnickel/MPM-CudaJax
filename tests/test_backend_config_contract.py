@@ -51,16 +51,100 @@ def test_each_backend_config_instantiates_expected_backend_name(monkeypatch):
         assert backend.name == choice
 
 
+def test_scaling_sweeps_use_backend_choices_and_valid_scale_configs():
+    valid_choices = set(backends.backend_choices())
+    count_cfg = OmegaConf.load(CONF_DIR / "sweep_particle_count.yaml")
+    density_cfg = OmegaConf.load(CONF_DIR / "sweep_particle_density.yaml")
+    weak_cfg = OmegaConf.load(CONF_DIR / "sweep_weak_scaling.yaml")
+
+    for cfg in [count_cfg, density_cfg, weak_cfg]:
+        backend_choices = cfg.hydra.sweeper.params.backend.split(",")
+        scale_choices = cfg.hydra.sweeper.params.scale.split(",")
+
+        assert backend_choices
+        assert scale_choices
+        for choice in backend_choices:
+            assert choice == choice.strip()
+            assert choice in valid_choices
+        for choice in scale_choices:
+            scale_cfg = OmegaConf.load(CONF_DIR / "scale" / f"{choice}.yaml")
+            assert scale_cfg.sim.n_particles > 0
+            assert scale_cfg.sim.num_grids % 4 == 0
+
+
+def test_particle_count_sweep_uses_power_counts_at_fixed_g96():
+    cfg = OmegaConf.load(CONF_DIR / "sweep_particle_count.yaml")
+    scale_choices = cfg.hydra.sweeper.params.scale.split(",")
+    particle_choices = []
+    grid_choices = []
+    for choice in scale_choices:
+        scale_cfg = OmegaConf.load(CONF_DIR / "scale" / f"{choice}.yaml")
+        n_particles = int(scale_cfg.sim.n_particles)
+        num_grids = int(scale_cfg.sim.num_grids)
+        assert n_particles & (n_particles - 1) == 0
+        particle_choices.append(n_particles)
+        grid_choices.append(num_grids)
+
+    assert particle_choices == [2**power for power in range(18, 25)]
+    assert set(grid_choices) == {96}
+
+
+def test_particle_density_sweep_uses_fixed_particles_and_requested_grids():
+    cfg = OmegaConf.load(CONF_DIR / "sweep_particle_density.yaml")
+    scale_choices = cfg.hydra.sweeper.params.scale.split(",")
+    grid_choices = []
+    particle_choices = []
+    for choice in scale_choices:
+        scale_cfg = OmegaConf.load(CONF_DIR / "scale" / f"{choice}.yaml")
+        n_particles = int(scale_cfg.sim.n_particles)
+        grid_choices.append(int(scale_cfg.sim.num_grids))
+        particle_choices.append(n_particles)
+
+    assert set(particle_choices) == {10000000}
+    assert grid_choices == [32, 64, 96, 128, 160, 192]
+
+
+def test_weak_scaling_sweep_keeps_active_ppc_constant():
+    cfg = OmegaConf.load(CONF_DIR / "sweep_weak_scaling.yaml")
+    scale_choices = cfg.hydra.sweeper.params.scale.split(",")
+    grid_choices = []
+    particle_choices = []
+    active_ppc_choices = []
+    for choice in scale_choices:
+        scale_cfg = OmegaConf.load(CONF_DIR / "scale" / f"{choice}.yaml")
+        n_particles = int(scale_cfg.sim.n_particles)
+        num_grids = int(scale_cfg.sim.num_grids)
+        active_cells = 0.8**3 * num_grids**3
+        grid_choices.append(num_grids)
+        particle_choices.append(n_particles)
+        active_ppc_choices.append(n_particles / active_cells)
+
+    assert grid_choices == [32, 64, 96, 128, 160, 192]
+    assert particle_choices == sorted(particle_choices)
+    target_ppc = 10000000 / (0.8**3 * 132**3)
+    for active_ppc in active_ppc_choices:
+        assert abs(active_ppc - target_ppc) / target_ppc < 1e-5
+
+
 def test_sweep_all_backend_choices_exist_and_are_trimmed():
     cfg = OmegaConf.load(CONF_DIR / "sweep_all.yaml")
-    backend_axis = cfg.hydra.sweeper.params.backend
-    choices = backend_axis.split(",")
+    backend_choices = cfg.hydra.sweeper.params.backend.split(",")
     valid_choices = set(backends.backend_choices())
 
-    assert choices
-    for choice in choices:
+    assert backend_choices
+    for choice in backend_choices:
         assert choice == choice.strip()
         assert choice in valid_choices
+
+
+def test_default_hydra_output_dirs_are_aggregation_friendly():
+    cfg = OmegaConf.load(CONF_DIR / "config.yaml")
+    raw = OmegaConf.to_container(cfg, resolve=False)
+    hydra_cfg = raw["hydra"]
+
+    assert hydra_cfg["run"]["dir"].startswith("outputs/runs/${gpu_kind:}/")
+    assert hydra_cfg["sweep"]["dir"].startswith("outputs/sweeps/${gpu_kind:}/runs/")
+    assert "${hydra.job.override_dirname}" in hydra_cfg["sweep"]["subdir"]
 
 
 def test_hydra_composed_default_config_instantiates_small_jax_solver():

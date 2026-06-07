@@ -60,7 +60,10 @@ pixi run python simulate.py backend=jax
 pixi run python simulate.py backend=cuda_v3 material=jelly
 pixi run python simulate.py sim=benchmark backend=cutile_v3 render.enabled=false profile.step_mode=staged
 pixi run python profile_nsight.py -cn nsight_profile backend=cutile_v3 nsight.target=scatter
-pixi run python simulate.py -cn sweep_quick
+pixi run python simulate.py -cn sweep_particle_count
+pixi run python simulate.py -cn sweep_particle_density
+pixi run python simulate.py -cn sweep_weak_scaling
+pixi run plot-sweeps
 ```
 
 For fuller command examples, kernel descriptions, environment details, and the

@@ -1,0 +1,22 @@
+# Backend x particle-density sweep at fixed particle count.
+#
+# The scale choices keep N=10M and sweep grid resolution:
+#   G = 32, 64, 96, 128, 160, 192
+#
+# Run:
+#   pixi run python simulate.py -cn sweep_particle_density
+defaults:
+    - config
+    - override /sim: benchmark
+    - _self_
+
+hydra:
+    mode: MULTIRUN
+    sweeper:
+        params:
+            backend: jax,cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v3
+            scale: density_g32,density_g64,density_g96,density_g128,density_g160,density_g192
+
+render:
+    enabled: false
+tag: sweep_particle_density

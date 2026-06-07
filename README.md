@@ -49,8 +49,9 @@ high-level `particles_per_sec`, and the detected `gpu_type`. No GIF, no
 per-frame state capture — just wall-clock timing.
 
 Outputs:
-- GIF renders, `results.json`, Hydra logs, config snapshots → `outputs/<date>/<run>/`
-- Multirun sweep results → `multirun/<date>/<run>/`
+- Single-run GIF renders, `results.json`, Hydra logs, config snapshots → `outputs/runs/<gpu-kind>/<date>/<run>/`
+- Multirun job outputs → `outputs/sweeps/<gpu-kind>/runs/<date>/<run>/`
+- Dataframe-ready sweep table → `outputs/sweeps/<gpu-kind>/results.csv`
 - Native CUDA extension → `mpm_jax.p2g.cuda._p2g_ffi` (rebuilds on native-source edit via `editable.rebuild=true`)
 
 ## Setup
@@ -152,18 +153,56 @@ All solver variants now run through the same JAX-owned frame loop. The pure-JAX 
 Pre-baked Hydra multirun sweeps:
 
 ```bash
-pixi run python simulate.py -cn sweep_baseline    # JAX-only scaling
 pixi run python simulate.py -cn sweep_all
-pixi run python simulate.py -cn sweep_quick
-pixi run python simulate.py -cn sweep_scaling
+pixi run python simulate.py -cn sweep_particle_count
+pixi run python simulate.py -cn sweep_particle_density
+pixi run python simulate.py -cn sweep_weak_scaling
 ```
 
-Each combination gets its own `multirun/<date>/<run>/` subdir with a `results.json`.
-Runs with `render.enabled=true` also place `render.gif` in that same run
-directory and record its path as `render_path`. Sweeps should use Hydra
-multirun so log parsers see the expected directory structure.
+The benchmark preset uses one frame with 50 substeps. `sweep_particle_count`
+uses fixed `G=96` and particle counts `2^18..2^24`. `sweep_particle_density`
+fixes `N=10M` and compares `G=32,64,96,128,160,192`.
+`sweep_weak_scaling` keeps active-cell PPC near the benchmark density
+(`particles_per_active_cell ~= 8.492`) while scaling both `G` and `N`.
 
-For an ad-hoc sweep: `pixi run python simulate.py -m sim.n_particles=5000,50000,200000 backend=jax,cuda_v2 render.enabled=false`.
+Each combination gets its own
+`outputs/sweeps/<gpu-kind>/runs/<date>/<time>/<job>_<override-dirname>/` subdir
+with a flat `results.json`, `metrics.jsonl`, and single-row `metrics.csv`. The
+same record is appended to `outputs/sweeps/<gpu-kind>/results.csv`, so pandas can
+load a completed sweep with one call. The record includes `n_particles`,
+`num_grids`, total `grid_cells`, `particles_per_grid_cell`,
+`particles_per_active_cell`, throughput, timing, GPU type, and the Hydra
+override string.
+Runs with `render.enabled=true` also place `render.gif` in that same run
+directory and record its path as `render_path`.
+
+For an ad-hoc sweep:
+`pixi run python simulate.py -m sim.n_particles=5000,50000,200000 sim.num_grids=32,64,96 backend=jax,cuda_v2 render.enabled=false`.
+
+To load all sweep rows for one GPU:
+
+```bash
+pixi run python - <<'PY'
+from pathlib import Path
+import pandas as pd
+
+root = Path("outputs/sweeps/<gpu-kind>")
+df = pd.read_csv(root / "results.csv")
+print(df.sort_values(["kernel", "num_grids", "n_particles"]))
+PY
+```
+
+For all GPU folders at once, concatenate each `outputs/sweeps/*/results.csv`.
+
+To generate figures:
+
+```bash
+pixi run python tools/plot_sweeps.py
+# or
+pixi run plot-sweeps
+```
+
+Plots and per-plot summary CSVs are written to `figures/sweeps/<gpu-kind>/`.
 
 ## Profiling
 

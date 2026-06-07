@@ -55,7 +55,9 @@ pixi install                                      # default GPU env
 pixi run python simulate.py ...                   # default GPU env
 pixi run test                                     # pytest
 pixi run sim                                      # task alias for `python simulate.py`
-pixi run sweep-quick                              # task alias for `simulate.py -cn sweep_quick`
+pixi run sweep-particles                          # task alias for `simulate.py -cn sweep_particle_count`
+pixi run sweep-density                            # task alias for `simulate.py -cn sweep_particle_density`
+pixi run plot-sweeps                              # plot sweep CSVs into figures/sweeps/
 pixi add <pkg>                                    # add a runtime dep (edits pyproject.toml)
 pixi add --feature gpu <pkg>                      # add to the GPU feature used by default
 ```
@@ -194,12 +196,20 @@ pixi run python simulate.py sim=benchmark backend=cutile_v3 render.enabled=false
   profile.step_mode=staged
 
 # Sweeps (Hydra multirun)
-pixi run python simulate.py -cn sweep_baseline    # JAX-only scaling
 pixi run python simulate.py -cn sweep_all
-pixi run python simulate.py -cn sweep_quick
-pixi run python simulate.py -cn sweep_scaling
+pixi run python simulate.py -cn sweep_particle_count
+pixi run python simulate.py -cn sweep_particle_density
+pixi run python simulate.py -cn sweep_weak_scaling
 pixi run sweep-all                                 # task alias
-pixi run sweep-quick                               # task alias
+pixi run sweep-particles                           # task alias
+pixi run sweep-density                             # task alias
+pixi run sweep-weak                                # task alias
+pixi run plot-sweeps                               # write figures/sweeps/<gpu-kind>/
+
+# Sweep definitions
+# - sweep_particle_count: G=96, N=2^18..2^24, 50 substeps
+# - sweep_particle_density: N=10M, G=32,64,96,128,160,192, 50 substeps
+# - sweep_weak_scaling: active PPC ~= 8.492, G=32,64,96,128,160,192, 50 substeps
 
 # Tests
 pixi run test
@@ -223,7 +233,7 @@ CMake auto-detects the local GPU arch when `MPM_CUDA_ARCH` is unset.
 
 ## Conventions
 
-- **Sweeps must use Hydra multirun**, never a bash `for` loop. Either use a pre-baked sweep config (`-cn sweep_*`) or pass axes inline: `pixi run python simulate.py -m sim.n_particles=5000,50000,200000 backend=jax,cuda_v1,cuda_v2 render.enabled=false`. Add new sweep configs under `conf/sweep_<name>.yaml`. Hydra puts each combination in its own `multirun/<date>/<run>/` subdir.
+- **Sweeps must use Hydra multirun**, never a bash `for` loop. Either use a pre-baked sweep config (`-cn sweep_*`) or pass axes inline: `pixi run python simulate.py -m sim.n_particles=5000,50000,200000 backend=jax,cuda_v1,cuda_v2 render.enabled=false`. Add new sweep configs under `conf/sweep_<name>.yaml`. Hydra puts each combination in `outputs/sweeps/<gpu-kind>/runs/<date>/<run>/`, and `simulate.py` appends a dataframe-ready row to `outputs/sweeps/<gpu-kind>/results.csv`.
 - **Default to short benchmarks.** Steady-state ms/step is stable after the first frame (warmup), so `sim.num_frames=5` (50 substeps) gives reliable timings.
 - Single-particle functions vectorise via `jax.vmap` (e.g. `constitutive.stvk_elasticity_jacobi` is `jax.vmap` of a single-3×3 stress). Don't write batched code by hand — vmap is the contract.
 - **Adding a new CUDA P2G kernel** (e.g. `cuda_vX`) — only the P2G varies; G2P stays the JAX baseline:

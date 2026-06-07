@@ -1,6 +1,9 @@
 # Full comparison sweep: JAX variants vs CUDA/cuTile kernels.
 #
 # Usage: pixi run python simulate.py -cn sweep_all
+# Add scaling axes on the CLI, e.g.
+#   pixi run python simulate.py -cn sweep_all -m \
+#       sim.n_particles=1000000,3000000,10000000 sim.num_grids=64,96,132
 #
 # Build CUDA kernels first: pixi install
 defaults:

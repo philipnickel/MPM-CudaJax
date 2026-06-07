@@ -36,8 +36,11 @@ def _disable_command_buffers_for_trace(argv):
 
 _disable_command_buffers_for_trace(sys.argv)
 
+import csv
 import json
 import logging
+import subprocess
+from pathlib import Path
 
 import hydra
 import jax
@@ -51,6 +54,79 @@ from mpm_jax.rendering import render_warp_opengl
 from mpm_jax.solver import MPMSolver
 
 logger = logging.getLogger(__name__)
+
+
+def _slugify(value):
+    slug = re.sub(r"[^0-9A-Za-z]+", "_", str(value).strip().lower()).strip("_")
+    return slug or "unknown"
+
+
+def _current_gpu_kind():
+    override = os.environ.get("MPM_GPU_KIND")
+    if override:
+        return _slugify(override)
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=name",
+                "--format=csv,noheader,nounits",
+                "-i",
+                "0",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return _slugify(result.stdout.splitlines()[0])
+    except Exception:
+        return "unknown"
+
+
+OmegaConf.register_new_resolver("gpu_kind", _current_gpu_kind, replace=True)
+
+
+def _analysis_csv_path(metrics):
+    job_num = metrics.get("hydra_job_num")
+    if job_num is None:
+        return None
+    original_cwd = Path(hydra.utils.get_original_cwd())
+    sweep_dir = Path(metrics["hydra_sweep_dir"])
+    if not sweep_dir.is_absolute():
+        sweep_dir = original_cwd / sweep_dir
+    try:
+        runs_index = sweep_dir.parts.index("runs")
+        sweep_root = Path(*sweep_dir.parts[:runs_index])
+    except ValueError:
+        sweep_root = sweep_dir
+    return sweep_root / "results.csv"
+
+
+def _write_csv_row(path, metrics):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_header = not path.exists() or path.stat().st_size == 0
+    with path.open("a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(metrics))
+        if write_header:
+            writer.writeheader()
+        writer.writerow(metrics)
+
+
+def _write_metrics(run_dir, metrics):
+    results_path = Path(run_dir) / "results.json"
+    metrics["results_json_path"] = str(results_path)
+
+    analysis_csv_path = _analysis_csv_path(metrics)
+    metrics["analysis_csv_path"] = (
+        str(analysis_csv_path) if analysis_csv_path else None
+    )
+
+    results_path.write_text(json.dumps(metrics, indent=2))
+    (Path(run_dir) / "metrics.jsonl").write_text(json.dumps(metrics) + "\n")
+    _write_csv_row(Path(run_dir) / "metrics.csv", metrics)
+
+    if analysis_csv_path is not None:
+        _write_csv_row(analysis_csv_path, metrics)
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +186,18 @@ def main(cfg: DictConfig):
         frames, elapsed = run_measured_solve()
 
     metrics = solver.metrics(elapsed)
+    metrics["tag"] = cfg.get("tag")
     metrics["render_enabled"] = render_enabled
+    metrics["gpu_kind"] = _slugify(metrics["gpu_type"])
+    hydra_cfg = HydraConfig.get()
+    metrics["output_dir"] = run_dir
+    metrics["hydra_job_num"] = OmegaConf.select(hydra_cfg, "job.num")
+    metrics["hydra_sweep_dir"] = OmegaConf.select(hydra_cfg, "sweep.dir")
+    metrics["hydra_override_dirname"] = OmegaConf.select(
+        hydra_cfg, "job.override_dirname"
+    )
+    task_overrides = OmegaConf.select(hydra_cfg, "overrides.task") or []
+    metrics["hydra_task_overrides"] = ",".join(str(item) for item in task_overrides)
 
     backend_label = "solver-loop"
     logger.info(
@@ -151,8 +238,7 @@ def main(cfg: DictConfig):
     elif not render_enabled:
         logger.info("Rendering disabled.")
 
-    with open(os.path.join(run_dir, "results.json"), "w") as f:
-        json.dump(metrics, f, indent=2)
+    _write_metrics(run_dir, metrics)
 
 
 if __name__ == "__main__":

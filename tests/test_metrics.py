@@ -6,7 +6,12 @@ from mpm_jax.solver import MPMSolver
 def test_solver_metrics_returns_flat_results_record():
     solver = object.__new__(MPMSolver)
     solver.backend = SimpleNamespace(name="jax")
-    solver.params = SimpleNamespace(n_particles=32, num_grids=16)
+    solver.params = SimpleNamespace(
+        n_particles=32,
+        num_grids=16,
+        dx=1 / 16,
+        vol=0.125 / 32,
+    )
     solver.num_frames = 2
     solver.steps_per_frame = 3
     solver.material_elasticity = "stvk_elasticity_jacobi"
@@ -19,6 +24,12 @@ def test_solver_metrics_returns_flat_results_record():
         "material_elasticity": "stvk_elasticity_jacobi",
         "n_particles": 32,
         "num_grids": 16,
+        "dx": 0.0625,
+        "grid_cells": 4096,
+        "material_volume": 0.125,
+        "active_grid_cells": 512.0,
+        "particles_per_grid_cell": 0.0078125,
+        "particles_per_active_cell": 0.0625,
         "num_frames": 2,
         "steps_per_frame": 3,
         "total_steps": 6,

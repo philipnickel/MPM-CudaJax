@@ -1,6 +1,7 @@
 defaults:
     - material: jelly
     - sim: default
+    - optional scale: null
     - backend: jax
     - _self_
 
@@ -40,3 +41,19 @@ render:
     point_radius: 0.008
     width: 960
     height: 720
+
+hydra:
+    run:
+        dir: outputs/runs/${gpu_kind:}/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    sweep:
+        dir: outputs/sweeps/${gpu_kind:}/runs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+        subdir: ${hydra.job.num}_${hydra.job.override_dirname}
+    job:
+        config:
+            override_dirname:
+                kv_sep: "="
+                item_sep: ","
+                exclude_keys:
+                    - render.enabled
+                    - profile.enabled
+                    - profile.step_mode

@@ -7,7 +7,7 @@
 #   pixi run python simulate.py -cn config sim=benchmark \
 #       backend=cuda_v3 material=jelly render.enabled=false
 num_frames: 1
-steps_per_frame: 2
+steps_per_frame: 50
 n_particles: 10000000
 initial_velocity: [0.0, 0.0, 0.0]
 num_grids: 132 # even & divisible by the super-cell width (4); ~8.4 ppc at 10M
