@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import hydra
-import pytest
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
@@ -42,9 +41,6 @@ def _compose_config(config_name="config", overrides=None):
             {
                 "target": "p2g",
                 "write_json": False,
-                "plot": {"enabled": False},
-                "sweep": None,
-                "configs": None,
                 "analyze": {},
             }
         )
@@ -66,9 +62,33 @@ def test_backend_choices_come_from_registered_hydra_configs():
 def test_nsight_profile_config_composes():
     cfg = _compose_config("nsight_profile")
 
-    assert cfg.nsight.target == "p2g"
+    assert cfg.nsight.target == "scatter"
     assert cfg.backend._target_ == "mpm_jax.p2g.backends.jax.JaxBackend"
-    assert profile_nsight._nsight_configs(cfg) == [("jax", 8, 16, 1)]
+    assert profile_nsight._profile_config(cfg, "jax") == ("jax", 8, 16, 1)
+
+
+def test_profile_config_reads_sim_axes():
+    cfg = _compose_config(overrides=["sim.n_particles=12", "sim.num_grids=40"])
+    assert profile_nsight._profile_config(cfg, "cuda_v3") == ("cuda_v3", 12, 40, 1)
+
+
+def test_backend_choice_from_cfg_infers_from_backend_target():
+    cfg = _compose_config(overrides=["backend=cuda_v3"])
+    # Outside a Hydra run there is no runtime choice, so it falls back to the
+    # backend config _target_.
+    assert profile_nsight._backend_choice_from_cfg(cfg) == "cuda_v3"
+
+
+def test_analyze_kwargs_carry_single_config_and_callables(tmp_path):
+    cfg = _compose_config("nsight_profile")
+    profile_config = profile_nsight._profile_config(cfg, "jax")
+
+    kwargs = profile_nsight._nsight_analyze_kwargs(cfg, tmp_path, profile_config)
+
+    assert kwargs["configs"] == [("jax", 8, 16, 1)]
+    assert callable(kwargs["derive_metric"])
+    assert kwargs["replay_mode"] == "kernel"
+    assert "gpu__time_duration.sum" in kwargs["metrics"]
 
 
 def test_profile_target_reuses_solver_state_without_extra_particle_prepass():
@@ -92,81 +112,3 @@ def test_profile_runner_accepts_scatter_target():
     )
 
     runner()
-
-
-def test_sweep_backend_choices_are_hydra_choices():
-    cfg = _compose_config()
-    cfg.nsight.sweep = {
-        "kernels": ["jax", " cuda_v3"],
-        "n_particles": [8, 12],
-        "num_grids": [16],
-        "steps_per_frame": [1],
-    }
-
-    assert profile_nsight._sweep_backend_choices(cfg) == ["jax", "cuda_v3"]
-    assert profile_nsight._nsight_configs(cfg) == [
-        ("jax", 8, 16, 1),
-        ("jax", 12, 16, 1),
-        ("cuda_v3", 8, 16, 1),
-        ("cuda_v3", 12, 16, 1),
-    ]
-
-
-def test_runtime_backend_names_are_rejected_as_profile_choices():
-    cfg = _compose_config()
-    cfg.nsight.sweep = {"kernels": ["CudaV3Backend"]}
-
-    with pytest.raises(RuntimeError, match="Hydra backend choices"):
-        profile_nsight._sweep_backend_choices(cfg)
-
-
-def test_nsight_configs_are_exact_backend_variants():
-    cfg = _compose_config()
-    cfg.nsight.configs = [
-        {
-            "backend": "cuda_v2",
-            "sim": {"n_particles": 12, "num_grids": 40, "steps_per_frame": 2},
-        },
-        {"sim": {"n_particles": 10}},
-    ]
-
-    assert profile_nsight._nsight_configs(cfg) == [
-        ("cuda_v2", 12, 40, 2),
-        ("jax", 10, 16, 1),
-    ]
-
-
-def test_merge_variant_cfg_loads_registered_backend_config_into_solver_reference():
-    cfg = _compose_config()
-
-    variant = profile_nsight._merge_variant_cfg(
-        cfg,
-        backend_choice="cuda_v3",
-        n_particles=12,
-        num_grids=40,
-        steps_per_frame=2,
-    )
-
-    assert profile_nsight._backend_choice_from_cfg(variant) == "cuda_v3"
-    assert variant.backend._target_ == "mpm_jax.p2g.backends.cuda.CudaV3Backend"
-    resolved_solver_backend = OmegaConf.to_container(
-        variant.solver.backend, resolve=True
-    )
-    assert resolved_solver_backend["_target_"] == "mpm_jax.p2g.backends.cuda.CudaV3Backend"
-    assert resolved_solver_backend["num_grids"] == 40
-
-
-def test_merge_variant_cfg_matches_solver_instantiation_path():
-    cfg = _compose_config()
-    variant = profile_nsight._merge_variant_cfg(
-        cfg,
-        backend_choice="jax",
-        n_particles=8,
-        num_grids=16,
-        steps_per_frame=1,
-    )
-
-    solver = MPMSolver(hydra.utils.instantiate(variant.solver))
-
-    assert solver.backend.name == "jax"
-    assert callable(solver.elasticity_fn)

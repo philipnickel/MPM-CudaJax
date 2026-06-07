@@ -1,17 +1,37 @@
-"""Hydra-driven Nsight Python profiler for current JAX-loop MPM backends."""
+"""Hydra-driven Nsight Compute (NCU) profiler for the current JAX-loop MPM backends.
+
+One Hydra job profiles **one** backend variant (one config). Sweep across
+backends / particle counts with **Hydra multirun**, exactly like ``simulate.py``::
+
+    pixi run python profile_nsight.py -cn nsight_profile -m \
+        backend=cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v3 \
+        nsight.target=scatter
+
+Each job writes its NCU-derived metrics as one wide row to a per-run
+``nsight_metrics.{json,csv}`` and appends the same row to a sweep-level
+``results.csv`` (under the multirun sweep dir). ``postprocessing/nsight_plots.py``
+loads that ``results.csv`` into pandas and renders the analysis figures.
+
+Execution model note: nsight-python re-execs this script under ``ncu`` with the
+same argv; the child selects the matching config by signature. Under Hydra
+multirun the child re-runs the whole sweep, but non-matching jobs return ``None``
+(no NCU launch, no writes) and the matching job ``os._exit(0)``s inside NCU --
+so only the parent process ever writes results. The solver is built lazily inside
+the profiled callable so non-matching child jobs stay cheap.
+"""
 
 from __future__ import annotations
 
 # ruff: noqa: E402 -- XLA_FLAGS must be set before importing jax (via mpm_jax).
 
+import csv
 import importlib
-import itertools
 import json
 import logging
 import os
 import re
+import subprocess
 from collections.abc import Mapping
-from copy import deepcopy
 from pathlib import Path
 
 import hydra
@@ -53,9 +73,46 @@ def _optional_module(name):
 
 nsight = _optional_module("nsight")
 
+# Only these top-level nsight.* keys are recognized; anything else is a typo.
+_SCRIPT_NSIGHT_KEYS = {"target", "write_json", "analyze"}
+# nsight.analyze.configs is derived from the Hydra config, never user-supplied.
 _UNSUPPORTED_ANALYZE_CONFIG_KEYS = {"configs"}
-_SCRIPT_NSIGHT_KEYS = {"target", "write_json", "plot", "sweep", "configs", "analyze"}
-_PROFILE_BACKEND_CHOICE_KEY = "_profile_backend_choice"
+
+
+# ---------------------------------------------------------------------------
+# GPU-kind tag + Hydra resolver (mirrors simulate.py so outputs land under the
+# same gpu-kind partitioning).
+# ---------------------------------------------------------------------------
+def _slugify(value):
+    slug = re.sub(r"[^0-9A-Za-z]+", "_", str(value).strip().lower()).strip("_")
+    return slug or "unknown"
+
+
+def _current_gpu_kind():
+    override = os.environ.get("MPM_GPU_KIND")
+    if override:
+        return _slugify(override)
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=name",
+                "--format=csv,noheader,nounits",
+                "-i",
+                "0",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return _slugify(result.stdout.splitlines()[0])
+    except Exception:
+        return "unknown"
+
+
+OmegaConf.register_new_resolver("gpu_kind", _current_gpu_kind, replace=True)
+
+
 _SPEED_OF_LIGHT_METRICS = [
     "gpu__time_duration.sum",
     "sm__throughput.avg.pct_of_peak_sustained_elapsed",
@@ -212,15 +269,24 @@ def _backend_choice_from_backend_cfg(backend_cfg) -> str:
 
 
 def _backend_choice_from_cfg(cfg: DictConfig):
-    if _PROFILE_BACKEND_CHOICE_KEY in cfg:
-        return _normalize_backend_choice(cfg[_PROFILE_BACKEND_CHOICE_KEY])
     try:
         return _normalize_backend_choice(HydraConfig.get().runtime.choices["backend"])
-    except ValueError:
-        pass
-    except KeyError:
+    except (ValueError, KeyError):
         pass
     return _backend_choice_from_backend_cfg(cfg.get("backend", {}))
+
+
+def _profile_config(cfg: DictConfig, backend_choice: str):
+    """The single (backend, n, g, steps) config tuple this job profiles.
+
+    nsight-python records these as DataFrame columns and forwards n_particles to
+    the derive-metric callbacks (per-particle normalization)."""
+    return (
+        backend_choice,
+        int(cfg.sim.n_particles),
+        int(cfg.sim.num_grids),
+        int(cfg.sim.steps_per_frame),
+    )
 
 
 def _require_nsight():
@@ -232,143 +298,30 @@ def _require_nsight():
 
 
 def _profile_runner(cfg: DictConfig, nsight):
-    solver = MPMSolver(hydra.utils.instantiate(cfg.solver))
-    target = build_profile_target(solver, str(cfg.nsight.get("target", "p2g")))
+    """Return a zero-arg callable that runs the warmed profile target once.
+
+    The solver + target are built lazily on first call and cached: nsight only
+    invokes this for the config whose signature matches the NCU child, so
+    non-matching Hydra-multirun jobs in the child never pay the JAX warmup."""
+    target_name = str(cfg.nsight.get("target", "p2g"))
+    cache = {}
 
     def run_once():
+        target = cache.get("target")
+        if target is None:
+            solver = MPMSolver(hydra.utils.instantiate(cfg.solver))
+            target = build_profile_target(solver, target_name)
+            cache["target"] = target
         with nsight.annotate(target.annotation):
             block_until_ready(target.run())
 
     return run_once
 
 
-def _variant_value(variant: Mapping, path: str, default):
-    cursor = variant
-    for part in path.split("."):
-        if not isinstance(cursor, Mapping) or part not in cursor:
-            return default
-        cursor = cursor[part]
-    return cursor
-
-
-def _sweep_values(mapping: Mapping, key: str, default):
-    value = mapping.get(key, default)
-    if isinstance(value, list | tuple):
-        return list(value)
-    return [value]
-
-
-def _merge_variant_cfg(
-    base_cfg: DictConfig,
-    *,
-    backend_choice: str,
-    n_particles: int,
-    num_grids: int,
-    steps_per_frame: int,
-):
-    variant_cfg = OmegaConf.create(
-        deepcopy(OmegaConf.to_container(base_cfg, resolve=False))
-    )
-    backend_choice = _normalize_backend_choice(backend_choice)
-    variant_cfg.sim.n_particles = int(n_particles)
-    variant_cfg.sim.num_grids = int(num_grids)
-    variant_cfg.sim.steps_per_frame = int(steps_per_frame)
-    variant_cfg.backend = backend_configs.backend_config(backend_choice)
-    variant_cfg[_PROFILE_BACKEND_CHOICE_KEY] = backend_choice
-    variant_cfg.solver.material = "${material}"
-    variant_cfg.solver.sim = "${sim}"
-    variant_cfg.solver.backend = "${backend}"
-    return variant_cfg
-
-
-def _sweep_backend_choices(cfg: DictConfig):
-    base_backend = _backend_choice_from_cfg(cfg)
-    sweep = cfg.nsight.get("sweep", None)
-    if sweep is not None:
-        sweep_dict = OmegaConf.to_container(sweep, resolve=True)
-        if not isinstance(sweep_dict, Mapping):
-            raise RuntimeError("nsight.sweep must be a mapping of parameter lists.")
-        return [
-            _normalize_backend_choice(value)
-            for value in _sweep_values(sweep_dict, "kernels", [base_backend])
-        ]
-
-    configs = cfg.nsight.get("configs", None)
-    if configs is not None:
-        backend_choices = []
-        for variant in OmegaConf.to_container(configs, resolve=True):
-            if not isinstance(variant, Mapping):
-                raise RuntimeError(
-                    "Each nsight.configs entry must be a mapping of Hydra overrides."
-                )
-            backend_choice = _variant_value(variant, "backend", None)
-            if backend_choice is None:
-                backend_choice = base_backend
-            if not isinstance(backend_choice, str):
-                raise RuntimeError(
-                    "nsight.configs backend overrides must be config-group names."
-                )
-            backend_choice = _normalize_backend_choice(backend_choice)
-            if backend_choice not in backend_choices:
-                backend_choices.append(backend_choice)
-        return backend_choices or [base_backend]
-
-    return [base_backend]
-
-
-def _nsight_configs(cfg: DictConfig):
-    base_backend = _backend_choice_from_cfg(cfg)
-    base_n = int(cfg.sim.n_particles)
-    base_g = int(cfg.sim.num_grids)
-    base_steps = int(cfg.sim.steps_per_frame)
-
-    sweep = cfg.nsight.get("sweep", None)
-    if sweep is not None:
-        sweep_dict = OmegaConf.to_container(sweep, resolve=True)
-        if not isinstance(sweep_dict, Mapping):
-            raise RuntimeError("nsight.sweep must be a mapping of parameter lists.")
-        n_particles = [
-            int(value) for value in _sweep_values(sweep_dict, "n_particles", [base_n])
-        ]
-        num_grids = [
-            int(value) for value in _sweep_values(sweep_dict, "num_grids", [base_g])
-        ]
-        steps_per_frame = [
-            int(value)
-            for value in _sweep_values(sweep_dict, "steps_per_frame", [base_steps])
-        ]
-        return list(
-            itertools.product(
-                _sweep_backend_choices(cfg), n_particles, num_grids, steps_per_frame
-            )
-        )
-
-    configs = cfg.nsight.get("configs", None)
-    if configs is None:
-        return [(base_backend, base_n, base_g, base_steps)]
-    if not isinstance(configs, ListConfig | list):
-        raise RuntimeError("nsight.configs must be a list of Hydra override mappings.")
-    nsight_configs = []
-    for variant in OmegaConf.to_container(configs, resolve=True):
-        if not isinstance(variant, Mapping):
-            raise RuntimeError(
-                "Each nsight.configs entry must be a mapping of Hydra overrides."
-            )
-        backend_choice = _variant_value(variant, "backend", base_backend)
-        if not isinstance(backend_choice, str):
-            raise RuntimeError(
-                "nsight.configs backend overrides must be config-group names."
-            )
-        backend_choice = _normalize_backend_choice(backend_choice)
-        n_particles = int(_variant_value(variant, "sim.n_particles", base_n))
-        num_grids = int(_variant_value(variant, "sim.num_grids", base_g))
-        steps_per_frame = int(
-            _variant_value(variant, "sim.steps_per_frame", base_steps)
-        )
-        nsight_configs.append((backend_choice, n_particles, num_grids, steps_per_frame))
-    return nsight_configs
-
-
+# ---------------------------------------------------------------------------
+# Derived metrics (achieved roofline + per-particle/atomics/occupancy/scheduler
+# diagnostics). nsight passes (metric_values..., config_values...) to each.
+# ---------------------------------------------------------------------------
 def _value_for_metric(metric_values, metrics: list[str], metric: str):
     if metric not in metrics:
         raise RuntimeError(
@@ -842,7 +795,7 @@ def _combine_kernel_metrics(name):
     )
 
 
-def _nsight_analyze_kwargs(cfg: DictConfig, run_dir: Path, backend_choice: str):
+def _nsight_analyze_kwargs(cfg: DictConfig, run_dir: Path, profile_config):
     analyze_cfg = cfg.nsight.get("analyze", {})
     kwargs = OmegaConf.to_container(analyze_cfg, resolve=True)
     if kwargs is None:
@@ -872,49 +825,107 @@ def _nsight_analyze_kwargs(cfg: DictConfig, run_dir: Path, backend_choice: str):
     )
     kwargs.setdefault("output", "progress")
     kwargs.setdefault("output_csv", True)
+    backend_choice = profile_config[0]
     target_name = str(cfg.nsight.get("target", "p2g"))
     kwargs.setdefault(
         "output_prefix", str(run_dir / f"nsight_{backend_choice}_{target_name}_")
     )
-    kwargs.setdefault("configs", _nsight_configs(cfg))
+    # One config per Hydra job; sweep across backends/sizes via Hydra multirun.
+    kwargs["configs"] = [profile_config]
     return kwargs
 
 
-def _nsight_plot_kwargs(cfg: DictConfig, run_dir: Path):
-    plot_cfg = cfg.nsight.get("plot", {})
-    filename = Path(str(plot_cfg.get("filename", "nsight_plot.png")))
-    if not filename.is_absolute():
-        filename = run_dir / filename
-
-    kwargs = OmegaConf.to_container(plot_cfg, resolve=True)
-    kwargs.pop("enabled", None)
-    kwargs["filename"] = str(filename)
-
-    if "show_aggregate" not in kwargs:
-        if kwargs.pop("show_avg", False):
-            kwargs["show_aggregate"] = "avg"
-        elif kwargs.pop("show_geomean", False):
-            kwargs["show_aggregate"] = "geomean"
-    else:
-        kwargs.pop("show_avg", None)
-        kwargs.pop("show_geomean", None)
-
-    return kwargs
+# ---------------------------------------------------------------------------
+# Result writing (mirrors simulate.py: per-run files + a sweep-level results.csv).
+# ---------------------------------------------------------------------------
+def _py(value):
+    """Coerce numpy/pandas scalars to JSON/CSV-friendly Python scalars."""
+    item = value.item() if hasattr(value, "item") else value
+    return item
 
 
-def _write_results(results, run_dir: Path, write_json: bool):
+def _flatten_results(results, cfg: DictConfig, profile_config, target_name):
+    """nsight long-format DataFrame (one row per Metric) -> one wide metrics dict."""
     df = results.to_dataframe()
-    logger.info(
-        "Nsight Python wrote raw and processed CSV files via output_csv=True.\n%s",
-        df,
+    first = df.iloc[0]
+    metrics = {
+        "backend": str(first["variant_backend"]),
+        "target": target_name,
+        "n_particles": int(profile_config[1]),
+        "num_grids": int(profile_config[2]),
+        "steps_per_frame": int(profile_config[3]),
+        "kernel": str(first.get("Kernel", "")),
+        "gpu": str(first.get("GPU", "")),
+        "gpu_kind": _slugify(first.get("GPU", "")),
+        "host": str(first.get("Host", "")),
+        "compute_clock": _py(first.get("ComputeClock")),
+        "memory_clock": _py(first.get("MemoryClock")),
+    }
+    for _, row in df.iterrows():
+        metrics[str(row["Metric"])] = _py(row["AvgValue"])
+    return metrics
+
+
+def _analysis_csv_path(cfg: DictConfig):
+    """Sweep-level results.csv path for a multirun (None for a single run)."""
+    hydra_cfg = HydraConfig.get()
+    if OmegaConf.select(hydra_cfg, "job.num") is None:
+        return None
+    sweep_dir = Path(str(OmegaConf.select(hydra_cfg, "sweep.dir")))
+    if not sweep_dir.is_absolute():
+        sweep_dir = Path(hydra.utils.get_original_cwd()) / sweep_dir
+    try:
+        runs_index = sweep_dir.parts.index("runs")
+        sweep_root = Path(*sweep_dir.parts[:runs_index])
+    except ValueError:
+        sweep_root = sweep_dir
+    return sweep_root / "results.csv"
+
+
+def _write_csv_row(path: Path, metrics: Mapping):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_header = not path.exists() or path.stat().st_size == 0
+    with path.open("a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(metrics))
+        if write_header:
+            writer.writeheader()
+        writer.writerow(metrics)
+
+
+def _append_aggregate_row(path: Path, metrics: Mapping):
+    """Append one wide row to the sweep results.csv, unioning columns across
+    backends (different kernels emit slightly different derived metrics)."""
+    import pandas as pd
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    row = pd.DataFrame([metrics])
+    if path.exists() and path.stat().st_size > 0:
+        existing = pd.read_csv(path)
+        row = pd.concat([existing, row], ignore_index=True)
+    row.to_csv(path, index=False)
+
+
+def _write_results(results, cfg, run_dir, profile_config, target_name):
+    metrics = _flatten_results(results, cfg, profile_config, target_name)
+
+    hydra_cfg = HydraConfig.get()
+    metrics["output_dir"] = str(run_dir)
+    metrics["hydra_job_num"] = OmegaConf.select(hydra_cfg, "job.num")
+    metrics["hydra_override_dirname"] = OmegaConf.select(
+        hydra_cfg, "job.override_dirname"
     )
 
-    if write_json:
-        out_json = run_dir / "nsight_results.json"
-        out_json.write_text(
-            json.dumps(json.loads(df.to_json(orient="records")), indent=2)
-        )
-        logger.info("Wrote %s", out_json)
+    if bool(cfg.nsight.get("write_json", True)):
+        (run_dir / "nsight_metrics.json").write_text(json.dumps(metrics, indent=2))
+    _write_csv_row(run_dir / "nsight_metrics.csv", metrics)
+
+    aggregate = _analysis_csv_path(cfg)
+    if aggregate is not None:
+        _append_aggregate_row(aggregate, metrics)
+        logger.info("Appended %s row to %s", metrics["backend"], aggregate)
+
+    logger.info("Nsight metrics for %s:\n%s", metrics["backend"], metrics)
+    return metrics
 
 
 def _run_nsight_profile(profiled_func):
@@ -934,39 +945,36 @@ def _run_nsight_profile(profiled_func):
 @hydra.main(version_base=None, config_path="conf", config_name="nsight_profile")
 def main(cfg: DictConfig):
     nsight = _require_nsight()
-    backend_choice = _backend_choice_from_cfg(cfg)
-
-    run_dir = Path(HydraConfig.get().runtime.output_dir).resolve()
-    analyze_kwargs = _nsight_analyze_kwargs(cfg, run_dir, backend_choice)
-    plot_enabled = bool(cfg.nsight.get("plot", {}).get("enabled", False))
-    plot_kwargs = _nsight_plot_kwargs(cfg, run_dir) if plot_enabled else None
-
-    def profiled_variant(variant_backend, n_particles, num_grids, steps_per_frame):
-        profile_cfg = _merge_variant_cfg(
-            cfg,
-            backend_choice=variant_backend,
-            n_particles=n_particles,
-            num_grids=num_grids,
-            steps_per_frame=steps_per_frame,
-        )
-        launcher = _profile_runner(profile_cfg, nsight)
-        launcher()
-
-    profiled_variant = nsight.analyze.kernel(**analyze_kwargs)(profiled_variant)
-    if plot_kwargs is not None:
-        profiled_variant = nsight.analyze.plot(**plot_kwargs)(profiled_variant)
-
-    logger.info("Nsight profile config:\n%s", OmegaConf.to_yaml(cfg.nsight))
     unexpected = set(cfg.nsight.keys()) - _SCRIPT_NSIGHT_KEYS
     if unexpected:
         keys = ", ".join(sorted(unexpected))
         raise RuntimeError(f"Unknown nsight config keys: {keys}.")
-    results = _run_nsight_profile(profiled_variant)
-    _write_results(
-        results, run_dir, write_json=bool(cfg.nsight.get("write_json", True))
+
+    backend_choice = _backend_choice_from_cfg(cfg)
+    target_name = str(cfg.nsight.get("target", "p2g"))
+    profile_config = _profile_config(cfg, backend_choice)
+
+    run_dir = Path(HydraConfig.get().runtime.output_dir).resolve()
+    analyze_kwargs = _nsight_analyze_kwargs(cfg, run_dir, profile_config)
+
+    launcher = _profile_runner(cfg, nsight)
+
+    def profiled_variant(variant_backend, n_particles, num_grids, steps_per_frame):
+        launcher()
+
+    profiled_variant = nsight.analyze.kernel(**analyze_kwargs)(profiled_variant)
+
+    logger.info(
+        "Nsight profile: backend=%s target=%s config=%s",
+        backend_choice,
+        target_name,
+        profile_config,
     )
-    if plot_kwargs is not None:
-        logger.info("Wrote %s", plot_kwargs["filename"])
+    results = _run_nsight_profile(profiled_variant)
+    # In an NCU child re-exec, a non-matching Hydra-multirun job returns None
+    # (the matching job os._exit(0)s inside NCU). Only the parent writes.
+    if results is not None:
+        _write_results(results, cfg, run_dir, profile_config, target_name)
 
 
 if __name__ == "__main__":

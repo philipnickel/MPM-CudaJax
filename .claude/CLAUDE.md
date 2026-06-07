@@ -178,11 +178,24 @@ pixi run python simulate.py sim.n_particles=50000 sim.num_grids=64
 # occupancy | scheduler | full (all-in-one), or nsight.analyze.metrics=[...] raw.
 pixi run python profile_nsight.py -cn nsight_profile backend=cutile_v3 nsight.target=scatter sim.n_particles=4096
 
-# Cross-backend analysis (roofline/atomics/occupancy/scheduler) -> one sweep, then plot.
-pixi run python profile_nsight.py -cn nsight_profile nsight.target=scatter \
-  nsight.analyze.metric_preset=full nsight.analyze.derive_metric=full \
-  'nsight.sweep.kernels=[cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v3]'
-pixi run python postprocessing/nsight_plots.py <run_dir>/nsight_results.json -o nsight_figs/
+# Cross-backend analysis: ONE Hydra job profiles ONE backend; sweep via Hydra
+# multirun (-m), like simulate.py. Each job appends a wide metrics row to a
+# sweep-level results.csv; nsight_plots.py loads it with pandas and renders
+# roofline/atomics/occupancy/scheduler (+ roofline_scaling for scale sweeps).
+# nsight_profile.yaml defaults: metric_preset=full, derive_metric=full,
+# replay_mode=kernel, ignore_kernel_list isolates the main P2G kernel (cuTile's
+# scatter is a fused group; dropping the wrappers keeps each annotation single-
+# kernel so share-of-peak metrics are not summed past 100%).
+pixi run python profile_nsight.py -cn nsight_profile -m \
+  backend=cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v3 nsight.target=scatter
+pixi run python postprocessing/nsight_plots.py \
+  outputs/nsight/<gpu>/sweeps/<date>/<time>/results.csv -o figures/nsight/<gpu>/
+
+# Scaling roofline trajectories (adds roofline_scaling.png; axis auto-detected):
+#   load: fixed grid, growing N (throughput vs problem size, NOT strong scaling)
+#         -> sim.n_particles=1250000,2500000,5000000,10000000
+#   weak: fixed ppc, grid+N grow together
+#         -> scale=weak_g64,weak_g96,weak_g128,weak_g160
 
 # Interactive NCU GUI: launch the Pixi env Python directly, not `pixi`.
 # simulate.py warms once, then marks the measured solve loop with NVTX and

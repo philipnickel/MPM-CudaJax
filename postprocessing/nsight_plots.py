@@ -1,25 +1,26 @@
 """Cross-backend P2G NCU analysis figures.
 
-Reads a ``nsight_results.json`` produced by a ``profile_nsight.py`` sweep with
-``metric_preset=full derive_metric=full`` over the custom P2G backends, and
-renders four figures: a hierarchical fp32 roofline, the atomic-scatter story,
-occupancy + its limiter, and the warp-issue-stall breakdown.
+Reads the wide ``results.csv`` produced by a ``profile_nsight.py`` Hydra-multirun
+sweep (``metric_preset=full derive_metric=full``, one row per backend) over the
+custom P2G backends, and renders four figures: a hierarchical fp32 roofline, the
+atomic-scatter story, occupancy + its limiter, and the warp-issue-stall breakdown.
 
-    # 1. collect (single NCU sweep over the custom kernels)
-    pixi run python profile_nsight.py -cn nsight_profile nsight.target=scatter \
-        nsight.analyze.metric_preset=full nsight.analyze.derive_metric=full \
-        'nsight.sweep.kernels=[cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v3]'
-    # 2. plot
-    pixi run python postprocessing/nsight_plots.py <run_dir>/nsight_results.json -o figs/
+    # 1. collect (one NCU job per backend via Hydra multirun)
+    pixi run python profile_nsight.py -cn nsight_profile -m \
+        backend=cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v3 \
+        nsight.target=scatter sim.n_particles=1000000
+    # 2. plot the sweep's aggregated results.csv
+    pixi run python postprocessing/nsight_plots.py \
+        outputs/nsight/<gpu>/sweeps/<date>/<time>/results.csv -o figs/
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 
 import matplotlib
+import pandas as pd
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -48,15 +49,26 @@ STALLS = [
 ]
 
 
-def load(path):
-    """Long-format JSON -> {backend: {metric: value}}."""
-    rows = json.loads(Path(path).read_text())
+def load_dataframe(path):
+    """Read the sweep results.csv (one wide row per backend) into a DataFrame."""
+    return pd.read_csv(path)
+
+
+def table_from_dataframe(df):
+    """Wide DataFrame -> {backend: {metric: value}}, dropping NaN cells.
+
+    For a scaling sweep (several rows per backend) the single-point figures use
+    the largest-N row per backend as the representative operating point."""
+    sort_keys = [c for c in ("n_particles", "num_grids") if c in df.columns]
+    if sort_keys:
+        df = df.copy()  # defragment the wide frame before the groupby
+        df = df.sort_values(sort_keys).groupby("backend", as_index=False).last()
     table = {}
-    for r in rows:
-        backend = r.get("variant_backend") or r.get("backend") or r.get("kernel")
-        if backend is None:
+    for _, row in df.iterrows():
+        backend = row.get("backend")
+        if backend is None or (isinstance(backend, float) and pd.isna(backend)):
             continue
-        table.setdefault(backend, {})[r["Metric"]] = r["AvgValue"]
+        table[str(backend)] = {k: v for k, v in row.items() if pd.notna(v)}
     return table
 
 
@@ -119,6 +131,95 @@ def plot_roofline(table, out):
     ax.set_xlabel("Arithmetic intensity [FLOP/byte]")
     ax.set_ylabel("Performance [GFLOP/s]")
     ax.set_title("Hierarchical fp32 roofline — P2G scatter")
+    ax.grid(True, which="both", alpha=0.2)
+    fig.tight_layout()
+    fig.savefig(out, dpi=140)
+    plt.close(fig)
+
+
+def plot_roofline_scaling(df, out, scale_col="n_particles", scale_label=None):
+    """Proper hierarchical fp32 roofline trajectory plot.
+
+    For every backend (colour) and every memory level (L1=o, L2=s, HBM=^) the
+    sweep points are connected into a trajectory, and a trend arrow on the final
+    segment shows the direction of increasing scale (small -> large)."""
+    scale_label = scale_label or scale_col
+    import numpy as np
+
+    backends = [b for b in BACKEND_ORDER if b in set(df["backend"])] or sorted(
+        df["backend"].unique()
+    )
+    # Ceilings are per-chip device constants (identical across rows now that every
+    # target is a single kernel); take the median over the sweep for robustness.
+    peak_c = float(df["peak_compute_gflops"].median())
+    fig, ax = plt.subplots(figsize=(8.6, 6.2))
+    ai = np.logspace(-2, 3, 300)
+    for lvl, shade in (("l1", "#bbbbbb"), ("l2", "#888888"), ("hbm", "#222222")):
+        col = f"peak_{lvl}_gbps"
+        if col not in df:
+            continue
+        bw = float(df[col].median())
+        ax.plot(ai, np.minimum(bw * ai, peak_c), color=shade, lw=1.3,
+                label=f"{lvl.upper()} roof ({bw / 1000:.1f} TB/s)")
+    ax.axhline(peak_c, color="black", ls="--", lw=0.8)
+    ax.text(ai[-1], peak_c * 1.05, f"fp32 compute {peak_c / 1000:.1f} TFLOP/s",
+            ha="right", va="bottom", fontsize=8)
+
+    levels = [("l1", "o"), ("l2", "s"), ("hbm", "^")]
+    for b in backends:
+        sub = df[df["backend"] == b].sort_values(scale_col)
+        y = sub["gflops_per_s"].to_numpy()
+        if len(y) == 0:
+            continue
+        color = COLOR.get(b, "k")
+        for lvl, mark in levels:
+            x = sub[f"ai_{lvl}_flop_per_byte"].to_numpy()
+            ax.plot(x, y, "-", color=color, lw=1.0, alpha=0.45, zorder=2)
+            ax.scatter(x, y, marker=mark, s=34, color=color, zorder=3,
+                       edgecolor="white", linewidth=0.4)
+            # Trend arrow along the final (largest-scale) segment.
+            if len(x) >= 2:
+                ax.annotate(
+                    "", xy=(x[-1], y[-1]), xytext=(x[-2], y[-2]),
+                    arrowprops=dict(arrowstyle="-|>", color=color, lw=1.4,
+                                    alpha=0.9, shrinkA=0, shrinkB=0),
+                    zorder=4,
+                )
+        # Label the backend once, at the HBM (rightmost) end of its trajectory.
+        xh = sub["ai_hbm_flop_per_byte"].to_numpy()
+        ax.annotate(b, (xh[-1], y[-1]), fontsize=7, color=color, fontweight="bold",
+                    xytext=(7, 0), textcoords="offset points", va="center")
+
+    # Three legends: memory-level marker shapes, backend colours, and the roofs.
+    level_handles = [
+        plt.Line2D([], [], marker=m, ls="", color="0.35", label=lvl.upper())
+        for lvl, m in levels
+    ]
+    backend_handles = [
+        plt.Line2D([], [], marker="o", ls="", color=COLOR.get(b, "k"), label=b)
+        for b in backends
+    ]
+    lo = df[scale_col].min()
+    hi = df[scale_col].max()
+    fmt = (lambda s: f"{s / 1e6:g}M") if scale_col == "n_particles" else (
+        lambda s: f"{int(s)}"
+    )
+    roof_leg = ax.legend(loc="lower right", fontsize=7)
+    ax.add_artist(roof_leg)
+    lvl_leg = ax.legend(handles=level_handles, title="memory level", loc="upper left",
+                        fontsize=7)
+    ax.add_artist(lvl_leg)
+    ax.legend(handles=backend_handles, title="backend", loc="lower left", fontsize=7,
+              ncol=2)
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("Arithmetic intensity [FLOP/byte]")
+    ax.set_ylabel("Performance [GFLOP/s]")
+    ax.set_title(
+        f"Hierarchical fp32 roofline trajectory — P2G scatter\n"
+        f"arrow = increasing {scale_label} ({fmt(lo)} → {fmt(hi)})",
+        fontsize=11,
+    )
     ax.grid(True, which="both", alpha=0.2)
     fig.tight_layout()
     fig.savefig(out, dpi=140)
@@ -220,16 +321,38 @@ def plot_scheduler(table, out):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("results_json", type=Path)
+    ap.add_argument(
+        "results_csv",
+        type=Path,
+        help="Sweep results.csv from a profile_nsight.py Hydra-multirun sweep.",
+    )
     ap.add_argument("-o", "--out-dir", type=Path, default=Path("nsight_figs"))
     args = ap.parse_args()
     args.out_dir.mkdir(parents=True, exist_ok=True)
-    table = load(args.results_json)
+    df = load_dataframe(args.results_csv)
+    table = table_from_dataframe(df)
     plot_roofline(table, args.out_dir / "roofline.png")
     plot_atomics(table, args.out_dir / "atomics.png")
     plot_occupancy(table, args.out_dir / "occupancy.png")
     plot_scheduler(table, args.out_dir / "scheduler.png")
-    print(f"wrote roofline/atomics/occupancy/scheduler .png to {args.out_dir}")
+    written = "roofline/atomics/occupancy/scheduler"
+    n_var = "n_particles" in df.columns and df["n_particles"].nunique() > 1
+    g_var = "num_grids" in df.columns and df["num_grids"].nunique() > 1
+    if n_var or g_var:
+        if n_var and g_var:
+            # Both grow together -> weak scaling (particles-per-cell held fixed).
+            scale_col, scale_label = "num_grids", "grid size G (weak scaling, const ppc)"
+        elif n_var:
+            # Fixed grid, growing N: a load/throughput sweep (resources are constant,
+            # so this is NOT strong scaling -- it grows the problem and the ppc).
+            scale_col, scale_label = "n_particles", "particle count (fixed grid — load sweep)"
+        else:
+            scale_col, scale_label = "num_grids", "grid size G (density sweep)"
+        plot_roofline_scaling(
+            df, args.out_dir / "roofline_scaling.png", scale_col, scale_label
+        )
+        written += "/roofline_scaling"
+    print(f"wrote {written} .png to {args.out_dir}")
 
 
 if __name__ == "__main__":

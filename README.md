@@ -225,14 +225,45 @@ by NCU from the running chip, so they are architecture-correct on A100/H100/GH20
 with no datasheet constants.
 
 **Cross-backend analysis figures** (hierarchical fp32 roofline, atomic-scatter,
-occupancy, warp-stall breakdown) for the custom P2G kernels — one NCU sweep, then
-plot:
+occupancy, warp-stall breakdown) for the custom P2G kernels. One Hydra job
+profiles one backend variant; sweep across backends with **Hydra multirun** (`-m`),
+exactly like `simulate.py`. Each job appends one wide row of NCU-derived metrics to
+a sweep-level `results.csv` (under `outputs/nsight/<gpu>/sweeps/<date>/<time>/`),
+and `postprocessing/nsight_plots.py` loads that CSV into pandas and renders the
+figures:
 
 ```bash
-pixi run python profile_nsight.py -cn nsight_profile nsight.target=scatter \
-    nsight.analyze.metric_preset=full nsight.analyze.derive_metric=full \
-    'nsight.sweep.kernels=[cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v3]'
-pixi run python postprocessing/nsight_plots.py <run_dir>/nsight_results.json -o nsight_figs/
+# Single operating point (all 6 custom kernels at the benchmark resolution):
+pixi run python profile_nsight.py -cn nsight_profile -m \
+    backend=cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v3 \
+    nsight.target=scatter
+pixi run python postprocessing/nsight_plots.py \
+    outputs/nsight/<gpu>/sweeps/<date>/<time>/results.csv -o figures/nsight/<gpu>/
+```
+
+The default `nsight_profile.yaml` uses `metric_preset=full`, `derive_metric=full`,
+`replay_mode=kernel`, and an `ignore_kernel_list` that isolates the main P2G
+kernel — cuTile's tiled scatter launches as a fused group (broadcast + P2G +
+slice wrappers), and dropping the wrappers keeps every annotation single-kernel so
+NCU's share-of-peak metrics (occupancy, stall ratios, SOL) stay correct. It is
+harmless for the single-kernel CUDA backends.
+
+**Scaling roofline trajectories.** Add a scale axis to the multirun and
+`nsight_plots.py` also emits `roofline_scaling.png` — a hierarchical roofline where
+each backend is a connected L1/L2/HBM trajectory with a trend arrow in the
+direction of increasing scale. The axis is auto-detected from what varies:
+
+```bash
+# Load sweep (throughput vs problem size): fixed grid, growing particle count
+# (raises ppc/density). Resources are constant, so this is NOT strong scaling.
+pixi run python profile_nsight.py -cn nsight_profile -m \
+    backend=cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v3 \
+    sim.n_particles=1250000,2500000,5000000,10000000 nsight.target=scatter
+
+# Weak scaling: fixed particles-per-cell (~8.49), grid + N grow together.
+pixi run python profile_nsight.py -cn nsight_profile -m \
+    backend=cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v3 \
+    scale=weak_g64,weak_g96,weak_g128,weak_g160 nsight.target=scatter
 ```
 
 For interactive Nsight Compute, launch `simulate.py` directly with the Pixi env

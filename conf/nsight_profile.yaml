@@ -6,22 +6,50 @@ defaults:
 render:
   enabled: false
 
+# One Hydra job profiles ONE backend variant with NCU. Sweep across backends /
+# particle counts with Hydra multirun (-m), e.g.:
+#   pixi run python profile_nsight.py -cn nsight_profile -m \
+#       backend=cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v3 \
+#       nsight.target=scatter sim.n_particles=1000000
+# then plot the sweep's results.csv with postprocessing/nsight_plots.py.
 nsight:
-  target: p2g
+  target: scatter
   write_json: true
-  sweep: null
-  configs: null
-  plot:
-    enabled: false
-    filename: nsight_plot.png
   analyze:
     runs: 1
     # kernel replay (not range): the custom-backend scatter is a single kernel,
     # and NCU's .peak_sustained roofline ceilings are unsupported in range replay.
     replay_mode: kernel
-    metric_preset: time
-    derive_metric: throughput
-    # A single-kernel scatter target -> sum is identity; kept for multi-launch
-    # targets. (Peak/clock metrics in the roofline preset are device constants and
-    # must not be summed, so only profile single-kernel targets with that preset.)
+    metric_preset: full
+    derive_metric: full
+    # cuTile's tiled P2G launches as a fused group: a broadcast prologue, the
+    # actual P2G kernel, and two slice wrappers. Drop the wrappers so every
+    # annotation reduces to a single kernel -- share-of-peak metrics (occupancy,
+    # stall ratios, SOL) are per-kernel and must NOT be summed across kernels
+    # (summing pushes percentages past 100%). Harmless for the single-kernel CUDA
+    # backends, whose names never appear here. This also makes the cuTile timing an
+    # apples-to-apples P2G-kernel comparison against the CUDA p2g_vN_kernel.
+    ignore_kernel_list:
+      - loop_broadcast_fusion
+      - wrapped_slice_1
+      - wrapped_slice
+    # With the wrappers removed each target is one kernel, so sum is identity;
+    # kept for any future multi-launch target.
     combine_kernel_metrics: sum
+
+# Keep Nsight outputs out of the timing-sweep tree. The sweep dir has no "runs"
+# component, so each multirun aggregates into its own
+# outputs/nsight/<gpu>/sweeps/<date>/<time>/results.csv.
+hydra:
+  run:
+    dir: outputs/nsight/${gpu_kind:}/runs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: outputs/nsight/${gpu_kind:}/sweeps/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}_${hydra.job.override_dirname}
+  job:
+    config:
+      override_dirname:
+        kv_sep: "="
+        item_sep: ","
+        exclude_keys:
+          - render.enabled
