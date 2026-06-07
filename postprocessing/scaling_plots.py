@@ -20,16 +20,12 @@ import seaborn as sns
 logger = logging.getLogger(__name__)
 plt.switch_backend("Agg")
 
-# Each sweep tag's x column, x-axis label, and title prefix. Add an entry here
-# to teach the renderer about a new sweep.
+# Each sweep tag's (x column, x-axis label, fixed-axis suffix). The suffix is
+# appended to every plot title to disambiguate which axis is held constant.
 GROUP_SPECS: dict[str, tuple[str, str, str]] = {
-    "sweep_particle_count": ("n_particles", "particles", "Constant grid (G=96)"),
-    "sweep_weak_scaling": (
-        "n_particles", "particles", "Constant active PPC ($\\approx 8.5$)",
-    ),
-    "sweep_particle_density": (
-        "num_grids", "grid resolution G", "Constant N=20M",
-    ),
+    "sweep_particle_count": ("n_particles", "particles", "fixed G"),
+    "sweep_weak_scaling": ("n_particles", "particles", "fixed PPC"),
+    "sweep_particle_density": ("num_grids", "grid resolution G", "fixed N"),
 }
 
 
@@ -100,25 +96,26 @@ def _plot_sweep(
     *,
     x: str,
     xlabel: str,
-    group_title: str,
+    fixed: str,
     out_dir: Path,
     baseline: str,
     gpu_label: str,
 ) -> None:
     """Render the 3 plots for one sweep group."""
     out_dir.mkdir(parents=True, exist_ok=True)
+    suffix = f" ({fixed})"
 
     _plot(
         df, x=x, xlabel=xlabel,
         y="ms_per_step", ylabel="ms / substep",
-        title=f"{group_title}: substep wall time",
+        title="Time per step" + suffix,
         subtitle=gpu_label,
         out_path=out_dir / "ms_per_substep.png",
     )
     _plot(
         df, x=x, xlabel=xlabel,
         y="particles_per_sec", ylabel="particles / second",
-        title=f"{group_title}: throughput",
+        title="Particle Throughput" + suffix,
         subtitle=gpu_label,
         out_path=out_dir / "particles_per_sec.png",
     )
@@ -128,7 +125,7 @@ def _plot_sweep(
         .rename(columns={"ms_per_step": "_base_ms"})
     )
     if base.empty:
-        logger.warning("No %s baseline rows in group '%s'", baseline, group_title)
+        logger.warning("No %s baseline rows; skipping speedup plot", baseline)
         return
     merged = df.merge(base, on=x, how="inner")
     merged["speedup_substep"] = merged["_base_ms"] / merged["ms_per_step"]
@@ -136,7 +133,7 @@ def _plot_sweep(
         merged, x=x, xlabel=xlabel,
         y="speedup_substep",
         ylabel=f"speedup vs {baseline}",
-        title=f"{group_title}: substep speedup vs {baseline}",
+        title=f"Speedup over {baseline.capitalize()} Baseline" + suffix,
         subtitle=gpu_label,
         out_path=out_dir / f"speedup_vs_{baseline}.png",
         y_log=False, baseline_line=True,
@@ -164,7 +161,7 @@ def render(
     for gpu_kind, gpu_df in groups:
         gpu_label = str(gpu_kind) if gpu_kind is not None else "gpu"
         gpu_dir = (out_dir / gpu_label) if gpu_subdirs else out_dir
-        for tag, (x, xlabel, group_title) in GROUP_SPECS.items():
+        for tag, (x, xlabel, fixed) in GROUP_SPECS.items():
             sub = gpu_df[gpu_df["tag"] == tag] if "tag" in gpu_df else pd.DataFrame()
             if sub.empty:
                 continue
@@ -172,7 +169,7 @@ def render(
                 sub,
                 x=x,
                 xlabel=xlabel,
-                group_title=group_title,
+                fixed=fixed,
                 out_dir=gpu_dir / tag.removeprefix("sweep_"),
                 baseline=baseline,
                 gpu_label=gpu_label,
