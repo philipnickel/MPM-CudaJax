@@ -1,8 +1,39 @@
 # @package _global_
-# Constant grid (G=96), particle count up.
-# 5 log-spaced points 1M..25M; the full N catalogue lives in conf/scale/count_*.yaml.
+# Constant grid (G=96), particle count up. N is swept directly via
+# hydra.sweeper.params; no per-point yaml needed.
+defaults:
+    - /plot@plots.time: loglog
+    - /plot@plots.throughput: loglog
+    - /plot@plots.speedup: speedup
+    - _self_
+
 hydra:
     sweeper:
         params:
-            scale: count_1m,count_2m,count_5m,count_10m,count_25m
+            sim.n_particles: 1000000,2000000,5000000,10000000,25000000
+
+sim:
+    num_grids: 96
+
 tag: sweep_particle_count
+
+plots:
+    time:
+        x: n_particles
+        xlabel: particles
+        y: ms_per_step
+        ylabel: ms / substep
+        title: "Time per step (fixed G)"
+        filename: ms_per_substep.png
+    throughput:
+        x: n_particles
+        xlabel: particles
+        y: particles_per_sec
+        ylabel: particles / second
+        title: "Particle Throughput (fixed G)"
+        filename: particles_per_sec.png
+    speedup:
+        x: n_particles
+        xlabel: particles
+        title: "Speedup over Jax Baseline (fixed G)"
+        filename: speedup_vs_jax.png

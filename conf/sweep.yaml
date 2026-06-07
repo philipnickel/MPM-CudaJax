@@ -19,7 +19,6 @@ hydra:
     callbacks:
         scaling_plot:
             _target_: postprocessing.callbacks.ScalingPlotCallback
-            baseline_kernel: jax
 
 # Sweeps need only enough substeps to average past warmup; 5 keeps the big-N
 # jobs short. Override on the CLI for longer runs.

@@ -1,7 +1,38 @@
 # @package _global_
-# Constant N=20M, grid resolution up: G = 64, 84, 112, 148, 196 (log-spaced).
+# Constant N=20M, grid resolution up. G is swept directly.
+defaults:
+    - /plot@plots.time: loglog
+    - /plot@plots.throughput: loglog
+    - /plot@plots.speedup: speedup
+    - _self_
+
 hydra:
     sweeper:
         params:
-            scale: density_g64,density_g84,density_g112,density_g148,density_g196
+            sim.num_grids: 64,84,112,148,196
+
+sim:
+    n_particles: 20000000
+
 tag: sweep_particle_density
+
+plots:
+    time:
+        x: num_grids
+        xlabel: grid resolution G
+        y: ms_per_step
+        ylabel: ms / substep
+        title: "Time per step (fixed N)"
+        filename: ms_per_substep.png
+    throughput:
+        x: num_grids
+        xlabel: grid resolution G
+        y: particles_per_sec
+        ylabel: particles / second
+        title: "Particle Throughput (fixed N)"
+        filename: particles_per_sec.png
+    speedup:
+        x: num_grids
+        xlabel: grid resolution G
+        title: "Speedup over Jax Baseline (fixed N)"
+        filename: speedup_vs_jax.png

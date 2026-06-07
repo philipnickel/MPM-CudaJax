@@ -1,5 +1,0 @@
-# @package _global_
-# particle_count point: N=200K at G=96.
-sim:
-    n_particles: 200000
-    num_grids: 96

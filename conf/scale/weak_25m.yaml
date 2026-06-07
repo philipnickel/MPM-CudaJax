@@ -1,5 +1,0 @@
-# @package _global_
-# weak_scaling point: N=25M at G=180 (active PPC ~= 8.37).
-sim:
-    n_particles: 25000000
-    num_grids: 180

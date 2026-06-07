@@ -1,10 +1,10 @@
-"""Plot benchmark sweeps from the parquet files emitted by the multirun callback.
+"""Re-render scaling plots for an existing sweep multirun.
 
-Default discovers every ``results.parquet`` under ``outputs/sweeps/`` and
-concatenates them, so cross-sweep / cross-GPU figures fall out of one call:
+Same call the on-multirun-end callback runs; useful after a plotting tweak.
+The ``plots`` block is loaded from any one of the sweep's per-job
+``.hydra/config.yaml`` files (they all share the same plots config).
 
-    pixi run plot-sweeps                              # walk outputs/sweeps
-    pixi run plot-sweeps -- <path-to-results.parquet> # one specific sweep
+    pixi run plot-sweeps -- outputs/sweeps/<gpu>/runs/<date>/<time>
 """
 
 from __future__ import annotations
@@ -16,28 +16,29 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from postprocessing.scaling_plots import load_parquet, render  # noqa: E402
+from omegaconf import OmegaConf  # noqa: E402
+
+import mpm_jax.resolvers  # noqa: F401, E402 - registers ${ppc_grid:N}
+import postprocessing  # noqa: F401, E402 - registers Hydra plot configs
+from postprocessing.scaling_plots import render  # noqa: E402
 
 
-def _discover(root: Path) -> list[Path]:
-    if root.is_file():
-        return [root]
-    return sorted(root.rglob("results.parquet"))
+def _load_plots(sweep_root: Path):
+    job_cfgs = sorted(sweep_root.glob("*/.hydra/config.yaml"))
+    if not job_cfgs:
+        raise FileNotFoundError(f"No job .hydra/config.yaml under {sweep_root}")
+    cfg = OmegaConf.load(job_cfgs[0])
+    return cfg.plots
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("paths", nargs="*", type=Path, default=[Path("outputs/sweeps")])
-    parser.add_argument("--figures-dir", type=Path, default=Path("figures/sweeps"))
-    parser.add_argument("--baseline", default="jax")
+    parser.add_argument("sweep_root", type=Path,
+                        help="A multirun directory (the hydra.sweep.dir).")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-    paths = [p for root in args.paths for p in _discover(root)]
-    if not paths:
-        raise SystemExit(f"No results.parquet found under: {args.paths}")
-    df = load_parquet(*paths)
-    render(df, args.figures_dir, baseline=args.baseline)
+    render(args.sweep_root, plots=_load_plots(args.sweep_root))
 
 
 if __name__ == "__main__":

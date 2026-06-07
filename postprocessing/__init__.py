@@ -1,8 +1,13 @@
 """Post-processing / analysis tooling (not part of the solver runtime).
 
-A top-level package, separate from the installed ``mpm_jax`` solver: it imports
-only the plotting stack (matplotlib/pandas/seaborn), never the solver core.
-Resolved by Hydra ``_target_`` strings (e.g. ``postprocessing.callbacks.
-ScalingPlotCallback``) because the repo root is on ``sys.path`` when ``simulate.py``
-is run from there.
+Importing this package triggers the hydra-zen ``@store`` calls in
+:mod:`postprocessing.scaling_plots` and commits the resulting configs to
+Hydra's ConfigStore. ``simulate.py`` imports ``postprocessing`` once before
+``@hydra.main`` runs so the ``plot`` config group is live at compose time.
 """
+
+from hydra_zen import store
+
+import postprocessing.scaling_plots  # noqa: F401 - triggers @store decorators
+
+store.add_to_hydra_store(overwrite_ok=True)

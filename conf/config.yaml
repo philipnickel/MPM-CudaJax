@@ -1,7 +1,6 @@
 defaults:
     - material: jelly
     - sim: default
-    - optional scale: null
     - backend: jax
     - _self_
 
