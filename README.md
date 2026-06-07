@@ -216,14 +216,23 @@ pixi run python profile_nsight.py -cn nsight_profile \
     backend=cutile_v3 nsight.target=scatter sim.n_particles=4096
 ```
 
-For an ordinary Nsight Compute report, run the NVTX-marked target launcher:
+**Metric presets** select what NCU collects (`nsight.analyze.metric_preset`):
+`time`, `speed_of_light`, `roofline`, `atomics`, `memory_locality`, `occupancy`,
+`scheduler`, or `full` (everything in one pass-set). Or pass any NCU metric list
+directly via `nsight.analyze.metrics=[...]`. The `roofline` preset needs
+`replay_mode=kernel` (the default) — its `.peak_sustained` ceilings are derived
+by NCU from the running chip, so they are architecture-correct on A100/H100/GH200
+with no datasheet constants.
+
+**Cross-backend analysis figures** (hierarchical fp32 roofline, atomic-scatter,
+occupancy, warp-stall breakdown) for the custom P2G kernels — one NCU sweep, then
+plot:
 
 ```bash
-pixi run ncu --nvtx --nvtx-push-pop-scope process \
-    --nvtx-include "mpm_cudajax@cutile_v3_scatter/" \
-    --metrics gpu__time_duration.sum --force-overwrite \
-    -o outputs/ncu/cutile_v3_scatter \
-    python -S tools/ncu_p2g.py --target scatter backend=cutile_v3 sim.n_particles=4096
+pixi run python profile_nsight.py -cn nsight_profile nsight.target=scatter \
+    nsight.analyze.metric_preset=full nsight.analyze.derive_metric=full \
+    'nsight.sweep.kernels=[cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v3]'
+pixi run python postprocessing/nsight_plots.py <run_dir>/nsight_results.json -o nsight_figs/
 ```
 
 For interactive Nsight Compute, launch `simulate.py` directly with the Pixi env

@@ -16,6 +16,12 @@ nsight:
     filename: nsight_plot.png
   analyze:
     runs: 1
-    replay_mode: range
+    # kernel replay (not range): the custom-backend scatter is a single kernel,
+    # and NCU's .peak_sustained roofline ceilings are unsupported in range replay.
+    replay_mode: kernel
     metric_preset: time
     derive_metric: throughput
+    # A single-kernel scatter target -> sum is identity; kept for multi-launch
+    # targets. (Peak/clock metrics in the roofline preset are device constants and
+    # must not be summed, so only profile single-kernel targets with that preset.)
+    combine_kernel_metrics: sum

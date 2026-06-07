@@ -2,22 +2,40 @@
 
 from __future__ import annotations
 
+# ruff: noqa: E402 -- XLA_FLAGS must be set before importing jax (via mpm_jax).
+
 import importlib
 import itertools
 import json
 import logging
 import os
-import shlex
-import sys
-import sysconfig
+import re
 from collections.abc import Mapping
-from contextlib import contextmanager
 from copy import deepcopy
 from pathlib import Path
 
 import hydra
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, ListConfig, OmegaConf
+
+# NCU's range capture cannot profile cuGraphLaunch, so disable XLA command
+# buffers (CUDA graphs) before jax initializes (it does so during the mpm_jax
+# imports below). XLA reads XLA_FLAGS at backend init; the modified env is also
+# inherited by the NCU child process that re-runs this module.
+_xla_flags = os.environ.get("XLA_FLAGS", "")
+os.environ["XLA_FLAGS"] = (
+    re.sub(
+        r"--xla_gpu_enable_command_buffer=\S*",
+        "--xla_gpu_enable_command_buffer=",
+        _xla_flags,
+    )
+    if "--xla_gpu_enable_command_buffer" in _xla_flags
+    else f"{_xla_flags} --xla_gpu_enable_command_buffer=".strip()
+)
+# JAX pre-allocates ~75% of GPU memory by default, which collides with NCU's own
+# device memory while profiling (CUDA_ERROR_OUT_OF_MEMORY). On-demand allocation
+# keeps the footprint small -- the single-substep targets need little memory.
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 
 import mpm_jax.p2g.backends as backend_configs
 from mpm_jax.profiling import block_until_ready, build_profile_target
@@ -43,48 +61,124 @@ _SPEED_OF_LIGHT_METRICS = [
     "sm__throughput.avg.pct_of_peak_sustained_elapsed",
     "gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed",
     "dram__throughput.avg.pct_of_peak_sustained_elapsed",
+    "lts__throughput.avg.pct_of_peak_sustained_elapsed",
+    "l1tex__throughput.avg.pct_of_peak_sustained_elapsed",
+]
+# Hierarchical single-precision (fp32) roofline. Achieved FLOP counts + per-level
+# traffic + the PEAK ceiling rollups NCU derives from the running chip (so the
+# L1/L2/HBM + compute ceilings are architecture-correct on A100/H100/GH200 with
+# no datasheet hardcoding). Mirrors NCU's
+# SpeedOfLight_HierarchicalSingleRooflineChart section: per-level bytes use the
+# same counter for the achieved point and the peak ceiling (L1 = lsu_writeback
+# cycles x 128 B; L2 = lts2xbar cycles x 32 B; HBM = dram bytes), peak rate =
+# <counter>.peak_sustained x <level clock>.per_second. Derived in _roofline_metric.
+_ROOFLINE_METRICS = [
+    "gpu__time_duration.sum",
+    "smsp__sass_thread_inst_executed_op_fadd_pred_on.sum",
+    "smsp__sass_thread_inst_executed_op_fmul_pred_on.sum",
+    "smsp__sass_thread_inst_executed_op_ffma_pred_on.sum",
+    "sm__sass_thread_inst_executed_op_ffma_pred_on.sum.peak_sustained",
+    "sm__cycles_elapsed.avg.per_second",
+    "dram__bytes.sum",
+    "dram__bytes.sum.peak_sustained",
+    "dram__cycles_elapsed.avg.per_second",
+    "lts__lts2xbar_cycles_active.sum",
+    "lts__lts2xbar_cycles_active.sum.peak_sustained",
+    "lts__cycles_elapsed.avg.per_second",
+    "l1tex__lsu_writeback_active_mem_lg.sum",
+    "l1tex__lsu_writeback_active_mem_lg.sum.peak_sustained",
+    "l1tex__cycles_elapsed.avg.per_second",
+]
+# P2G scatter writes through the atomic/reduction path; fire-and-forget atomicAdd
+# lowers to hardware RED (op_red), so collect op_red + op_atom + op_st and sum
+# (cuTile's atomic_store_add may land on op_st). Per-particle normalization in
+# _diagnostic_metric. lg_throttle (global) vs mio_throttle (shared) is the
+# on-chip-reduction contention fingerprint.
+_ATOMIC_METRICS = [
+    "gpu__time_duration.sum",
+    "l1tex__t_requests_pipe_lsu_mem_global_op_red.sum",
+    "l1tex__t_requests_pipe_lsu_mem_global_op_atom.sum",
+    "l1tex__t_requests_pipe_lsu_mem_global_op_st.sum",
+    "l1tex__t_sectors_pipe_lsu_mem_global_op_red.sum",
+    "l1tex__t_sectors_pipe_lsu_mem_global_op_atom.sum",
+    "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum",
+    "l1tex__average_t_sectors_per_request_pipe_lsu_mem_global_op_red.ratio",
+    "lts__t_sectors_op_red.sum",
+    "lts__t_sectors_op_red.sum.pct_of_peak_sustained_elapsed",
+    "lts__d_atomic_input_cycles_active.sum.pct_of_peak_sustained_elapsed",
+    "smsp__average_warps_issue_stalled_lg_throttle_per_issue_active.ratio",
+    "smsp__average_warps_issue_stalled_mio_throttle_per_issue_active.ratio",
 ]
 _MEMORY_LOCALITY_METRICS = [
     "gpu__time_duration.sum",
-    "dram__bytes.sum",
     "dram__bytes_read.sum",
     "dram__bytes_write.sum",
-    "l1tex__t_requests_pipe_lsu_mem_global_op_ld.sum",
-    "l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum",
-    "l1tex__t_requests_pipe_lsu_mem_global_op_st.sum",
-    "l1tex__t_sectors_pipe_lsu_mem_global_op_st.sum",
+    "lts__t_sector_hit_rate.pct",
+    "lts__t_sectors_op_read.sum",
+    "lts__t_sectors_op_write.sum",
+    "l1tex__average_t_sectors_per_request_pipe_lsu_mem_global_op_red.ratio",
+    "l1tex__average_t_sectors_per_request_pipe_lsu_mem_global_op_ld.ratio",
+    "l1tex__t_sector_hit_rate.pct",
 ]
-_ATOMIC_METRICS = [
-    "gpu__time_duration.sum",
-    "l1tex__t_requests_pipe_lsu_mem_global_op_atom.sum",
-    "l1tex__t_sectors_pipe_lsu_mem_global_op_atom.sum",
-    "l1tex__t_requests_pipe_lsu_mem_global_op_red.sum",
-    "l1tex__t_sectors_pipe_lsu_mem_global_op_red.sum",
-]
+# Occupancy + its binding limiter (smallest launch__occupancy_limit_*) +
+# context. These launch__* metrics collect at runtime though they are absent
+# from `ncu --query-metrics`. sm__maximum_warps_avg_per_active_cycle == 64 on sm_80.
 _OCCUPANCY_METRICS = [
     "gpu__time_duration.sum",
     "sm__warps_active.avg.pct_of_peak_sustained_active",
-    "smsp__warps_eligible.avg.per_cycle_active",
-    "smsp__issue_active.avg.pct_of_peak_sustained_active",
+    "sm__maximum_warps_avg_per_active_cycle",
+    "launch__registers_per_thread",
+    "launch__shared_mem_per_block_static",
+    "launch__occupancy_limit_registers",
+    "launch__occupancy_limit_shared_mem",
+    "launch__occupancy_limit_warps",
+    "launch__occupancy_limit_blocks",
+]
+# Warp-issue-stall breakdown for a stacked bar: the per_issue_active.ratio family
+# shares a denominator so the reasons sum to total resident-stalled warps/issue.
+_STALL_REASONS = [
+    "long_scoreboard",
+    "lg_throttle",
+    "short_scoreboard",
+    "mio_throttle",
+    "barrier",
+    "math_pipe_throttle",
+    "wait",
+    "not_selected",
 ]
 _SCHEDULER_METRICS = [
     "gpu__time_duration.sum",
-    "smsp__warps_issue_stalled_barrier.avg.pct_of_peak_sustained_elapsed",
-    "smsp__warps_issue_stalled_lg_throttle.avg.pct_of_peak_sustained_elapsed",
-    "smsp__warps_issue_stalled_long_scoreboard.avg.pct_of_peak_sustained_elapsed",
-    "smsp__warps_issue_stalled_math_pipe_throttle.avg.pct_of_peak_sustained_elapsed",
-    "smsp__warps_issue_stalled_mio_throttle.avg.pct_of_peak_sustained_elapsed",
-    "smsp__warps_issue_stalled_not_selected.avg.pct_of_peak_sustained_elapsed",
-    "smsp__warps_issue_stalled_short_scoreboard.avg.pct_of_peak_sustained_elapsed",
-    "smsp__warps_issue_stalled_wait.avg.pct_of_peak_sustained_elapsed",
+    "smsp__issue_active.avg.pct_of_peak_sustained_active",
+    *[
+        f"smsp__average_warps_issue_stalled_{reason}_per_issue_active.ratio"
+        for reason in _STALL_REASONS
+    ],
 ]
+def _dedupe(seq):
+    return list(dict.fromkeys(seq))
+
+
+# Everything in one NCU pass-set: roofline + SOL + atomics + locality + occupancy
+# + scheduler, so a single sweep yields every column the analysis plots need.
+_FULL_METRICS = _dedupe(
+    [
+        *_ROOFLINE_METRICS,
+        *_SPEED_OF_LIGHT_METRICS,
+        *_ATOMIC_METRICS,
+        *_MEMORY_LOCALITY_METRICS,
+        *_OCCUPANCY_METRICS,
+        *_SCHEDULER_METRICS,
+    ]
+)
 _METRIC_PRESETS = {
     "time": ["gpu__time_duration.sum"],
     "speed_of_light": _SPEED_OF_LIGHT_METRICS,
     "sol": _SPEED_OF_LIGHT_METRICS,
-    # These Nsight Compute metric names were checked against NCU 2025.2.1.
-    # Use `ncu --query-metrics --query-metrics-mode all` when moving GPUs or
-    # Nsight versions, especially for scheduler and L1TEX/LTS submetrics.
+    "roofline": _ROOFLINE_METRICS,
+    "full": _FULL_METRICS,
+    # Nsight Compute metric names validated on A100 (sm_80) / NCU 2026.2.
+    # Re-check with `ncu --query-metrics` when moving GPUs or Nsight versions,
+    # especially the scheduler/L1TEX/LTS submetrics and launch__* occupancy.
     "memory_locality": _MEMORY_LOCALITY_METRICS,
     "atomics": _ATOMIC_METRICS,
     "atomic": _ATOMIC_METRICS,
@@ -389,6 +483,31 @@ def _diagnostic_metric(metrics: list[str]):
             if requests not in (None, 0.0) and sectors is not None:
                 out[f"global_{op}_sectors_per_request"] = sectors / requests
 
+        # Apples-to-apples scatter-write aggregate over the three global write-op
+        # classes: fire-and-forget atomicAdd -> op_red, cuTile store-add -> op_st.
+        scatter_req = sum(
+            _optional_value_for_metric(
+                metric_values,
+                metrics,
+                f"l1tex__t_requests_pipe_lsu_mem_global_op_{op}.sum",
+            )
+            or 0.0
+            for op in ("red", "atom", "st")
+        )
+        scatter_sec = sum(
+            _optional_value_for_metric(
+                metric_values,
+                metrics,
+                f"l1tex__t_sectors_pipe_lsu_mem_global_op_{op}.sum",
+            )
+            or 0.0
+            for op in ("red", "atom", "st")
+        )
+        if scatter_req:
+            out["global_scatter_requests_per_particle"] = scatter_req / n_particles
+            out["global_scatter_sectors_per_particle"] = scatter_sec / n_particles
+            out["global_scatter_sectors_per_request"] = scatter_sec / scatter_req
+
         atom_requests = _optional_value_for_metric(
             metric_values, metrics, "l1tex__t_requests_pipe_lsu_mem_global_op_atom.sum"
         )
@@ -426,19 +545,78 @@ def _diagnostic_metric(metrics: list[str]):
                 "smsp__issue_active.avg.pct_of_peak_sustained_active",
                 "issue_active_pct",
             ),
+            ("lts__throughput.avg.pct_of_peak_sustained_elapsed", "sol_l2_pct"),
+            ("l1tex__throughput.avg.pct_of_peak_sustained_elapsed", "sol_l1_pct"),
+            ("lts__t_sector_hit_rate.pct", "l2_hit_rate_pct"),
+            ("l1tex__t_sector_hit_rate.pct", "l1_hit_rate_pct"),
+            (
+                "lts__t_sectors_op_red.sum.pct_of_peak_sustained_elapsed",
+                "l2_red_throughput_pct",
+            ),
+            (
+                "lts__d_atomic_input_cycles_active.sum.pct_of_peak_sustained_elapsed",
+                "l2_atomic_unit_pct",
+            ),
+            (
+                "l1tex__average_t_sectors_per_request_pipe_lsu_mem_global_op_red.ratio",
+                "scatter_sectors_per_request",
+            ),
+            (
+                "l1tex__average_t_sectors_per_request_pipe_lsu_mem_global_op_ld.ratio",
+                "load_sectors_per_request",
+            ),
+            ("launch__registers_per_thread", "regs_per_thread"),
+            ("launch__shared_mem_per_block_static", "smem_bytes_per_block"),
         ]:
             value = _optional_value_for_metric(metric_values, metrics, metric)
             if value is not None:
                 out[column] = value
 
+        # Occupancy limiter = the smallest launch__occupancy_limit_* (warps/SM);
+        # theoretical occupancy = that / the HW max warps (64 on sm_80).
+        max_warps = (
+            _optional_value_for_metric(
+                metric_values, metrics, "sm__maximum_warps_avg_per_active_cycle"
+            )
+            or 64.0
+        )
+        occ_limits = {
+            name: _optional_value_for_metric(
+                metric_values, metrics, f"launch__occupancy_limit_{name}"
+            )
+            for name in ("registers", "shared_mem", "warps", "blocks")
+        }
+        present = {k: v for k, v in occ_limits.items() if v is not None}
+        if present and max_warps:
+            binder = min(present, key=present.get)
+            out["theoretical_occ_pct"] = 100.0 * present[binder] / max_warps
+            out["occ_limiter_code"] = {
+                "registers": 0,
+                "shared_mem": 1,
+                "warps": 2,
+                "blocks": 3,
+            }[binder]
+
+        # Warp-issue-stall breakdown. New per_issue_active.ratio family (stackable;
+        # reasons sum to stallr_total) plus the legacy pct family for back-compat.
+        stallr_total = 0.0
         for metric in metrics:
-            prefix = "smsp__warps_issue_stalled_"
-            suffix = ".avg.pct_of_peak_sustained_elapsed"
-            if metric.startswith(prefix) and metric.endswith(suffix):
-                stall_name = metric.removeprefix(prefix).removesuffix(suffix)
-                value = _optional_value_for_metric(metric_values, metrics, metric)
-                if value is not None:
-                    out[f"stall_{stall_name}_pct"] = value
+            new_prefix = "smsp__average_warps_issue_stalled_"
+            new_suffix = "_per_issue_active.ratio"
+            old_prefix = "smsp__warps_issue_stalled_"
+            old_suffix = ".avg.pct_of_peak_sustained_elapsed"
+            value = _optional_value_for_metric(metric_values, metrics, metric)
+            if value is None:
+                continue
+            if metric.startswith(new_prefix) and metric.endswith(new_suffix):
+                reason = metric[len(new_prefix) : -len(new_suffix)]
+                out[f"stallr_{reason}"] = value
+                stallr_total += value
+            elif metric.startswith(old_prefix) and metric.endswith(old_suffix):
+                reason = metric.removeprefix(old_prefix).removesuffix(old_suffix)
+                out[f"stall_{reason}_pct"] = value
+        if stallr_total:
+            out["stallr_total"] = stallr_total
 
         sol_values = [
             out[key]
@@ -450,6 +628,86 @@ def _diagnostic_metric(metrics: list[str]):
         return out
 
     return derive_diagnostics
+
+
+def _roofline_metric(metrics: list[str]):
+    """Hierarchical fp32 roofline: achieved (GFLOP/s, per-level AI) + the per-chip
+    peak ceilings NCU derives, so the result carries everything the roofline plot
+    needs without any datasheet constants."""
+
+    def derive_roofline(*args):
+        metric_values = args[: len(metrics)]
+
+        def g(name):
+            return _optional_value_for_metric(metric_values, metrics, name)
+
+        out = {}
+        fadd = g("smsp__sass_thread_inst_executed_op_fadd_pred_on.sum") or 0.0
+        fmul = g("smsp__sass_thread_inst_executed_op_fmul_pred_on.sum") or 0.0
+        ffma = g("smsp__sass_thread_inst_executed_op_ffma_pred_on.sum") or 0.0
+        flops = fadd + fmul + 2.0 * ffma
+        out["fp32_flops"] = flops
+
+        time_ns = g("gpu__time_duration.sum")
+        if time_ns:
+            out["gflops_per_s"] = flops / (time_ns * 1e-9) / 1e9
+
+        # Achieved bytes per memory level (same counters NCU's roofline uses:
+        # L1 lsu-writeback cycles x 128 B, L2 lts2xbar cycles x 32 B, HBM dram).
+        l1_active = g("l1tex__lsu_writeback_active_mem_lg.sum")
+        l2_active = g("lts__lts2xbar_cycles_active.sum")
+        bytes_by_level = {
+            "l1": l1_active * 128.0 if l1_active is not None else None,
+            "l2": l2_active * 32.0 if l2_active is not None else None,
+            "hbm": g("dram__bytes.sum"),
+        }
+        for level, nbytes in bytes_by_level.items():
+            if nbytes:
+                out[f"bytes_{level}"] = nbytes
+                out[f"ai_{level}_flop_per_byte"] = flops / nbytes
+
+        # Peak ceilings from NCU's per-chip .peak_sustained rollups (units/cycle)
+        # x the level clock (.per_second). Architecture-correct, no hardcoding.
+        ffma_peak = g("sm__sass_thread_inst_executed_op_ffma_pred_on.sum.peak_sustained")
+        sm_hz = g("sm__cycles_elapsed.avg.per_second")
+        if ffma_peak is not None and sm_hz is not None:
+            out["peak_compute_gflops"] = ffma_peak * 2.0 * sm_hz / 1e9
+        for level, peak_name, clock_name, width in (
+            (
+                "l1",
+                "l1tex__lsu_writeback_active_mem_lg.sum.peak_sustained",
+                "l1tex__cycles_elapsed.avg.per_second",
+                128.0,
+            ),
+            (
+                "l2",
+                "lts__lts2xbar_cycles_active.sum.peak_sustained",
+                "lts__cycles_elapsed.avg.per_second",
+                32.0,
+            ),
+            ("hbm", "dram__bytes.sum.peak_sustained", "dram__cycles_elapsed.avg.per_second", 1.0),
+        ):
+            peak = g(peak_name)
+            clock = g(clock_name)
+            if peak is not None and clock is not None:
+                out[f"peak_{level}_gbps"] = peak * width * clock / 1e9
+        return out
+
+    return derive_roofline
+
+
+def _full_metric(metrics: list[str]):
+    """Roofline + per-particle/atomics/occupancy/scheduler diagnostics together."""
+    roofline = _roofline_metric(metrics)
+    diagnostics = _diagnostic_metric(metrics)
+
+    def derive_full(*args):
+        out = {}
+        out.update(roofline(*args))
+        out.update(diagnostics(*args))
+        return out
+
+    return derive_full
 
 
 def _derive_metric(name, metrics: list[str]):
@@ -478,6 +736,21 @@ def _derive_metric(name, metrics: list[str]):
                 + ", ".join(missing)
             )
         return _speed_of_light_metric(metrics)
+    if name == "roofline":
+        missing = [m for m in _ROOFLINE_METRICS if m not in metrics]
+        if missing:
+            raise RuntimeError(
+                "derive_metric='roofline' requires these nsight.analyze.metrics: "
+                + ", ".join(missing)
+            )
+        return _roofline_metric(metrics)
+    if name == "full":
+        if "gpu__time_duration.sum" not in metrics:
+            raise RuntimeError(
+                "derive_metric='full' requires nsight.analyze.metrics with "
+                "gpu__time_duration.sum (use metric_preset=full)."
+            )
+        return _full_metric(metrics)
     if name in {
         "diagnostics",
         "p2g_diagnostics",
@@ -658,65 +931,12 @@ def _run_nsight_profile(profiled_func):
         raise
 
 
-def _prepare_nsight_child_python(run_dir: Path):
-    """Run NCU's target Python without site `.pth` hooks."""
-    if os.environ.get("NSPY_NCU_PROFILE"):
-        return
-
-    original_python = sys.executable
-    wrapper = run_dir / "nsight_python_no_site.sh"
-    wrapper.write_text(
-        f'#!/usr/bin/env bash\nexec {shlex.quote(original_python)} -S "$@"\n'
-    )
-    wrapper.chmod(0o755)
-
-    paths = []
-    for path in [str(Path(__file__).resolve().parent), *sys.path]:
-        if not path:
-            continue
-        resolved = str(Path(path).resolve())
-        if resolved not in paths and Path(resolved).exists():
-            paths.append(resolved)
-
-    existing = os.environ.get("PYTHONPATH")
-    if existing:
-        for path in existing.split(os.pathsep):
-            if path and path not in paths:
-                paths.append(path)
-
-    os.environ["PYTHONPATH"] = os.pathsep.join(paths)
-    sys.executable = str(wrapper)
-
-
-@contextmanager
-def _disable_editable_pth_for_nsight():
-    """Temporarily hide the scikit-build editable hook from NCU target startup."""
-    if os.environ.get("NSPY_NCU_PROFILE"):
-        yield
-        return
-
-    purelib = Path(sysconfig.get_path("purelib"))
-    pth = purelib / "_mpm_cudajax_editable.pth"
-    disabled = purelib / f"_mpm_cudajax_editable.pth.nsight-disabled-{os.getpid()}"
-
-    moved = False
-    try:
-        if pth.exists():
-            pth.rename(disabled)
-            moved = True
-        yield
-    finally:
-        if moved and disabled.exists():
-            disabled.rename(pth)
-
-
 @hydra.main(version_base=None, config_path="conf", config_name="nsight_profile")
 def main(cfg: DictConfig):
     nsight = _require_nsight()
     backend_choice = _backend_choice_from_cfg(cfg)
 
     run_dir = Path(HydraConfig.get().runtime.output_dir).resolve()
-    _prepare_nsight_child_python(run_dir)
     analyze_kwargs = _nsight_analyze_kwargs(cfg, run_dir, backend_choice)
     plot_enabled = bool(cfg.nsight.get("plot", {}).get("enabled", False))
     plot_kwargs = _nsight_plot_kwargs(cfg, run_dir) if plot_enabled else None
@@ -741,8 +961,7 @@ def main(cfg: DictConfig):
     if unexpected:
         keys = ", ".join(sorted(unexpected))
         raise RuntimeError(f"Unknown nsight config keys: {keys}.")
-    with _disable_editable_pth_for_nsight():
-        results = _run_nsight_profile(profiled_variant)
+    results = _run_nsight_profile(profiled_variant)
     _write_results(
         results, run_dir, write_json=bool(cfg.nsight.get("write_json", True))
     )
