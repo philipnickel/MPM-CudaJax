@@ -256,7 +256,7 @@ pixi run sim    # smoke-test
 - Nsight sweeps are serial Hydra multiruns selected with `nsight_sweep=*`.
   Per-job appends to `results.parquet` are the intended aggregation path;
   `NsightPlotCallback` requires that file and does not reconstruct it.
-- There is no project-level `XLA_FLAGS` command-buffer override in the default Pixi env. JAX uses the pinned `jaxlib` defaults; XProf tracing uses `jax.profiler.ProfileOptions`, including CUPTI graph tracing, in that same default environment.
+- There is no project-level `XLA_FLAGS` command-buffer override in the default Pixi env. For XProf trace capture only, `simulate.py` sets `--xla_gpu_enable_command_buffer=` before importing JAX so kernels and named scopes remain visible inside the compiled frame. Override with `profile.disable_command_buffers=false` when you explicitly want CUDA graphs during tracing.
 - Lint with ruff (config in `ruff.toml`); `I` is allowed as a variable name (identity matrix), and `tests/*` skips E402/F401.
 
 ## Don't

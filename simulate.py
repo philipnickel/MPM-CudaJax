@@ -4,7 +4,45 @@ import logging
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
+
+# Trace collection disables CUDA graphs so kernels and named scopes stay visible
+# in XProf instead of being hidden under command-buffer launches. XLA reads
+# XLA_FLAGS when the JAX backend initializes, so this must run before importing
+# jax below; Hydra config is not available yet, hence the small argv sniff.
+# ruff: noqa: E402
+def _config_name_from_argv(argv):
+    config_name = "config"
+    for i, arg in enumerate(argv):
+        if arg in {"-cn", "--config-name"} and i + 1 < len(argv):
+            config_name = argv[i + 1]
+        elif arg.startswith(("-cn=", "--config-name=")):
+            config_name = arg.split("=", 1)[1]
+    return config_name
+
+
+def _disable_command_buffers_for_trace(argv):
+    lowered = [str(arg).lower() for arg in argv]
+    if any("profile.disable_command_buffers=false" in arg for arg in lowered):
+        return False
+
+    config_name = _config_name_from_argv(argv)
+    profile_enabled = any("profile.enabled=true" in arg for arg in lowered)
+    if not (config_name.startswith("trace") or profile_enabled):
+        return False
+
+    flags = os.environ.get("XLA_FLAGS", "")
+    replacement = "--xla_gpu_enable_command_buffer="
+    if "--xla_gpu_enable_command_buffer" in flags:
+        flags = re.sub(r"--xla_gpu_enable_command_buffer=\S*", replacement, flags)
+    else:
+        flags = f"{flags} {replacement}".strip()
+    os.environ["XLA_FLAGS"] = flags
+    return True
+
+
+_disable_command_buffers_for_trace(sys.argv)
 
 import hydra
 import jax
@@ -130,6 +168,7 @@ def main(cfg: DictConfig):
         opts_cfg = OmegaConf.to_container(profile_cfg.get("options", {}), resolve=True)
         for key, value in (opts_cfg or {}).items():
             setattr(options, key, value)
+        logger.info("Trace collection XLA_FLAGS=%r", os.environ.get("XLA_FLAGS", ""))
         logger.info("Profiling enabled; writing XProf trace to %s", trace_dir)
         with jax.profiler.trace(trace_dir, profiler_options=options):
             frames, elapsed = run_measured_solve()

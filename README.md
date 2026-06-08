@@ -303,9 +303,9 @@ Or enable profiling on any run with `profile.enabled=true`. The capture includes
 CUDA streams, HLO graph/op stats, and memory; warmup (JIT compilation) runs
 outside the trace, and each frame is a `StepTraceAnnotation` step. Traces land in
 `traces/<label>/` (one run per backend, `label` defaults to the backend name) so
-the viewer lists them side by side. If JAX/XLA emits CUDA graphs,
-`gpu_enable_cupti_activity_graph_trace` (on by default) traces kernels *inside*
-those graphs.
+the viewer lists them side by side. Trace runs disable XLA command buffers before
+JAX initializes so XProf can show kernels and named scopes inside the compiled
+frame; opt out with `profile.disable_command_buffers=false`.
 
 **Viewing a remote run via SSH tunnel:**
 
@@ -334,8 +334,8 @@ pixi run python simulate.py sim.n_particles=100000 backend=cuda_v3 render.enable
 Runtime environment variables live in `pyproject.toml`: CUDA/JAX activation,
 single-host multi-device NCCL tuning, and the persistent compile-cache settings
 are in the default `gpu` feature. XProf trace collection uses
-`jax.profiler.ProfileOptions`, including CUPTI graph tracing, with that same
-default environment.
+`jax.profiler.ProfileOptions`, and `simulate.py` adds the trace-only
+`XLA_FLAGS` command-buffer override before importing JAX.
 
 ## Tests
 
