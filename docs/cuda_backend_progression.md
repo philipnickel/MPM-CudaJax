@@ -14,15 +14,6 @@ the full solver step.
   and issue direct global `atomicAdd` updates for grid momentum and mass.
 - Purpose: baseline for particle-owned scatter with unsorted particles.
 
-### `cuda_v2`: Home-Sorted Warp-Coalesced Atomics
-
-- `prepare`: `home_cell_order`.
-- `scatter`: one CUDA thread per particle, compute the 27-node stencil, use
-  warp-level matching/reduction for lanes targeting the same grid node, and have
-  one elected lane issue the global atomic update.
-- Purpose: isolate the benefit of home-cell ordering plus warp aggregation while
-  keeping particle-owned global atomics.
-
 ### `cuda_v3`: Home-Cell Local Reduction
 
 - `prepare`: `home_cell_order`.

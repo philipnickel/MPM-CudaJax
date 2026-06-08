@@ -11,32 +11,6 @@ def _cutile_module():
     return cutile
 
 
-@store(name="cutile_v1", group="backend", num_grids="${sim.num_grids}")
-class CutileV1Backend(P2GBackend):
-    """cuTile direct 27-stencil scatter with global atomics."""
-
-    name = "cutile_v1"
-
-    def __init__(self, num_grids=None):
-        cutile = _cutile_module()
-        self.kernel = cutile.cutile_p2g_v1
-        super().__init__(num_grids=num_grids)
-
-    def scatter(self, params, prepared):
-        return self.kernel(
-            prepared.x,
-            prepared.v,
-            prepared.C,
-            prepared.stress,
-            params.num_grids,
-            params.dt,
-            params.vol,
-            params.p_mass,
-            params.inv_dx,
-            params.dx,
-        )
-
-
 @store(name="cutile_v3", group="backend", num_grids="${sim.num_grids}")
 class CutileV3Backend(P2GBackend):
     """cuTile one-home-cell scatter with a locally reduced 27-node stencil."""

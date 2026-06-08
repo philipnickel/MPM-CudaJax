@@ -5,16 +5,13 @@ import pytest
 
 from mpm_jax.p2g.backends import (
     CudaV1Backend,
-    CudaV2Backend,
     CudaV3Backend,
     CudaV4Backend,
-    CutileV1Backend,
     CutileV3Backend,
     JaxBackend,
 )
 from mpm_jax.p2g.cuda.p2g_cuda import (
     CudaV1P2G,
-    CudaV2P2G,
     CudaV3P2G,
     CudaV4P2G,
 )
@@ -54,7 +51,6 @@ def _require_cutile():
 def test_cuda_p2g_variants_match_jax_scan():
     require_cuda_kernels(
         CudaV1P2G,
-        CudaV2P2G,
         CudaV3P2G,
         CudaV4P2G,
     )
@@ -63,7 +59,6 @@ def test_cuda_p2g_variants_match_jax_scan():
 
     for backend in (
         CudaV1Backend(params.num_grids),
-        CudaV2Backend(params.num_grids),
         CudaV3Backend(params.num_grids),
         CudaV4Backend(params.num_grids),
     ):
@@ -74,9 +69,6 @@ def test_cuda_p2g_variants_match_jax_scan():
 def test_cuda_progression_prepare_contract(monkeypatch):
     monkeypatch.setattr(
         "mpm_jax.p2g.cuda.p2g_cuda.CudaV1P2G.register", lambda self: True
-    )
-    monkeypatch.setattr(
-        "mpm_jax.p2g.cuda.p2g_cuda.CudaV2P2G.register", lambda self: True
     )
     monkeypatch.setattr(
         "mpm_jax.p2g.cuda.p2g_cuda.CudaV3P2G.register", lambda self: True
@@ -94,7 +86,6 @@ def test_cuda_progression_prepare_contract(monkeypatch):
     assert v1_prepared.bucket_bounds is None
 
     for backend in (
-        CudaV2Backend(params.num_grids),
         CudaV3Backend(params.num_grids),
         CudaV4Backend(params.num_grids),
     ):
@@ -103,7 +94,7 @@ def test_cuda_progression_prepare_contract(monkeypatch):
 
 def test_cuda_progression_optional_benchmark_scale_matches_v1():
     n, num_grids = benchmark_validation_size()
-    require_cuda_kernels(CudaV1P2G, CudaV2P2G, CudaV3P2G, CudaV4P2G)
+    require_cuda_kernels(CudaV1P2G, CudaV3P2G, CudaV4P2G)
 
     params, state, stress = make_p2g_inputs(
         n=n, num_grids=num_grids, seed=987, size=(0.8, 0.8, 0.8)
@@ -114,7 +105,6 @@ def test_cuda_progression_optional_benchmark_scale_matches_v1():
     timings = [("cuda_v1", ref_timing)]
 
     for backend in (
-        CudaV2Backend(params.num_grids),
         CudaV3Backend(params.num_grids),
         CudaV4Backend(params.num_grids),
     ):
@@ -144,7 +134,6 @@ def test_cutile_p2g_matches_jax_scan():
     ref = p2g_output(JaxBackend(), params, state, stress)
 
     for backend in (
-        CutileV1Backend(params.num_grids),
         CutileV3Backend(params.num_grids),
     ):
         grid = p2g_output(backend, params, state, stress)

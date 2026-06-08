@@ -45,10 +45,8 @@ def test_backend_choices_come_from_registered_hydra_configs():
     assert set(backend_configs.backend_choices()) == {
         "jax",
         "cuda_v1",
-        "cuda_v2",
         "cuda_v3",
         "cuda_v4",
-        "cutile_v1",
         "cutile_v3",
     }
 
@@ -177,7 +175,7 @@ def test_render_nsight_figures_from_parquet(tmp_path):
     import pandas as pd
 
     rows = []
-    for backend, boost in [("cuda_v1", 1.0), ("cuda_v2", 1.4)]:
+    for backend, boost in [("cuda_v1", 1.0), ("cuda_v3", 1.4)]:
         for n_particles, mult in [(1000, 1.0), (2000, 1.3)]:
             rows.append(
                 {

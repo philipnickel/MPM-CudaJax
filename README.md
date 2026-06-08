@@ -100,7 +100,6 @@ pixi run python simulate.py sim=benchmark render.enabled=false
 # Pick a kernel
 pixi run python simulate.py backend=jax                              # JAX/XLA baseline (scan P2G + MLS G2P)
 pixi run python simulate.py backend=cuda_v1 material=jelly
-pixi run python simulate.py backend=cuda_v2 material=jelly            # home-sorted warp-coalesced atomics
 pixi run python simulate.py backend=cuda_v3 material=jelly            # home-cell shared-tile reduction
 pixi run python simulate.py backend=cuda_v4 material=jelly            # home-cell structured warp reduction
 pixi run python simulate.py backend=cutile_v3 material=jelly sim=benchmark render.enabled=false  # cuTile (tiled model)
@@ -115,10 +114,8 @@ pixi run python simulate.py sim.n_particles=1000000 sim.num_grids=64
 |---|---|
 | `jax` | The JAX/XLA baseline: `lax.scan` over the 27 offsets for **both** P2G and G2P, unified MLS-MPM G2P (APIC affine `C` reused as ∇v), closed-form StVK stress. Every other kernel reuses this G2P, so only the P2G varies. |
 | `cuda_v1` | CUDA P2G (one thread/particle, global `atomicAdd`) + JAX baseline G2P. |
-| `cuda_v2` | Home-cell sorted CUDA P2G with one thread/particle and warp-coalesced global atomics + JAX baseline G2P. |
 | `cuda_v3` | Home-cell sorted CUDA P2G with one block per home cell, shared 27-node local reduction, and final global flush + JAX baseline G2P. |
 | `cuda_v4` | Home-cell sorted CUDA P2G with structured warp reduction over the 27-node local tile before the final global flush + JAX baseline G2P. |
-| `cutile_v1` | cuTile direct 27-stencil scatter comparison backend. |
 | `cutile_v3` | cuTile home-cell tiled P2G with local 27-node reduction + JAX baseline G2P. Requires `cuda-tile`. |
 
 ## Architecture
@@ -182,7 +179,7 @@ Runs with `render.enabled=true` also place `render.gif` in that same run
 directory and record its path as `render_path`.
 
 For an ad-hoc sweep:
-`pixi run python simulate.py -m sim.n_particles=5000,50000,200000 sim.num_grids=32,64,96 backend=jax,cuda_v2 render.enabled=false`.
+`pixi run python simulate.py -m sim.n_particles=5000,50000,200000 sim.num_grids=32,64,96 backend=jax,cuda_v1 render.enabled=false`.
 
 To load all sweep rows for one GPU:
 
@@ -287,7 +284,7 @@ The `sim=benchmark` preset is one frame with 50 substeps, so the measured solve
 range is the jitted frame containing the configured substep loop. In the API
 Stream, use **Run to Next Range Start** to land on the `cutile_v3_solve` NVTX
 range, then **Run to Next Kernel** and **Profile Kernel**. The cuTile kernel names show up as
-`cutile_v1_p2g_kernel...` or `cutile_v3_p2g_kernel...`; earlier kernels in the
+`cutile_v3_p2g_kernel...`; earlier kernels in the
 same solve range are JAX/XLA helper kernels.
 The GUI environment editor can stay empty; Pixi owns the runtime environment.
 
@@ -326,7 +323,7 @@ Hydra config groups in `conf/`:
 |---|---|---|
 | `material` | `jelly` (default) | Constitutive model |
 | `sim` | `default` | n_particles, num_grids, dt, BCs, ... |
-| `backend` | `jax` (default), `cuda_v1`, `cuda_v2`, `cuda_v3`, `cuda_v4`, `cutile_v1`, `cutile_v3` | P2G implementation (G2P shared) |
+| `backend` | `jax` (default), `cuda_v1`, `cuda_v3`, `cuda_v4`, `cutile_v3` | P2G implementation (G2P shared) |
 
 Top-level fields: `tag`, `render`. All overridable from CLI:
 
@@ -350,7 +347,7 @@ Run focused GPU checks:
 
 ```bash
 pixi run pytest tests/test_cuda_ffi_loader.py tests/test_p2g_scan.py \
-    tests/test_cuda_v2_matches_v1.py -q
+    tests/test_cuda_p2g_equivalence.py -q
 ```
 
 
@@ -384,7 +381,7 @@ MPM-CudaJax/
             └── cuda/
                 ├── p2g_cuda.py  # FFI capsule registration + kernel objects
                 └── kernels/     # p2g_ffi_module.cc plus p2g_v1.cu,
-                                 # p2g_v2.cu, p2g_v3.cu, p2g_v4.cu
+                                 # p2g_v3.cu, p2g_v4.cu
 ```
 
 ## References

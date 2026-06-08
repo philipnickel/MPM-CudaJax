@@ -18,7 +18,6 @@ _REGISTERED: set[str] = set()
 _REGISTER_LOCK = Lock()
 
 _P2G_TARGET = "p2g_v1_cuda"
-_P2G_V2_TARGET = "p2g_v2_cuda"
 _P2G_V3_TARGET = "p2g_v3_cuda"
 _P2G_V4_TARGET = "p2g_v4_cuda"
 
@@ -68,13 +67,6 @@ class CudaV1P2G(CudaP2GKernel):
 
     target = _P2G_TARGET
     capsule_factory = "p2g_v1"
-
-
-class CudaV2P2G(CudaP2GKernel):
-    """Home-sorted one-thread-per-particle scatter with warp-coalesced atomics."""
-
-    target = _P2G_V2_TARGET
-    capsule_factory = "p2g_v2"
 
 
 class CudaV3P2G(CudaP2GKernel):
@@ -197,7 +189,6 @@ __all__ = [
     # FFI kernels
     "CudaP2GKernel",
     "CudaV1P2G",
-    "CudaV2P2G",
     "CudaV3P2G",
     "CudaV4P2G",
 ]

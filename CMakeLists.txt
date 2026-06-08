@@ -55,7 +55,6 @@ set(KERNEL_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/mpm_jax/p2g/cuda/kernels)
 set(P2G_FFI_SOURCES
     ${KERNEL_SRC_DIR}/p2g_ffi_module.cc
     ${KERNEL_SRC_DIR}/p2g_v1.cu
-    ${KERNEL_SRC_DIR}/p2g_v2.cu
     ${KERNEL_SRC_DIR}/p2g_v3.cu
     ${KERNEL_SRC_DIR}/p2g_v4.cu
 )

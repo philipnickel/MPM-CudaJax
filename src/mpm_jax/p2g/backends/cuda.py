@@ -6,7 +6,6 @@ from mpm_jax.p2g.backends.common import P2GBackend, home_cell_order
 from mpm_jax.p2g.cuda.p2g_cuda import (
     CudaP2GKernel,
     CudaV1P2G,
-    CudaV2P2G,
     CudaV3P2G,
     CudaV4P2G,
 )
@@ -40,15 +39,6 @@ class CudaP2GBackend(P2GBackend):
 class CudaV1Backend(CudaP2GBackend):
     name = "cuda_v1"
     kernel_type = CudaV1P2G
-
-
-@store(name="cuda_v2", group="backend", num_grids="${sim.num_grids}")
-class CudaV2Backend(CudaP2GBackend):
-    name = "cuda_v2"
-    kernel_type = CudaV2P2G
-
-    def prepare(self, params, state, stress):
-        return home_cell_order(params, state, stress)
 
 
 @store(name="cuda_v3", group="backend", num_grids="${sim.num_grids}")

@@ -24,7 +24,6 @@ def test_register_missing_extension_raises(monkeypatch):
     ("kernel_type", "factory"),
     [
         (p2g_cuda.CudaV1P2G, "p2g_v1"),
-        (p2g_cuda.CudaV2P2G, "p2g_v2"),
         (p2g_cuda.CudaV3P2G, "p2g_v3"),
         (p2g_cuda.CudaV4P2G, "p2g_v4"),
     ],
@@ -32,7 +31,6 @@ def test_register_missing_extension_raises(monkeypatch):
 def test_kernel_class_imports_expected_capsule(monkeypatch, kernel_type, factory):
     capsules = {
         "p2g_v1": object(),
-        "p2g_v2": object(),
         "p2g_v3": object(),
         "p2g_v4": object(),
     }

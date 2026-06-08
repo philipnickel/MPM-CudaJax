@@ -13,10 +13,8 @@ CONF_DIR = Path("conf").resolve()
 EXPECTED_BACKENDS = {
     "jax": "mpm_jax.p2g.backends.jax.JaxBackend",
     "cuda_v1": "mpm_jax.p2g.backends.cuda.CudaV1Backend",
-    "cuda_v2": "mpm_jax.p2g.backends.cuda.CudaV2Backend",
     "cuda_v3": "mpm_jax.p2g.backends.cuda.CudaV3Backend",
     "cuda_v4": "mpm_jax.p2g.backends.cuda.CudaV4Backend",
-    "cutile_v1": "mpm_jax.p2g.backends.cutile.CutileV1Backend",
     "cutile_v3": "mpm_jax.p2g.backends.cutile.CutileV3Backend",
 }
 
@@ -33,13 +31,11 @@ def test_backend_config_choices_point_at_expected_targets():
 
 def test_each_backend_config_instantiates_expected_backend_name(monkeypatch):
     monkeypatch.setattr("mpm_jax.p2g.cuda.p2g_cuda.CudaV1P2G.register", lambda self: True)
-    monkeypatch.setattr("mpm_jax.p2g.cuda.p2g_cuda.CudaV2P2G.register", lambda self: True)
     monkeypatch.setattr("mpm_jax.p2g.cuda.p2g_cuda.CudaV3P2G.register", lambda self: True)
     monkeypatch.setattr("mpm_jax.p2g.cuda.p2g_cuda.CudaV4P2G.register", lambda self: True)
     monkeypatch.setattr(
         "mpm_jax.p2g.backends.cutile._cutile_module",
         lambda: SimpleNamespace(
-            cutile_p2g_v1=lambda *args, **kwargs: None,
             cutile_p2g_v3=lambda *args, **kwargs: None,
         ),
     )

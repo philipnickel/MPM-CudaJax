@@ -9,7 +9,7 @@ Quick smoke example:
 
     pixi run python tools/benchmark_p2g_substeps.py \
         sim.n_particles=8192 sim.num_grids=16 sim.steps_per_frame=2 \
-        +timing.backends=[cuda_v1,cuda_v2] +timing.repeats=1
+        +timing.backends=[cuda_v1,cuda_v3] +timing.repeats=1
 """
 
 from __future__ import annotations
@@ -37,10 +37,8 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_BACKENDS = (
     "cuda_v1",
-    "cuda_v2",
     "cuda_v3",
     "cuda_v4",
-    "cutile_v1",
     "cutile_v3",
 )
 DEFAULT_TIMING = {
