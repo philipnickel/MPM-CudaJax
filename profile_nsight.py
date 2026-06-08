@@ -68,7 +68,7 @@ def _slugify(value):
     return slug or "unknown"
 
 
-def _current_gpu_kind():
+def _current_gpu_type():
     try:
         result = subprocess.run(
             [
@@ -82,9 +82,13 @@ def _current_gpu_kind():
             capture_output=True,
             text=True,
         )
-        return _slugify(result.stdout.splitlines()[0])
+        return result.stdout.splitlines()[0].strip() or "unknown"
     except Exception:
         return "unknown"
+
+
+def _current_gpu_kind():
+    return _slugify(_current_gpu_type())
 
 
 OmegaConf.register_new_resolver("gpu_kind", _current_gpu_kind, replace=True)
@@ -266,11 +270,14 @@ def _nsight_analyze_kwargs(cfg: DictConfig, run_dir: Path, profile_config):
 
 
 def _config_metadata(cfg: DictConfig, run_dir: Path, backend_choice: str, target_name: str):
+    gpu_type = _current_gpu_type()
     sim = OmegaConf.to_container(cfg.sim, resolve=True)
     sim_columns = pd.json_normalize({"sim": sim}, sep=".").iloc[0].to_dict()
     metadata = {
         "backend": backend_choice,
         "target": target_name,
+        "gpu_type": gpu_type,
+        "gpu_kind": _slugify(gpu_type),
         "hydra_output_dir": str(run_dir),
         "hydra_config": json.dumps(
             OmegaConf.to_container(cfg, resolve=True), sort_keys=True

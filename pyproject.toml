@@ -120,6 +120,9 @@ JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES = "0"
 # the upper-end scaling points (functional updates hold both current and next
 # state pytrees). 0.95 leaves room for ~150M particles on an 80GB A100.
 XLA_PYTHON_CLIENT_MEM_FRACTION = "0.95"
+# Project-scoped MPS pipe/log dirs for the optional SM-percentage sweep.
+CUDA_MPS_PIPE_DIRECTORY = "$PIXI_PROJECT_ROOT/.mps/pipe"
+CUDA_MPS_LOG_DIRECTORY = "$PIXI_PROJECT_ROOT/.mps/log"
 # JAX GPU performance tips: single-host multi-device NCCL tuning. Single-GPU
 # runs do not use these, and the JAX docs do not recommend them for multi-host.
 NCCL_LL128_BUFFSIZE = "-2"
@@ -145,6 +148,9 @@ sweep = "python simulate.py -cn sweep"
 sweep-particles = "python simulate.py -cn sweep sweep=particle_count"
 sweep-weak = "python simulate.py -cn sweep sweep=weak_scaling"
 sweep-density = "python simulate.py -cn sweep sweep=particle_density"
+sweep-sm = "bash run_sm_scaling.sh"
+mps-stop = "pgrep -f 'nvidia-cuda-mps-control -d' >/dev/null && echo quit | nvidia-cuda-mps-control || echo '(daemon not running)'"
+mps-status = "pgrep -f 'nvidia-cuda-mps-control -d' >/dev/null && echo get_server_list | nvidia-cuda-mps-control || echo '(daemon not running)'"
 plot-sweeps = "python tools/plot_sweeps.py"
 
 # Push the working tree to a remote host (e.g. `pixi run sync lambda`).

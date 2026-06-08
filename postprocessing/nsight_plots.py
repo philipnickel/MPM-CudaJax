@@ -361,6 +361,50 @@ def _set_style(style=None):
     sns.set_theme(style=theme, context=context, **style)
 
 
+def _gpu_label(df, results_path=None):
+    for column in ("gpu_kind", "gpu_type"):
+        if column not in df:
+            continue
+        values = df[column].dropna().astype(str)
+        values = values[values != ""]
+        if not values.empty:
+            return values.iloc[0]
+    if results_path is not None:
+        parts = Path(results_path).parts
+        if "nsight" in parts:
+            index = parts.index("nsight") + 1
+            if index < len(parts):
+                return parts[index]
+    return "gpu"
+
+
+def _set_figure_title(fig, ax, title, gpu_label=None, *, subtitle=None):
+    fig.suptitle(title, fontweight="bold")
+    subtitle_lines = [line for line in (gpu_label, subtitle) if line]
+    if subtitle_lines:
+        ax.set_title(
+            "\n".join(str(line) for line in subtitle_lines),
+            style="italic",
+            color="0.35",
+            fontsize=9,
+        )
+
+
+def _set_multi_panel_title(fig, title, gpu_label=None):
+    fig.suptitle(title, fontweight="bold")
+    if gpu_label:
+        fig.text(
+            0.5,
+            0.91,
+            str(gpu_label),
+            ha="center",
+            va="top",
+            style="italic",
+            color="0.35",
+            fontsize=9,
+        )
+
+
 def _resolve_scale_axis(df, scale_axis="auto"):
     if scale_axis not in (None, "auto"):
         labels = {
@@ -504,7 +548,7 @@ def _annotate_roofs(ax, ai, peak_c, roof_specs):
         )
 
 
-def plot_roofline(table, out):
+def plot_roofline(table, out, gpu_label=None):
     import numpy as np
 
     backends = _ordered(table)
@@ -579,15 +623,17 @@ def plot_roofline(table, out):
     ax.set_yscale("log")
     ax.set_xlabel("Arithmetic intensity [FLOP/byte]")
     ax.set_ylabel("Performance [GFLOP/s]")
-    ax.set_title("Hierarchical fp32 roofline — P2G scatter")
+    _set_figure_title(fig, ax, "Hierarchical fp32 roofline — P2G scatter", gpu_label)
     ax.grid(True, which="both", alpha=0.2)
-    fig.tight_layout()
+    fig.tight_layout(rect=[0, 0, 1, 0.92])
     _annotate_roofs(ax, ai, peak_c, roof_specs)
     fig.savefig(out, dpi=140)
     plt.close(fig)
 
 
-def plot_roofline_scaling(df, out, scale_col="n_particles", scale_label=None):
+def plot_roofline_scaling(
+    df, out, scale_col="n_particles", scale_label=None, gpu_label=None
+):
     """fp32 roofline trajectory plot.
 
     Every backend is a seaborn trajectory in HBM arithmetic intensity; roof
@@ -684,21 +730,24 @@ def plot_roofline_scaling(df, out, scale_col="n_particles", scale_label=None):
     ax.set_yscale("log")
     ax.set_xlabel("Arithmetic intensity [FLOP/byte]")
     ax.set_ylabel("Performance [GFLOP/s]")
-    ax.set_title(
-        f"Hierarchical fp32 roofline trajectory — P2G scatter\n"
-        f"arrow = increasing {scale_label} ({fmt(lo)} → {fmt(hi)})",
-        fontsize=11,
+    _set_figure_title(
+        fig,
+        ax,
+        "Hierarchical fp32 roofline trajectory — P2G scatter",
+        gpu_label,
+        subtitle=f"arrow = increasing {scale_label} ({fmt(lo)} → {fmt(hi)})",
     )
     ax.grid(True, which="both", alpha=0.2)
-    fig.tight_layout()
+    fig.tight_layout(rect=[0, 0, 1, 0.9])
     _annotate_roofs(ax, ai, peak_c, roof_specs)
     fig.savefig(out, dpi=140)
     plt.close(fig)
 
 
-def plot_atomics(table, out):
+def plot_atomics(table, out, gpu_label=None):
     backends = _ordered(table)
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
+    _set_multi_panel_title(fig, "Atomic-scatter analysis — P2G scatter", gpu_label)
     scatter = pd.DataFrame(
         {
             "backend": backends,
@@ -744,12 +793,12 @@ def plot_atomics(table, out):
     axes[1].set_ylabel("warps stalled / issue-active cycle")
     axes[1].set_title("Contention fingerprint: global -> shared", fontsize=10)
     axes[1].legend(fontsize=7)
-    fig.tight_layout()
+    fig.tight_layout(rect=[0, 0, 1, 0.86])
     fig.savefig(out, dpi=140)
     plt.close(fig)
 
 
-def plot_occupancy(table, out):
+def plot_occupancy(table, out, gpu_label=None):
     backends = _ordered(table)
     fig, ax = plt.subplots(figsize=(7.5, 4.2))
     occ = pd.DataFrame(
@@ -792,9 +841,15 @@ def plot_occupancy(table, out):
     ax.tick_params(axis="x", rotation=30)
     ax.set_ylabel("occupancy (% of 64 warps/SM)")
     ax.set_ylim(0, 105)
-    ax.set_title("Occupancy (achieved vs theoretical; limiter annotated)", fontsize=10)
+    _set_figure_title(
+        fig,
+        ax,
+        "Occupancy — P2G scatter",
+        gpu_label,
+        subtitle="achieved vs theoretical; limiter annotated",
+    )
     ax.legend(fontsize=7)
-    fig.tight_layout()
+    fig.tight_layout(rect=[0, 0, 1, 0.88])
     fig.savefig(out, dpi=140)
     plt.close(fig)
 
@@ -811,7 +866,9 @@ def render_nsight_figures(
     _set_style(style)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    df = load_dataframe(Path(results_path))
+    results_path = Path(results_path)
+    df = load_dataframe(results_path)
+    gpu_label = _gpu_label(df, results_path)
     table = table_from_dataframe(df)
     requested = set(plots or DEFAULT_PLOTS)
     written = []
@@ -819,28 +876,28 @@ def render_nsight_figures(
     if "roofline" in requested:
         if _has_roofline_data(df):
             path = out_dir / "roofline.png"
-            plot_roofline(table, path)
+            plot_roofline(table, path, gpu_label=gpu_label)
             written.append(path)
         else:
             logger.warning("Skipping roofline.png; required roofline metrics are absent.")
     if "atomics" in requested:
         if _has_atomics_data(df):
             path = out_dir / "atomics.png"
-            plot_atomics(table, path)
+            plot_atomics(table, path, gpu_label=gpu_label)
             written.append(path)
         else:
             logger.warning("Skipping atomics.png; required atomics metrics are absent.")
     if "occupancy" in requested:
         if _has_occupancy_data(df):
             path = out_dir / "occupancy.png"
-            plot_occupancy(table, path)
+            plot_occupancy(table, path, gpu_label=gpu_label)
             written.append(path)
         else:
             logger.warning("Skipping occupancy.png; required occupancy metrics are absent.")
     if "scheduler" in requested:
         if _has_scheduler_data(df):
             path = out_dir / "scheduler.png"
-            plot_scheduler(table, path)
+            plot_scheduler(table, path, gpu_label=gpu_label)
             written.append(path)
         else:
             logger.warning("Skipping scheduler.png; required scheduler metrics are absent.")
@@ -848,7 +905,9 @@ def render_nsight_figures(
         scale_col, scale_label = _resolve_scale_axis(df, scale_axis)
         if scale_col is not None and _has_roofline_data(df):
             path = out_dir / "roofline_scaling.png"
-            plot_roofline_scaling(df, path, scale_col, scale_label)
+            plot_roofline_scaling(
+                df, path, scale_col, scale_label, gpu_label=gpu_label
+            )
             written.append(path)
         elif scale_col is not None:
             logger.warning(
@@ -857,7 +916,7 @@ def render_nsight_figures(
     return written
 
 
-def plot_scheduler(table, out):
+def plot_scheduler(table, out, gpu_label=None):
     import numpy as np
 
     backends = _ordered(table)
@@ -876,9 +935,11 @@ def plot_scheduler(table, out):
     ax.set_yticklabels(backends, fontsize=8)
     ax.invert_yaxis()
     ax.set_xlabel("warps stalled / issue-active cycle (sum of reasons)")
-    ax.set_title("Warp-issue-stall breakdown", fontsize=10)
+    _set_figure_title(
+        fig, ax, "Warp-issue-stall breakdown — P2G scatter", gpu_label
+    )
     ax.legend(fontsize=6, ncol=4, loc="lower right")
-    fig.tight_layout()
+    fig.tight_layout(rect=[0, 0, 1, 0.9])
     fig.savefig(out, dpi=140)
     plt.close(fig)
 

@@ -210,11 +210,13 @@ pixi run python simulate.py -cn sweep sweep=weak_scaling    # constant active PP
 pixi run sweep                                     # task alias (default = particle_count)
 pixi run sweep-particles                           # task alias
 pixi run sweep-weak                                # task alias
+pixi run sweep-sm                                  # CUDA MPS active-thread % sweep
 pixi run plot-sweeps                               # write figures/sweeps/<gpu-kind>/
 
 # Sweep definitions (sweep group choices in conf/sweep/)
 # - particle_count: G=128, N=1M..10M, 5 substeps        (constant grid, N up)
 # - weak_scaling:   active PPC ~= 9.31, G derived from N, 5 substeps  (constant PPC, N up)
+# - sm_scaling:     G=128, N=10M, shell loop over CUDA MPS active-thread %
 
 # Tests
 pixi run test
@@ -236,7 +238,7 @@ pixi run sim    # smoke-test
 
 ## Conventions
 
-- **Sweeps must use Hydra multirun**, never a bash `for` loop. Either use the pre-baked sweep entry point (`-cn sweep sweep=<axis>`, axes live in `conf/sweep/`) or pass axes inline: `pixi run python simulate.py -m sim.n_particles=5000,50000,200000 backend=jax,cuda_v1,cuda_v2 render.enabled=false`. Add new scale axes under `conf/sweep/<name>.yaml`. Hydra puts each combination in `outputs/sweeps/<gpu-kind>/runs/<date>/<run>/`, and `simulate.py` appends a dataframe-ready row to `outputs/sweeps/<gpu-kind>/results.csv`.
+- **Sweeps must use Hydra multirun**. Either use the pre-baked sweep entry point (`-cn sweep sweep=<axis>`, axes live in `conf/sweep/`) or pass axes inline: `pixi run python simulate.py -m sim.n_particles=5000,50000,200000 backend=jax,cuda_v1,cuda_v2 render.enabled=false`. Add new scale axes under `conf/sweep/<name>.yaml`. Hydra puts each combination in `outputs/sweeps/<gpu-kind>/runs/<date>/<run>/`, and `simulate.py` appends a dataframe-ready row to `outputs/sweeps/<gpu-kind>/results.csv`. The exception is the CUDA MPS SM-percentage axis: `run_sm_scaling.sh` uses a shell loop only to restart normal `simulate.py -cn sweep sweep=sm_scaling` processes with a different `CUDA_MPS_ACTIVE_THREAD_PERCENTAGE`; the sweep config uses a static output dir so results aggregate together.
 - **Default to short benchmarks.** Steady-state ms/step is stable after the first frame (warmup), so `sim.num_frames=5` (50 substeps) gives reliable timings.
 - Single-particle functions vectorise via `jax.vmap` (e.g. `constitutive.stvk_elasticity_jacobi` is `jax.vmap` of a single-3×3 stress). Don't write batched code by hand — vmap is the contract.
 - **Adding a new CUDA P2G kernel** (e.g. `cuda_vX`) — only the P2G varies; G2P stays the JAX baseline:

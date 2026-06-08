@@ -160,12 +160,20 @@ off) and selects a scaling axis from the `conf/sweep/` config group:
 pixi run python simulate.py -cn sweep                       # particle_count (default)
 pixi run python simulate.py -cn sweep sweep=particle_count  # constant grid, particle count up
 pixi run python simulate.py -cn sweep sweep=weak_scaling    # constant active PPC, particle count up
+pixi run sweep-sm                                           # CUDA MPS active-thread % sweep
 ```
 
 The benchmark preset uses one frame with 5 substeps. `particle_count` uses
 fixed `G=128` and the configured particle-count axis. `weak_scaling` keeps
 active-cell PPC near the benchmark density (`particles_per_active_cell ~=
 9.31`) while scaling both `G` and `N`.
+
+The MPS SM-scaling sweep is the special process-level axis: CUDA reads
+`CUDA_MPS_ACTIVE_THREAD_PERCENTAGE` when JAX creates its CUDA context, so
+`run_sm_scaling.sh` loops over percentages and launches normal
+`simulate.py -cn sweep sweep=sm_scaling` multiruns. That config writes to the
+static `outputs/sweeps/<gpu-kind>/sm_scaling` directory so each percentage
+aggregates into one plot set.
 
 Each combination gets its own
 `outputs/sweeps/<gpu-kind>/runs/<date>/<time>/<job>_<override-dirname>/` subdir

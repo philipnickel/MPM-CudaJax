@@ -4,6 +4,7 @@ from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 
 import profile_nsight
+from postprocessing import nsight_plots
 from postprocessing.callbacks import NsightPlotCallback
 from postprocessing.nsight_plots import render_nsight_figures
 import mpm_jax.p2g.backends as backend_configs
@@ -278,8 +279,19 @@ def test_render_nsight_figures_skips_missing_metric_plots(tmp_path):
     assert not list((tmp_path / "figures").glob("*.png"))
 
 
-def test_results_dataframe_adds_config_metadata(tmp_path):
+def test_nsight_gpu_label_falls_back_to_output_path():
+    import pandas as pd
+
+    path = Path("outputs/nsight/nvidia_test_gpu/sweeps/2026-06-08/results.parquet")
+
+    assert nsight_plots._gpu_label(pd.DataFrame({"backend": ["cuda_v1"]}), path) == (
+        "nvidia_test_gpu"
+    )
+
+
+def test_results_dataframe_adds_config_metadata(tmp_path, monkeypatch):
     cfg = _compose_config("nsight_profile")
+    monkeypatch.setattr(profile_nsight, "_current_gpu_type", lambda: "NVIDIA Test GPU")
 
     class Results:
         def to_dataframe(self):
@@ -296,6 +308,8 @@ def test_results_dataframe_adds_config_metadata(tmp_path):
 
     assert df.loc[0, "backend"] == "jax"
     assert df.loc[0, "target"] == "p2g"
+    assert df.loc[0, "gpu_type"] == "NVIDIA Test GPU"
+    assert df.loc[0, "gpu_kind"] == "nvidia_test_gpu"
     assert df.loc[0, "sim.n_particles"] == 8
     assert "hydra_config" in df
 

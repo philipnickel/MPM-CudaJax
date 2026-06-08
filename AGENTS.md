@@ -65,6 +65,7 @@ pixi run python profile_nsight.py -cn nsight_profile nsight_sweep=weak
 pixi run python simulate.py -cn sweep_particle_count
 pixi run python simulate.py -cn sweep_particle_density
 pixi run python simulate.py -cn sweep_weak_scaling
+pixi run sweep-sm
 pixi run plot-sweeps
 ```
 

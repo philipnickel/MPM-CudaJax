@@ -13,6 +13,10 @@ solver:
 
 tag: jelly
 
+# Recorded CUDA MPS active-thread percentage for SM-scaling sweeps. The actual
+# clamp is set by the shell loop before each normal simulate.py process starts.
+mps_thread_percent: null
+
 # JAX/XProf profiling. Writes a TensorBoard trace to traces/<label>/ (CUDA
 # streams + graphs, named-scope phases, HLO graph/op stats, memory). Warmup runs
 # outside the trace so one-time JIT compilation is not captured. View with

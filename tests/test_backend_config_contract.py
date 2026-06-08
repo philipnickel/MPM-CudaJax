@@ -66,7 +66,7 @@ def _sweep_axis(cfg, key: str) -> list[str]:
 
 def test_scaling_sweeps_use_backend_choices():
     valid_choices = set(backends.backend_choices())
-    for choice in ["particle_count", "weak_scaling", "particle_density"]:
+    for choice in ["particle_count", "weak_scaling", "particle_density", "sm_scaling"]:
         cfg = _compose_sweep(choice)
         backend_choices = _sweep_axis(cfg, "backend")
         assert backend_choices
@@ -116,6 +116,7 @@ def test_sweep_axis_tags_match_plot_sweeps_specs():
         "particle_count": "sweep_particle_count",
         "weak_scaling": "sweep_weak_scaling",
         "particle_density": "sweep_particle_density",
+        "sm_scaling": "sweep_sm_scaling",
     }
     for choice, expected_tag in expected.items():
         cfg = _compose_sweep(choice)
@@ -130,6 +131,18 @@ def test_particle_density_sweep_uses_fixed_n_and_varying_grid():
     assert all(g % 4 == 0 for g in gs)
     assert gs[0] >= 64 and gs[-1] <= 196
     assert int(cfg.sim.n_particles) == 20_000_000
+
+
+def test_sm_scaling_sweep_uses_static_mps_aggregation_dir():
+    cfg = _compose_sweep("sm_scaling")
+    raw = OmegaConf.to_container(cfg, resolve=False)
+
+    assert raw["hydra"]["sweep"]["dir"] == "outputs/sweeps/${gpu_kind:}/sm_scaling"
+    assert int(cfg.sim.n_particles) == 10_000_000
+    assert int(cfg.sim.num_grids) == 128
+    assert cfg.plots.time.x == "mps_thread_percent"
+    assert cfg.plots.throughput.x == "mps_thread_percent"
+    assert cfg.plots.speedup.x == "mps_thread_percent"
 
 
 def test_default_hydra_output_dirs_are_aggregation_friendly():

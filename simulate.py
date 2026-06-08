@@ -180,6 +180,7 @@ def main(cfg: DictConfig):
     metrics["tag"] = cfg.get("tag")
     metrics["render_enabled"] = render_enabled
     metrics["gpu_kind"] = _slugify(metrics["gpu_type"])
+    metrics["mps_thread_percent"] = cfg.get("mps_thread_percent")
     hydra_cfg = HydraConfig.get()
     metrics["output_dir"] = run_dir
     metrics["hydra_job_num"] = OmegaConf.select(hydra_cfg, "job.num")

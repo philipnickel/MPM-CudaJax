@@ -1,0 +1,42 @@
+# @package _global_
+# Strong scaling vs CUDA MPS active-thread percentage. Each percentage must be
+# a fresh Python process because CUDA reads CUDA_MPS_ACTIVE_THREAD_PERCENTAGE
+# when the context is created. run_sm_scaling.sh loops over percentages and runs
+# normal simulate.py multiruns against this static sweep directory.
+defaults:
+    - /plot@plots.time: loglog
+    - /plot@plots.throughput: loglog
+    - /plot@plots.speedup: speedup
+    - _self_
+
+hydra:
+    sweep:
+        dir: outputs/sweeps/${gpu_kind:}/sm_scaling
+        subdir: ${hydra.job.num}_${hydra.job.override_dirname}
+
+sim:
+    n_particles: 10000000
+    num_grids: 128
+
+tag: sweep_sm_scaling
+
+plots:
+    time:
+        x: mps_thread_percent
+        xlabel: "MPS thread %"
+        y: ms_per_step
+        ylabel: ms / substep
+        title: "Time per step (fixed N, G)"
+        filename: ms_per_substep.png
+    throughput:
+        x: mps_thread_percent
+        xlabel: "MPS thread %"
+        y: particles_per_sec
+        ylabel: particles / second
+        title: "Particle Throughput (fixed N, G)"
+        filename: particles_per_sec.png
+    speedup:
+        x: mps_thread_percent
+        xlabel: "MPS thread %"
+        title: "Speedup over Jax Baseline (fixed N, G)"
+        filename: speedup_vs_jax.png
