@@ -1,0 +1,22 @@
+# @package _global_
+# Fixed benchmark point, swept by CUDA MPS active-thread percentage. The MPS
+# percentage is set by run_nsight_sm_scaling.sh before each normal
+# profile_nsight.py process starts; Hydra records mps_thread_percent and writes
+# all percentages into this static aggregate directory.
+hydra:
+    mode: MULTIRUN
+    sweeper:
+        params:
+            backend: cuda_v1,cuda_v2,cuda_v3,CuTile
+    sweep:
+        dir: outputs/nsight/${gpu_kind:}/sm_scaling
+        subdir: ${hydra.job.num}_${hydra.job.override_dirname}
+    callbacks:
+        nsight_plot:
+            scale_axis: mps_thread_percent
+
+sim:
+    n_particles: 10000000
+    num_grids: 128
+
+tag: nsight_sm_scaling

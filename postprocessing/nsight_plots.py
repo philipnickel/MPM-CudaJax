@@ -410,11 +410,18 @@ def _resolve_scale_axis(df, scale_axis="auto"):
         labels = {
             "n_particles": "particle count",
             "num_grids": "grid size G",
+            "mps_thread_percent": "CUDA MPS active-thread %",
         }
         return scale_axis, labels.get(scale_axis, scale_axis)
 
     n_var = "n_particles" in df.columns and df["n_particles"].nunique() > 1
     g_var = "num_grids" in df.columns and df["num_grids"].nunique() > 1
+    mps_var = (
+        "mps_thread_percent" in df.columns
+        and df["mps_thread_percent"].nunique() > 1
+    )
+    if mps_var:
+        return "mps_thread_percent", "CUDA MPS active-thread %"
     if n_var and g_var:
         return "num_grids", "grid size G (weak scaling, const ppc)"
     if n_var:
@@ -492,7 +499,9 @@ def table_from_dataframe(df):
 
     For a scaling sweep (several rows per backend) the single-point figures use
     the largest-N row per backend as the representative operating point."""
-    sort_keys = [c for c in ("n_particles", "num_grids") if c in df.columns]
+    sort_keys = [
+        c for c in ("n_particles", "num_grids", "mps_thread_percent") if c in df.columns
+    ]
     if sort_keys:
         df = df.copy()  # defragment the wide frame before the groupby
         df = df.sort_values(sort_keys).groupby("backend", as_index=False).last()

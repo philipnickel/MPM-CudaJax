@@ -247,6 +247,10 @@ Compute is saved in the same per-job Hydra output dir. At multirun end,
 `conf/nsight_plot/standard.yaml` installs `NsightPlotCallback`, which loads that
 authoritative `results.parquet` with pandas and renders the figures:
 
+The MPS SM-percentage Nsight sweep is intentionally static at
+`outputs/nsight/<gpu>/sm_scaling/`, because each percentage is a separate Python
+process and all percentages need to append into one trajectory aggregate.
+
 ```bash
 # Single operating point (all custom P2G kernels at the benchmark resolution):
 pixi run python profile_nsight.py -cn nsight_profile nsight_sweep=single_point
@@ -269,6 +273,10 @@ pixi run python profile_nsight.py -cn nsight_profile nsight_sweep=particle_count
 
 # Weak scaling: fixed particles-per-cell (~9.31), grid + N grow together.
 pixi run python profile_nsight.py -cn nsight_profile nsight_sweep=weak
+
+# MPS SM-percentage scaling: fixed benchmark point, fresh process per percent.
+# For a roofline-only collection, add: nsight_metrics=roofline nsight_plot=roofline_only
+pixi run nsight-sweep-sm
 
 # Manual re-render from an existing aggregate:
 pixi run python postprocessing/nsight_plots.py \

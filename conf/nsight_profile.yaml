@@ -1,10 +1,10 @@
 defaults:
     - config
     - nsight_metrics: full
-    - optional nsight_sweep: null
-    - nsight_plot: standard
-    - override /sim: benchmark
     - _self_
+    - nsight_plot: standard
+    - optional nsight_sweep: null
+    - override /sim: benchmark
 
 render:
     enabled: false

@@ -134,6 +134,10 @@ def test_nsight_sweep_configs_exclude_jax_and_use_direct_axes():
             "fixed": ("sim.num_grids", "${ppc_grid:${sim.n_particles}}"),
             "tag": "nsight_weak",
         },
+        "sm_scaling": {
+            "fixed": ("sim.num_grids", 128),
+            "tag": "nsight_sm_scaling",
+        },
     }
     for sweep, expected in expectations.items():
         cfg = _compose_config_with_hydra(
@@ -146,9 +150,12 @@ def test_nsight_sweep_configs_exclude_jax_and_use_direct_axes():
         assert set(backend_choices).issubset(valid_backends)
         assert "scale" not in params
         if expected:
-            sweep_values = params[expected["sweep_axis"]].split(",")
-            assert sweep_values
-            assert [int(v) for v in sweep_values] == sorted(int(v) for v in sweep_values)
+            if "sweep_axis" in expected:
+                sweep_values = params[expected["sweep_axis"]].split(",")
+                assert sweep_values
+                assert [int(v) for v in sweep_values] == sorted(
+                    int(v) for v in sweep_values
+                )
             key, value = expected["fixed"]
             if isinstance(value, str):
                 raw_cfg = OmegaConf.to_container(cfg, resolve=False)
@@ -159,6 +166,14 @@ def test_nsight_sweep_configs_exclude_jax_and_use_direct_axes():
             else:
                 assert OmegaConf.select(cfg, key) == value
             assert cfg.tag == expected["tag"]
+            if sweep == "sm_scaling":
+                hydra_cfg = OmegaConf.to_container(cfg, resolve=False)["hydra"]
+                assert hydra_cfg["sweep"]["dir"] == (
+                    "outputs/nsight/${gpu_kind:}/sm_scaling"
+                )
+                assert cfg.hydra.callbacks.nsight_plot.scale_axis == (
+                    "mps_thread_percent"
+                )
 
 
 def test_nsight_plot_callback_requires_aggregate_parquet(tmp_path):
@@ -205,6 +220,47 @@ def test_render_nsight_figures_from_parquet(tmp_path):
         style={"theme": "whitegrid", "context": "paper"},
     )
 
+    assert [p.name for p in written] == ["roofline_scaling.png"]
+    assert written[0].exists()
+
+
+def test_render_nsight_mps_roofline_trajectory_from_parquet(tmp_path):
+    import pandas as pd
+
+    rows = []
+    for backend, boost in [("cuda_v1", 1.0), ("cuda_v2", 1.4)]:
+        for mps_thread_percent, mult in [(25, 0.7), (100, 1.0)]:
+            rows.append(
+                {
+                    "backend": backend,
+                    "target": "p2g",
+                    "mps_thread_percent": mps_thread_percent,
+                    "n_particles": 1000,
+                    "num_grids": 16,
+                    "gflops_per_s": 500.0 * boost * mult,
+                    "peak_compute_gflops": 19000.0,
+                    "peak_l1_gbps": 120000.0,
+                    "peak_l2_gbps": 8000.0,
+                    "peak_hbm_gbps": 1600.0,
+                    "ai_l1_flop_per_byte": 2.0 * mult,
+                    "ai_l2_flop_per_byte": 1.0 * mult,
+                    "ai_hbm_flop_per_byte": 0.25 * mult,
+                }
+            )
+    path = tmp_path / "results.parquet"
+    pd.DataFrame(rows).to_parquet(path, index=False)
+
+    written = render_nsight_figures(
+        path,
+        tmp_path / "figures",
+        plots=["roofline_scaling"],
+        style={"theme": "whitegrid", "context": "paper"},
+    )
+
+    assert nsight_plots._resolve_scale_axis(nsight_plots.load_dataframe(path)) == (
+        "mps_thread_percent",
+        "CUDA MPS active-thread %",
+    )
     assert [p.name for p in written] == ["roofline_scaling.png"]
     assert written[0].exists()
 
@@ -290,7 +346,7 @@ def test_nsight_gpu_label_falls_back_to_output_path():
 
 
 def test_results_dataframe_adds_config_metadata(tmp_path, monkeypatch):
-    cfg = _compose_config("nsight_profile")
+    cfg = _compose_config("nsight_profile", overrides=["mps_thread_percent=50"])
     monkeypatch.setattr(profile_nsight, "_current_gpu_type", lambda: "NVIDIA Test GPU")
 
     class Results:
@@ -310,6 +366,7 @@ def test_results_dataframe_adds_config_metadata(tmp_path, monkeypatch):
     assert df.loc[0, "target"] == "p2g"
     assert df.loc[0, "gpu_type"] == "NVIDIA Test GPU"
     assert df.loc[0, "gpu_kind"] == "nvidia_test_gpu"
+    assert df.loc[0, "mps_thread_percent"] == 50
     assert df.loc[0, "sim.n_particles"] == 8
     assert "hydra_config" in df
 

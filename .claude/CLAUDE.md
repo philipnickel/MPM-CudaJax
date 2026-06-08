@@ -186,6 +186,8 @@ pixi run python profile_nsight.py -cn nsight_profile backend=CuTile sim.n_partic
 # ProfileResults.to_dataframe() rows to sweep-level results.parquet; the
 # nsight_plot callback loads that authoritative parquet and renders
 # roofline/atomics/occupancy/scheduler (+ roofline_scaling for scale sweeps).
+# nsight_sweep=sm_scaling is static at outputs/nsight/<gpu>/sm_scaling because
+# each MPS percentage is a fresh process that appends into one trajectory.
 pixi run python profile_nsight.py -cn nsight_profile nsight_sweep=single_point
 
 # Scaling roofline trajectories (adds roofline_scaling.png; axis auto-detected):
@@ -193,8 +195,11 @@ pixi run python profile_nsight.py -cn nsight_profile nsight_sweep=single_point
 #         -> nsight_sweep=particle_count
 #   weak: fixed ppc, grid+N grow together
 #         -> nsight_sweep=weak
+#   mps: fixed benchmark point, fresh process per CUDA MPS active-thread %
+#        -> pixi run nsight-sweep-sm
 pixi run python profile_nsight.py -cn nsight_profile nsight_sweep=particle_count
 pixi run python profile_nsight.py -cn nsight_profile nsight_sweep=weak
+pixi run nsight-sweep-sm
 
 # Interactive NCU GUI: launch through Pixi so runtime env vars are inherited.
 # simulate.py warms once, then marks the measured jitted frame loop with NVTX.

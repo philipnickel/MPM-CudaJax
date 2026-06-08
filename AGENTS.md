@@ -62,6 +62,7 @@ pixi run python simulate.py sim=benchmark backend=CuTile
 pixi run python profile_nsight.py -cn nsight_profile backend=CuTile
 pixi run python profile_nsight.py -cn nsight_profile nsight_sweep=single_point
 pixi run python profile_nsight.py -cn nsight_profile nsight_sweep=weak
+pixi run nsight-sweep-sm
 pixi run python simulate.py -cn sweep_particle_count
 pixi run python simulate.py -cn sweep_particle_density
 pixi run python simulate.py -cn sweep_weak_scaling

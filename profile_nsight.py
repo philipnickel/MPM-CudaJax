@@ -278,6 +278,7 @@ def _config_metadata(cfg: DictConfig, run_dir: Path, backend_choice: str, target
         "target": target_name,
         "gpu_type": gpu_type,
         "gpu_kind": _slugify(gpu_type),
+        "mps_thread_percent": cfg.get("mps_thread_percent"),
         "hydra_output_dir": str(run_dir),
         "hydra_config": json.dumps(
             OmegaConf.to_container(cfg, resolve=True), sort_keys=True
