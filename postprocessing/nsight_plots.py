@@ -624,19 +624,6 @@ def plot_roofline_scaling(df, out, scale_col="n_particles", scale_label=None):
     plt.close(fig)
 
 
-def _bar(ax, backends, values, colors, ylabel, title, ref=None, ref_label=None):
-    xs = range(len(backends))
-    ax.bar(xs, values, color=colors)
-    if ref is not None:
-        ax.axhline(ref, ls="--", color="0.4", lw=0.8)
-        if ref_label:
-            ax.text(0, ref, ref_label, fontsize=7, va="bottom", color="0.3")
-    ax.set_xticks(list(xs))
-    ax.set_xticklabels(backends, rotation=30, ha="right", fontsize=8)
-    ax.set_ylabel(ylabel)
-    ax.set_title(title, fontsize=10)
-
-
 def plot_atomics(table, out):
     backends = _ordered(table)
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))

@@ -39,8 +39,8 @@ def test_each_backend_config_instantiates_expected_backend_name(monkeypatch):
     monkeypatch.setattr(
         "mpm_jax.p2g.backends.cutile._cutile_module",
         lambda: SimpleNamespace(
-            cutile_p2g_v1=lambda *args, **kwargs: None,
-            cutile_p2g_v3=lambda *args, **kwargs: None,
+            cutile_p2g_v1=lambda *_, **__: None,
+            cutile_p2g_v3=lambda *_, **__: None,
         ),
     )
 

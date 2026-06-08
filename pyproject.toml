@@ -38,11 +38,15 @@ cmake.build-type = "Release"
 testpaths = ["tests"]
 
 [tool.vulture]
-paths = ["src", "simulate.py", "profile_nsight.py", "tests"]
+paths = ["src", "simulate.py", "profile_nsight.py", "postprocessing", "tests"]
 ignore_names = [
+    "ScalingPlotCallback",
     "camera_position",
     "host_tracer_level",
+    "loglog_plot",
+    "morton_argsort",
     "python_tracer_level",
+    "speedup_plot",
 ]
 
 [tool.pixi.workspace]
