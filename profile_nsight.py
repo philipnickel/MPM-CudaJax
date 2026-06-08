@@ -23,6 +23,7 @@ from omegaconf import DictConfig, OmegaConf
 
 import mpm_jax.p2g.backends as backend_configs
 import mpm_jax.resolvers  # noqa: F401 - registers ${ppc_grid:N}
+import nsight_metric_sets  # noqa: F401 - registers the nsight_metrics config group
 from mpm_jax.solver import MPMSolver
 
 logger = logging.getLogger(__name__)

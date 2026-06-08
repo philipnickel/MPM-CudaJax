@@ -229,8 +229,10 @@ pixi run python profile_nsight.py -cn nsight_profile \
     backend=CuTile sim.n_particles=4096
 ```
 
-`conf/nsight_metrics/` owns the direct NCU metric presets passed to
-`nsight.analyze.metrics`: `timing`, `roofline`, and `full` (the default). You
+`nsight_metric_sets.py` owns the direct NCU metric presets passed to
+`nsight.analyze.metrics`: `timing`, `roofline`, and `full` (the default),
+registered as the `nsight_metrics` config group (the `full` preset is composed
+from the `roofline` subset, so the roofline counters are never copy-pasted). You
 can still override `nsight.analyze.metrics=[...]` directly for focused runs.
 The `full` preset includes the NCU counters needed by the roofline, atomics,
 occupancy, and scheduler plots.

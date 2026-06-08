@@ -1,4 +1,0 @@
-# @package nsight.analyze
-# Minimal smoke-test metric set.
-metrics:
-  - gpu__time_duration.sum
