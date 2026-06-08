@@ -1,6 +1,4 @@
-// cuda_v2 P2G scatter: same math as v1, but coalesces same-node atomics
-// inside a warp with __match_any_sync and masked shuffles. Morton sorting makes
-// matching lanes common enough for this to matter.
+// cuda_v2 P2G: warp-coalesced same-node atomics.
 
 #include "xla/ffi/api/ffi.h"
 
@@ -20,12 +18,11 @@ __global__ void p2g_v2_kernel(
 ) {
     int pid = blockIdx.x * blockDim.x + threadIdx.x;
 
-    // All lanes must reach the warp intrinsics, so inactive lanes carry a
-    // sentinel key and zero contributions and form a harmless peer group.
+    // Inactive lanes use a sentinel key so all lanes reach the warp intrinsics.
     bool active = (pid < N);
     int lane = threadIdx.x & 31;
 
-    // Zero-init so inactive lanes stay defined through the unguarded base/weight work.
+    // Zero-init keeps inactive lanes defined.
     float px[3] = {0, 0, 0}, pv[3] = {0, 0, 0}, pC[9] = {0}, pS[9] = {0};
     if (active) {
         p2g_load_particle(x, v, C, stress, pid, px, pv, pC, pS);
@@ -54,7 +51,7 @@ __global__ void p2g_v2_kernel(
             mv0 = mv[0]; mv1 = mv[1]; mv2 = mv[2];
         }
 
-        // Coalesce lanes targeting the same grid node.
+        // Coalesce same-node lanes.
         unsigned peers = __match_any_sync(P2G_FULL_MASK, match_key);
 
         mv0 = p2g_warp_reduce_masked(mv0, peers);

@@ -1,9 +1,5 @@
 # @package _global_
-# Fixed benchmark point, swept by CUDA MPS active-thread percentage. The MPS
-# percentage is set by run_nsight_sm_scaling.sh before each normal
-# profile_nsight.py process starts; Hydra records mps_thread_percent and writes
-# all percentages into this static aggregate directory. The fixed operating
-# point lives in conf/scaling/sm.yaml (shared with the timing sweep).
+# Fixed point, swept by CUDA MPS thread %.
 defaults:
     - /scaling: sm
     - _self_

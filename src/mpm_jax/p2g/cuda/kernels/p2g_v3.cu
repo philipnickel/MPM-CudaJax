@@ -1,10 +1,4 @@
-// cuda_v3 P2G scatter: one block per JAX-sorted super-cell. Threads aggregate
-// stencil contributions into a (SC+2)^3 shared-memory tile, then flush it to
-// the global grid. The kernel keeps P2G math local and avoids materialising
-// (N, 27, *) intermediates.
-//
-// Home-cell convention matches home_super_cell_id in sort.py:
-//   base = floor(x * inv_dx - 0.5), home = base + 1.
+// cuda_v3 P2G: one block per super-cell, shared-memory tile.
 
 #include "xla/ffi/api/ffi.h"
 
@@ -12,10 +6,7 @@
 
 namespace ffi = xla::ffi;
 
-// One block handles one super-cell bucket. SC is a template parameter so the
-// tile dimensions stay static; the FFI handler dispatches among the supported
-// instantiations. Boundary stencils that spill outside the shared tile fall
-// back to global atomics.
+// SC template keeps tile dims static; boundary spills use global atomics.
 template <int SC>
 __global__ void p2g_v3_kernel(
     const float* __restrict__ x,
@@ -28,7 +19,7 @@ __global__ void p2g_v3_kernel(
     int G,
     float dt, float vol, float p_mass, float inv_dx, float dx
 ) {
-    constexpr int TILE_DIM = SC + 2;       // 1-node stencil apron each side
+    constexpr int TILE_DIM = SC + 2;       // 1-node apron each side
     constexpr int TILE_SIZE = TILE_DIM * TILE_DIM * TILE_DIM;
     int Gs = G / SC;
     int Gs3 = Gs * Gs * Gs;
@@ -39,10 +30,10 @@ __global__ void p2g_v3_kernel(
     int p_end   = bucket_start[super_id + 1];
     int n_particles = p_end - p_start;
 
-    // Uniform early exit before any barrier; every thread sees the same super_id.
+    // Uniform early exit before any barrier.
     if (n_particles == 0) return;
 
-    // Decompose super_id to match the JAX-side super-cell id.
+    // Decompose super_id to match the JAX side.
     int Si = super_id / (Gs * Gs);
     int Sj = (super_id / Gs) % Gs;
     int Sk = super_id % Gs;
@@ -51,7 +42,7 @@ __global__ void p2g_v3_kernel(
     int base_cj = Sj * SC;
     int base_ck = Sk * SC;
 
-    // Start one node before the super-cell so interior stencils stay tile-local.
+    // Offset one node so interior stencils stay tile-local.
     int tile_i = base_ci - 1;
     int tile_j = base_cj - 1;
     int tile_k = base_ck - 1;
@@ -76,8 +67,7 @@ __global__ void p2g_v3_kernel(
         for (int di = 0; di < 3; di++)
         for (int dj = 0; dj < 3; dj++)
         for (int dk = 0; dk < 3; dk++) {
-            // Per-axis clamp intentionally differs from JAX's flat-index clip
-            // at boundaries.
+            // Per-axis clamp differs from JAX flat-index clip at boundaries.
             int gi = p2g_clip_axis(base[0] + di, G);
             int gj = p2g_clip_axis(base[1] + dj, G);
             int gk = p2g_clip_axis(base[2] + dk, G);
@@ -86,8 +76,7 @@ __global__ void p2g_v3_kernel(
             p2g_node_contribution(di, dj, dk, w, dw, fx, pC, pS, pv,
                                   inv_dx, dx, dt, vol, p_mass, mv, &m_contrib);
 
-            // Use clipped global indices for tile-local lookup, matching the
-            // global fallback path.
+            // Clipped global indices for tile-local lookup.
             int ti = gi - tile_i;
             int tj = gj - tile_j;
             int tk = gk - tile_k;
@@ -108,7 +97,7 @@ __global__ void p2g_v3_kernel(
 
     __syncthreads();
 
-    // Flush the shared tile to global memory.
+    // Flush tile to global memory.
     for (int t = threadIdx.x; t < TILE_SIZE; t += blockDim.x) {
         float smv0 = tile[t * 4 + 0];
         float smv1 = tile[t * 4 + 1];

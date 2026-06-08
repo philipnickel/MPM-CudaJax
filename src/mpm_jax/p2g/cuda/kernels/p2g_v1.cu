@@ -1,6 +1,4 @@
-// cuda_v1 P2G scatter: one thread per particle, direct global atomics.
-// Stress is precomputed by JAX; this kernel only scatters the 27-node stencil
-// and avoids materialising (N, 27, *) intermediates.
+// cuda_v1 P2G: one thread/particle, global atomics.
 
 #include "xla/ffi/api/ffi.h"
 
@@ -29,7 +27,6 @@ __global__ void p2g_v1_kernel(
     p2g_base_fx(px, inv_dx, base, fx);
     p2g_bspline_tables(fx, w, dw);
 
-    // Direct global atomic scatter, no warp or tile aggregation.
     for (int di = 0; di < 3; di++)
     for (int dj = 0; dj < 3; dj++)
     for (int dk = 0; dk < 3; dk++) {

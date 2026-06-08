@@ -1,8 +1,5 @@
 # @package _global_
-# Scaling axis: weak scaling at fixed active-cell PPC (~9.31); the grid is
-# derived from the swept N via the ${ppc_grid:N} resolver. Single source of the
-# swept particle-count list + grid derivation, shared by the timing and NCU
-# wrappers.
+# Axis: weak scaling at fixed PPC; grid derived from N.
 hydra:
     sweeper:
         params:

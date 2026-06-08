@@ -1,6 +1,5 @@
 # @package _global_
-# Constant N=20M, grid resolution up. Swept axis values + fixed N live in
-# conf/scaling/density.yaml (shared with the NCU sweep).
+# Fixed N, grid resolution up.
 defaults:
     - /scaling: density
     - /plot@plots.time: loglog

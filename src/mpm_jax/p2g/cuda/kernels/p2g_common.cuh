@@ -1,5 +1,4 @@
-// Shared inline helpers for CUDA P2G variants. Common math lives here; each
-// kernel keeps its own scatter strategy so the variants remain easy to compare.
+// Shared inline helpers for CUDA P2G variants.
 #pragma once
 
 #include <cstddef>
@@ -25,7 +24,7 @@ inline void p2g_zero_grid(
     cudaStream_t stream
 ) {
     int nodes = p2g_grid_nodes(G);
-    // f32 +0.0 is all-zero bits, so byte memset is exactly correct.
+    // f32 +0.0 is all-zero bits.
     cudaMemsetAsync(grid_mv, 0, static_cast<size_t>(nodes) * 3 * sizeof(float), stream);
     cudaMemsetAsync(grid_m, 0, static_cast<size_t>(nodes) * sizeof(float), stream);
 }
@@ -80,8 +79,7 @@ __device__ __forceinline__ void p2g_load_particle(
     }
 }
 
-// Quadratic B-spline base node + fractional offset for a particle position.
-// The home/base convention must stay matched to home_cell_id in sort.py.
+// Base node + fractional offset; must match home_cell_id in sort.py.
 __device__ __forceinline__ void p2g_base_fx(
     const float px[3], float inv_dx, int base[3], float fx[3]) {
     for (int d = 0; d < 3; d++) {
@@ -103,15 +101,12 @@ __device__ __forceinline__ void p2g_bspline_tables(
     }
 }
 
-// Per-axis clamp; the JAX reference clips the flat index, so the conventions
-// only diverge for out-of-domain stencil nodes.
+// Per-axis clamp.
 __device__ __forceinline__ int p2g_clip_axis(int idx, int G) {
     return max(0, min(idx, G - 1));
 }
 
-// MLS-MPM per-node contribution; identical across CUDA variants.
-//   mv = -dt*vol*(stress @ dweight) + p_mass*weight*(v + C @ dpos)
-//   m  = weight * p_mass
+// MLS-MPM per-node contribution.
 __device__ __forceinline__ void p2g_node_contribution(
     int di, int dj, int dk,
     const float w[3][3], const float dw[3][3], const float fx[3],
@@ -120,8 +115,7 @@ __device__ __forceinline__ void p2g_node_contribution(
     float mv[3], float* m_contrib) {
     float weight = w[0][di] * w[1][dj] * w[2][dk];
 
-    // dweight = inv_dx * gradient of the weight along each axis.
-    // (inv_dx converts the unit-cell weight gradient to physical units.)
+    // weight gradient, scaled to physical units.
     float dweight[3];
     dweight[0] = inv_dx * dw[0][di] * w[1][dj]  * w[2][dk];
     dweight[1] = inv_dx * w[0][di]  * dw[1][dj] * w[2][dk];
@@ -145,8 +139,7 @@ __device__ __forceinline__ void p2g_node_contribution(
     *m_contrib = weight * p_mass;
 }
 
-// Sum val across the lanes in an arbitrary peer mask. Match groups are not
-// lane-aligned, so a generic mask reduction is required rather than a tree shuffle.
+// Sum val across lanes in an arbitrary peer mask.
 __device__ __forceinline__ float p2g_warp_reduce_masked(float val, unsigned mask) {
     float sum = 0.0f;
     for (unsigned remaining = mask; remaining; remaining &= (remaining - 1)) {

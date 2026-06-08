@@ -23,7 +23,7 @@ def stvk_elasticity_jacobi(E=2e6, nu=0.4):
         """StVK first Piola-Kirchhoff stress for one 3x3 deformation gradient."""
         I = jnp.eye(3, dtype=F.dtype)
         E_strain = 0.5 * (F.T @ F - I)
-        # Closed-form det avoids cuSOLVER/SVD and matches the non-inverted regime.
+        # Closed-form det avoids cuSOLVER/SVD.
         J = _det3x3(F)
         return 2.0 * mu * (F @ E_strain) + la * J * (J - 1.0) * I
 

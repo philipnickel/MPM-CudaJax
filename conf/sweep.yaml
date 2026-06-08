@@ -1,10 +1,4 @@
-# Backend kernel sweep entry point. Two scaling axes:
-#
-#   pixi run python simulate.py -cn sweep                       # particle_count (default)
-#   pixi run python simulate.py -cn sweep sweep=particle_count  # constant grid, particle count up
-#   pixi run python simulate.py -cn sweep sweep=weak_scaling    # constant active PPC, particle count up
-#
-# Build CUDA kernels first: pixi install
+# Backend kernel sweep entry point (axes in conf/sweep/)
 defaults:
     - config
     - sweep: particle_count
@@ -20,8 +14,7 @@ hydra:
         scaling_plot:
             _target_: postprocessing.callbacks.ScalingPlotCallback
 
-# Sweeps need only enough substeps to average past warmup; 10 keeps the big-N
-# jobs short. Override on the CLI for longer runs.
+# Enough substeps to average past warmup
 sim:
     steps_per_frame: 10
 

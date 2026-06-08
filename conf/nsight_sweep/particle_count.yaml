@@ -1,9 +1,5 @@
 # @package _global_
-# Fixed G=128, growing particle count (load/throughput sweep). Swept axis values
-# live in conf/scaling/particle_count.yaml (shared with the timing sweep); the
-# fixed grid comes from sim=benchmark.
-# _self_ first keeps the backend sweep axis ahead of the shared sim axis, so
-# multirun job indexing and output dirnames are unchanged.
+# Fixed grid, growing N; _self_-first keeps axis order.
 defaults:
   - _self_
   - /scaling: particle_count

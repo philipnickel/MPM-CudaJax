@@ -39,11 +39,11 @@ nsight = _optional_module("nsight")
 
 # Guard top-level nsight.* config typos.
 _SCRIPT_NSIGHT_KEYS = {"analyze"}
-# Nsight Python targets single custom scatter annotations; use XProf for JAX/XLA.
+# Custom scatter only; JAX uses XProf.
 _NSIGHT_BACKEND_CHOICES = tuple(
     choice for choice in backend_configs.backend_choices() if choice != "jax"
 )
-# These keys are derived from Hydra; metric derivation stays in postprocessing.
+# Derived in postprocessing, not here.
 _UNSUPPORTED_ANALYZE_CONFIG_KEYS = {
     "configs",
     "derive_metric",
@@ -221,7 +221,7 @@ def _nsight_analyze_kwargs(cfg: DictConfig, run_dir: Path, profile_config):
     kwargs.setdefault(
         "output_prefix", str(run_dir / f"nsight_{backend_choice}_p2g_")
     )
-    # One profile config per Hydra job; multirun handles sweeps.
+    # One config per job; multirun sweeps.
     kwargs["configs"] = [profile_config]
     return kwargs
 
@@ -325,7 +325,7 @@ def main(cfg: DictConfig):
         profile_config,
     )
     results = _run_nsight_profile(profiled_variant)
-    # NCU child re-execs can return None for non-matching Hydra jobs.
+    # NCU child re-execs return None for non-matching jobs.
     if results is not None:
         df = _results_dataframe(results, cfg, run_dir, backend_choice, target_name)
         _write_results(df, run_dir)

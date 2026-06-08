@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-# Backend order follows the optimization path.
+# Optimization-path order.
 BACKEND_ORDER = ["cuda_v1", "cuda_v2", "cuda_v3", "CuTile"]
 COLOR = {
     "cuda_v1": "#fdae6b",
@@ -31,7 +31,7 @@ BACKEND_MARKER = {
     "CuTile": "X",
 }
 LIMITER_NAME = {0: "registers", 1: "shared_mem", 2: "warps", 3: "blocks"}
-# Stall reasons grouped by memory, compute, then hidden latency.
+# Stall reasons: memory, compute, latency.
 STALLS = [
     ("long_scoreboard", "#d62728"),
     ("lg_throttle", "#ff7f0e"),
@@ -79,7 +79,7 @@ def _wide_metric_rows(df):
     if not {"Metric", "AvgValue"}.issubset(df.columns):
         return df
     index_cols = [c for c in df.columns if c not in _NSIGHT_VALUE_COLUMNS]
-    # pivot_table drops NA index groups; protect optional metadata while reshaping.
+    # Shield NA index groups from pivot_table.
     null_sentinel = "__MPM_CUDAJAX_NULL_INDEX__"
     work = df.copy()
     for col in index_cols:
@@ -498,7 +498,7 @@ def table_from_dataframe(df):
         c for c in ("n_particles", "num_grids", "mps_thread_percent") if c in df.columns
     ]
     if sort_keys:
-        df = df.copy()  # defragment the wide frame before the groupby
+        df = df.copy()  # defragment before groupby
         df = df.sort_values(sort_keys).groupby("backend", as_index=False).last()
     table = {}
     for _, row in df.iterrows():
@@ -641,7 +641,7 @@ def plot_roofline_scaling(
     """fp32 roofline trajectory over the selected scaling axis."""
     import numpy as np
 
-    # Ceilings are device constants; median filters noisy rows.
+    # Median over noisy rows; ceilings are constant.
     peak_c = float(df["peak_compute_gflops"].median())
     fig, ax = plt.subplots(figsize=(8.6, 6.2))
     ax.set_xscale("log")

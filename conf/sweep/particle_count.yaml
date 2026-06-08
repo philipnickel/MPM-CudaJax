@@ -1,6 +1,5 @@
 # @package _global_
-# Constant grid (benchmark G=128), particle count up. Swept axis values live in
-# conf/scaling/particle_count.yaml (shared with the NCU sweep).
+# Fixed grid, particle count up.
 defaults:
     - /scaling: particle_count
     - /plot@plots.time: loglog

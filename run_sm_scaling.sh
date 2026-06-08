@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Sweep CUDA MPS active-thread percentage with fresh simulate.py processes.
-# CUDA reads CUDA_MPS_ACTIVE_THREAD_PERCENTAGE when JAX creates its context.
+# Sweep MPS active-thread percent, fresh processes.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

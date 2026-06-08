@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# Sweep Nsight roofline data over CUDA MPS active-thread percentage.
-# The profiled process must start with CUDA_MPS_ACTIVE_THREAD_PERCENTAGE set;
-# sm_scaling appends each pass to one shared sweep parquet.
+# Sweep Nsight roofline over MPS thread percent.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,7 +10,7 @@ export CUDA_MPS_LOG_DIRECTORY="${CUDA_MPS_LOG_DIRECTORY:-$ROOT_DIR/.mps/log}"
 
 REAL_NCU="$(command -v ncu)"
 NCU_WRAPPER_DIR="$(mktemp -d)"
-# Run NCU in MPS control mode for each child process.
+# NCU in MPS control mode.
 cat >"$NCU_WRAPPER_DIR/ncu" <<EOF
 #!/usr/bin/env bash
 exec "$REAL_NCU" --mps=control "\$@"

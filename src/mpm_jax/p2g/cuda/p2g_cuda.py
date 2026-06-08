@@ -117,8 +117,7 @@ class CudaV3P2G(CudaP2GKernel):
         )
 
 
-# cuda_v3 compiles a fixed set of super-cell-width template instantiations;
-# config selects among these.
+# Compiled super-cell-width instantiations.
 SUPPORTED_SC = (2, 4, 8)
 V3_SUPER_CELL_WIDTH = 4
 

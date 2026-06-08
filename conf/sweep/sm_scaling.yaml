@@ -1,9 +1,5 @@
 # @package _global_
-# Strong scaling vs CUDA MPS active-thread percentage. Each percentage must be
-# a fresh Python process because CUDA reads CUDA_MPS_ACTIVE_THREAD_PERCENTAGE
-# when the context is created. run_sm_scaling.sh loops over percentages and runs
-# normal simulate.py multiruns against this static sweep directory. The fixed
-# operating point lives in conf/scaling/sm.yaml (shared with the NCU sweep).
+# Strong scaling vs CUDA MPS thread %; fresh process per percentage.
 defaults:
     - /scaling: sm
     - /plot@plots.time: loglog

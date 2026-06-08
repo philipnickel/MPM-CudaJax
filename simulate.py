@@ -6,8 +6,7 @@ import re
 import sys
 from pathlib import Path
 
-# XProf traces need command buffers disabled before JAX initializes. Hydra config
-# is not composed yet, so sniff argv here.
+# Disable command buffers before JAX init; sniff argv pre-Hydra.
 # ruff: noqa: E402
 def _config_name_from_argv(argv):
     config_name = "config"
@@ -111,7 +110,7 @@ def main(cfg: DictConfig):
 
     solver = MPMSolver(hydra.utils.instantiate(cfg.solver))
 
-    # Keep JIT warmup outside the trace.
+    # Warmup outside the trace.
     solver.warmup(int(profile_cfg.get("warmup_frames", 1)))
 
     def run_measured_solve():
@@ -120,7 +119,7 @@ def main(cfg: DictConfig):
             return solver.run(capture_frames=render_enabled)
 
     if profile_enabled:
-        # A shared trace root lets XProf compare labels side by side.
+        # Shared trace root for side-by-side comparison.
         traces_root = os.path.join(hydra.utils.get_original_cwd(), "traces")
         run_label = profile_cfg.get("label") or solver.backend.name
         trace_dir = os.path.join(traces_root, run_label)

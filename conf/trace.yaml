@@ -1,10 +1,4 @@
-# Dedicated XProf trace run: the standard benchmark preset, shortened to a
-# couple of frames so the capture stays small. Profiling is on and rendering
-# off. Traces land in traces/<backend>/; view with
-#   pixi run xprof --logdir traces
-#
-#   pixi run python simulate.py -cn trace backend=CuTile
-#   pixi run python simulate.py -cn trace -m backend=jax,cuda_v3,CuTile
+# Dedicated XProf trace run (short benchmark capture)
 defaults:
     - config
     - override /sim: benchmark

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-# Default CUDA arch to native unless the caller overrides it.
+# Default CUDA arch to native.
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
     set(CMAKE_CUDA_ARCHITECTURES native CACHE STRING "CUDA architectures")
 endif()
@@ -13,7 +13,7 @@ set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# Use the Python environment driving scikit-build-core.
+# Use scikit-build-core's Python env.
 find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
 execute_process(
     COMMAND ${Python_EXECUTABLE} -m nanobind --cmake_dir
@@ -55,9 +55,9 @@ target_include_directories(_p2g_ffi PRIVATE ${JAX_FFI_INCLUDE})
 target_compile_options(_p2g_ffi PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:-O3>
     $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>
-    # Source-level attribution for ncu/Nsight without debug codegen.
+    # Nsight source attribution.
     $<$<COMPILE_LANGUAGE:CUDA>:-lineinfo>
-    # Build-time registers, spills, and shared-memory usage for profiling notes.
+    # Report registers/spills/smem.
     $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-v>
     $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-fPIC>
     $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wno-return-type>

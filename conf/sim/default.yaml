@@ -9,6 +9,5 @@ rho: 1000.0
 clip_bound: 0.5
 damping: 1.0
 center: [0.5, 0.5, 0.5]
-# Particle-sampling cube side (also sets per-particle volume = prod(size)/n).
-# 0.5 -> particles fill [0.25, 0.75]^3 (the historical default region).
+# Sampling cube side; per-particle vol = prod(size)/n
 size: [0.5, 0.5, 0.5]

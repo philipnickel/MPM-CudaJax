@@ -1,7 +1,5 @@
 # @package _global_
-# Scaling axis: fixed grid (benchmark G=128), growing particle count.
-# Single source of the swept particle-count list, shared by the timing
-# (conf/sweep) and NCU (conf/nsight_sweep) wrappers.
+# Axis: fixed grid, growing particle count.
 hydra:
     sweeper:
         params:

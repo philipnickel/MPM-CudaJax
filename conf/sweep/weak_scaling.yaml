@@ -1,6 +1,5 @@
 # @package _global_
-# Constant active PPC (~9.3), particle count up. Swept axis values + grid
-# derivation live in conf/scaling/weak.yaml (shared with the NCU sweep).
+# Fixed PPC, particle count up.
 defaults:
     - /scaling: weak
     - /plot@plots.time: loglog

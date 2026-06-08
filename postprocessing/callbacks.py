@@ -44,7 +44,7 @@ class NsightPlotCallback(Callback):
         self.style = style
 
     def on_multirun_end(self, config: DictConfig, **kwargs: Any) -> None:
-        # Use the serial sweep aggregate, not per-job outputs.
+        # Use the sweep aggregate, not per-job.
         sweep_root = Path(config.hydra.sweep.dir).resolve()
         results_path = sweep_root / self.results_name
         if not results_path.exists():

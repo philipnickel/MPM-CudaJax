@@ -1,7 +1,4 @@
-# Elastic 'jelly' (gelatin dessert): StVK elastic stress, no plasticity, SVD-free.
-# SI units (gravity 9.8 m/s^2, rho 1000 kg/m^3). E ~ 1e4 Pa (10 kPa, firm jello).
-# StVK stress is polynomial in F (no 1/J singularity), so it stays stable at fine
-# grids under impact -- unlike a neo-Hookean log(J) stress, which blows up there.
+# Elastic 'jelly': StVK stress, SVD-free, stable at fine grids
 elasticity:
   _target_: mpm_jax.constitutive.stvk_elasticity_jacobi
   E: 1e4

@@ -5,7 +5,7 @@ import jax.numpy as jnp
 
 def _spread_bits(x):
     """Spread the lowest 10 bits of ``x`` into Morton bit positions."""
-    x = x & jnp.uint32(0x000003FF)  # keep the low 10 bits (cell coords fit in [0, 1023])
+    x = x & jnp.uint32(0x000003FF)  # keep low 10 bits
     x = (x | (x << jnp.uint32(16))) & jnp.uint32(0x030000FF)
     x = (x | (x << jnp.uint32(8))) & jnp.uint32(0x0300F00F)
     x = (x | (x << jnp.uint32(4))) & jnp.uint32(0x030C30C3)

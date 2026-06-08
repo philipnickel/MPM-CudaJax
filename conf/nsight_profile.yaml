@@ -9,26 +9,18 @@ defaults:
 render:
     enabled: false
 
-# One Hydra job profiles ONE custom CUDA/cuTile backend variant with NCU.
-# Select a serial multirun sweep with nsight_sweep=<choice>; each job appends
-# to the sweep's results.parquet, and nsight_plot=<choice> renders figures from
-# that aggregate at multirun end.
+# One job profiles ONE CUDA/cuTile backend with NCU
 nsight:
     analyze:
         runs: 3
-        # Kernel replay profiles the warmed backend scatter kernel directly.
-        # Tiny XLA wrappers can still appear around cuTile scatter for some metric
-        # sets; drop those, but do not combine real kernels by default. Nsight
-        # Python still fails if more than one non-ignored kernel remains.
+        # Kernel replay on the warmed scatter kernel
         replay_mode: kernel
         combine_kernel_metrics: null
         ignore_kernel_list:
             - loop_broadcast_fusion
             - wrapped_slice_1
             - wrapped_slice
-# Keep Nsight outputs out of the timing-sweep tree. The sweep dir has no "runs"
-# component, so each multirun aggregates into its own
-# outputs/nsight/<gpu>/sweeps/<date>/<time>/results.parquet.
+# Keep Nsight outputs out of the timing-sweep tree
 hydra:
     run:
         dir: outputs/nsight/${gpu_kind:}/runs/${now:%Y-%m-%d}/${now:%H-%M-%S}

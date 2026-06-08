@@ -1,8 +1,5 @@
 # @package _global_
-# Scaling axis: fixed benchmark operating point (N=10M, G=128), swept externally
-# by CUDA MPS active-thread %. Single source of the fixed operating point. The
-# static sweep dir and (for NCU) the mps scale axis differ per tree, so they
-# stay in the per-tree wrappers.
+# Axis: fixed benchmark point, swept by CUDA MPS thread %.
 sim:
     n_particles: 10000000
     num_grids: 128

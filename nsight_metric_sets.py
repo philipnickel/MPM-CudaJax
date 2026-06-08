@@ -19,14 +19,12 @@ from __future__ import annotations
 
 from hydra.core.config_store import ConfigStore
 
-# Minimal smoke-test: kernel duration only (also the empty-list fallback in
-# profile_nsight._nsight_analyze_kwargs).
+# Kernel duration only (smoke-test + fallback).
 TIMING_METRICS = [
     "gpu__time_duration.sum",
 ]
 
-# Hierarchical roofline counters + peak-sustained roofs. Consumed directly by
-# the scaling-roofline plots; this is the smallest portable preset.
+# Roofline counters + peak-sustained roofs.
 ROOFLINE_METRICS = [
     "sm__cycles_elapsed.avg",
     "sm__cycles_elapsed.avg.per_second",
@@ -45,9 +43,7 @@ ROOFLINE_METRICS = [
     "dram__cycles_elapsed.avg.per_second",
 ]
 
-# Everything the `full` preset adds on top of the roofline subset: throughput
-# %, global-scatter (atomics) traffic, occupancy / launch limits, and scheduler
-# issue-stall reasons. Drives the atomics / occupancy / scheduler plots.
+# Extra atomics/occupancy/scheduler counters on top of roofline.
 FULL_EXTRA_METRICS = [
     "sm__throughput.avg.pct_of_peak_sustained_elapsed",
     "gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed",
@@ -94,7 +90,7 @@ FULL_EXTRA_METRICS = [
     "smsp__average_warps_issue_stalled_not_selected_per_issue_active.ratio",
 ]
 
-# Direct NCU metrics for roofline, atomics, occupancy, and scheduler plots.
+# All NCU metrics.
 FULL_METRICS = [*TIMING_METRICS, *ROOFLINE_METRICS, *FULL_EXTRA_METRICS]
 
 METRIC_PRESETS = {

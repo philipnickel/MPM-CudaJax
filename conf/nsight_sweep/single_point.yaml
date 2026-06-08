@@ -1,5 +1,5 @@
 # @package _global_
-# One operating point across all custom P2G kernels.
+# One operating point across all kernels.
 hydra:
   mode: MULTIRUN
   sweeper:

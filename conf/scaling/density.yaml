@@ -1,7 +1,5 @@
 # @package _global_
-# Scaling axis: fixed N=20M, growing grid resolution (particle density down).
-# Single source of the swept grid list + fixed N, shared by the timing and NCU
-# wrappers.
+# Axis: fixed N, growing grid resolution.
 hydra:
     sweeper:
         params:
