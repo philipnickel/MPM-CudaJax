@@ -9,10 +9,7 @@ def _lame_params(E, nu):
 
 
 def _det3x3(F):
-    """Determinant of a single 3x3 (``vmap`` for batches): the scalar triple
-    product ``c0 . (c1 x c2)`` of its columns. Closed-form and fusable, unlike
-    ``jnp.linalg.det`` which lowers to a fusion-breaking cuSOLVER LU custom-call.
-    """
+    """Closed-form, fusable determinant of a single 3x3 (``vmap`` for batches)."""
     return F[:, 0] @ jnp.cross(F[:, 1], F[:, 2])
 
 

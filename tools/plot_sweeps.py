@@ -1,7 +1,4 @@
-"""Re-render scaling plots for an existing sweep multirun.
-
-Loads the ``plots`` block from the first per-job ``.hydra/config.yaml``.
-"""
+"""Re-render scaling plots for an existing sweep multirun."""
 
 from __future__ import annotations
 

@@ -14,11 +14,7 @@ def _spread_bits(x):
 
 
 def morton_code_3d(cx, cy, cz):
-    """3D Morton code (Z-order curve) from per-axis cell coords.
-
-    Each input must be uint32 in [0, 1023]. Output is a uint32 where bits
-    are interleaved as ``... z2 y2 x2 z1 y1 x1 z0 y0 x0`` from MSB to LSB.
-    """
+    """3D Morton code (Z-order curve) from per-axis cell coords."""
     return (
         _spread_bits(cz)
         | (_spread_bits(cy) << jnp.uint32(1))
@@ -37,10 +33,7 @@ def morton_argsort(x, inv_dx, num_grids):
 
 
 def home_super_cell_id(x, inv_dx, num_grids, super_cell_width):
-    """Super-cell id for the quadratic B-spline home node.
-
-    CUDA v3 sorts by the super-cell containing ``floor(x / dx - 0.5) + 1``.
-    """
+    """Super-cell id for the quadratic B-spline home node."""
     px = x * inv_dx
     base = jnp.floor(px - 0.5).astype(jnp.int32)
     home = jnp.clip(base + 1, 0, num_grids - 1)
@@ -52,11 +45,7 @@ def home_super_cell_id(x, inv_dx, num_grids, super_cell_width):
 
 
 def home_cell_id(x, inv_dx, num_grids):
-    """Cell id for the unclipped quadratic B-spline home node.
-
-    The one-cell cuTile backend owns the exact ``base + {0,1,2}`` stencil, so it
-    uses ``base + 1`` as the home cell and allows the upper boundary home ``G``.
-    """
+    """Cell id for the unclipped quadratic B-spline home node."""
     px = x * inv_dx
     base = jnp.floor(px - 0.5).astype(jnp.int32)
     home = jnp.clip(base + 1, 0, num_grids)

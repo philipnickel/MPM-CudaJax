@@ -491,9 +491,7 @@ def _has_scheduler_data(df):
 
 
 def table_from_dataframe(df):
-    """Wide DataFrame -> {backend: {metric: value}}, dropping NaN cells.
-
-    Scaling sweeps use the largest row per backend as the representative point."""
+    """Wide DataFrame -> {backend: {metric: value}}, dropping NaN cells. Scaling sweeps use the largest row per backend as the representative point."""
     sort_keys = [
         c for c in ("n_particles", "num_grids", "mps_thread_percent") if c in df.columns
     ]

@@ -4,10 +4,7 @@ import jax.numpy as jnp
 
 @jax.jit
 def grid_update(grid_mv, grid_m, gravity, dt, damping):
-    """Normalize momentum by mass, apply gravity and damping.
-
-    Embarrassingly parallel over grid nodes.
-    """
+    """Normalize momentum by mass, apply gravity and damping per grid node."""
     valid = grid_m > 1e-15
     grid_mv = jnp.where(valid[:, None], grid_mv / grid_m[:, None], grid_mv)
     grid_mv = damping * (grid_mv + dt * gravity)

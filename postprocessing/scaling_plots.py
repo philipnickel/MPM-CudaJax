@@ -1,8 +1,4 @@
-"""Hydra-zen plot configs for scaling sweeps.
-
-``render`` aggregates per-job results into ``results.parquet`` and calls each
-configured plot partial.
-"""
+"""Hydra-zen plot configs for scaling sweeps."""
 
 from __future__ import annotations
 

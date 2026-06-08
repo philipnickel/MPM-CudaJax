@@ -1,18 +1,5 @@
-"""OmegaConf resolvers + GPU-name helpers shared across the entry points.
-
-Importing this module registers the resolvers (they are global at the OmegaConf
-level, so a single import anywhere suffices) and exposes the GPU-name helpers
-used to slugify output directories.
-
-Registered resolvers:
-
-``ppc_grid``  Maps an N (particle count) to G (grid resolution, rounded to a
-              multiple of 4) so the active-cell PPC stays near a target value.
-              Used by ``conf/scaling/weak.yaml`` to derive G from the swept N
-              without needing a per-point scale yaml.
-``gpu_kind``  The slugified GPU product name (from ``nvidia-smi``), used in
-              ``${gpu_kind:}`` output-directory interpolation.
-"""
+"""OmegaConf resolvers and GPU-name helpers shared across the entry points.
+Importing this module registers the resolvers globally."""
 
 from __future__ import annotations
 
@@ -27,10 +14,7 @@ def _ppc_grid(
     target_ppc: float = 9.31,
     region_volume: float = 0.512,
 ) -> int:
-    """Return G (multiple of 4) so N / (region_volume * G^3) ~= target_ppc.
-
-    Defaults match the benchmark preset: region [0.1, 0.9]^3 has volume
-    0.8^3 = 0.512, and the reference point N=10M / G=128 sits at PPC=9.31."""
+    """Return G (multiple of 4) so N / (region_volume * G^3) ~= target_ppc."""
     g = (n_particles / target_ppc / region_volume) ** (1 / 3)
     return max(4, 4 * round(g / 4))
 

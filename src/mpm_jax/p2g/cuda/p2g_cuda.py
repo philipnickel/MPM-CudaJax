@@ -1,10 +1,4 @@
-"""CUDA P2G kernels, integrated via JAX FFI.
-
-The native ``mpm_jax.p2g.cuda._p2g_ffi`` extension is built by scikit-build-core +
-CMake (see CMakeLists.txt). In editable Pixi environments,
-``editable.rebuild=true`` lets scikit-build-core incrementally rebuild changed
-CUDA or binding sources when the extension module is imported.
-"""
+"""CUDA P2G kernels, integrated via JAX FFI."""
 
 import importlib
 from threading import Lock

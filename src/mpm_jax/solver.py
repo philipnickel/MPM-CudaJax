@@ -60,23 +60,11 @@ class RuntimeConfig:
 
 
 class MPMSolver:
-    """Stateful driver over the functional JAX core.
-
-    A plain Python object: array state (`state`) is mutated in place by the
-    driver API, while the backend object, constitutive closure, sticky-floor
-    mask, and the compiled `_frame` are fixed for the solver's lifetime. The
-    solver itself is never a JAX argument -- only `state` (an `MPMState` pytree)
-    is traced; the backend/fns are baked into `_frame`'s closure at build time.
-    So no pytree machinery is needed here.
-    """
+    """Stateful driver over the functional JAX core. Array state is mutated in
+    place while the backend, closures, and compiled frame stay fixed."""
 
     def __init__(self, config):
-        """Build a solver from an instantiated runtime config.
-
-        Reads each config section and constructs the pieces — params (with its
-        derived dx/vol/p_mass), particles, the target-instantiated backend,
-        and the initial state — then hands them to the compiled frame.
-        """
+        """Build a solver from an instantiated runtime config."""
         sim, mat = config.sim, config.material
         n = int(sim.n_particles)
 
@@ -151,11 +139,7 @@ class MPMSolver:
         return _g2p_stage(self.params, prepared, grid_v)
 
     def warmup(self, n=1):
-        """Run ``n`` throwaway frames to trigger JIT compilation, then reset.
-
-        Kept out of :meth:`run` so a profiler trace wrapping ``run`` never
-        captures one-time compilation.
-        """
+        """Run ``n`` throwaway frames to trigger JIT compilation, then reset."""
         for _ in range(max(1, int(n))):
             self.state = self._frame(self.state)
         jax.block_until_ready(self.state.x)
@@ -163,12 +147,7 @@ class MPMSolver:
         return self.state
 
     def run(self, *, capture_frames, progress=True):
-        """Drive the frame loop and return ``(frames, elapsed_s)``.
-
-        Each frame is wrapped in a ``StepTraceAnnotation`` so an enclosing
-        profiler trace shows per-frame steps; it is a no-op when no trace is
-        active. Call :meth:`warmup` first for clean timing.
-        """
+        """Drive the frame loop and return ``(frames, elapsed_s)``."""
         frames = []
         frame_iter = range(self.num_frames)
         if progress:

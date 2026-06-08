@@ -1,8 +1,6 @@
 """Hydra-wrapped Nsight Compute collection for custom P2G scatter kernels.
 
 Each Hydra job profiles one warmed backend scatter call with prepared inputs.
-Multirun sweeps append processed nsight-python rows to the sweep
-``results.parquet``; metric derivation stays in postprocessing.
 """
 
 from __future__ import annotations

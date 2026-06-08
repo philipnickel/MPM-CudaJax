@@ -1,18 +1,7 @@
 """Canonical NCU metric presets for the ``nsight_metrics`` Hydra group.
 
-Single source of truth for the metric lists that ``profile_nsight.py`` hands to
-Nsight Compute. The ``full`` preset is *composed* from the roofline subset plus
-the atomics / occupancy / scheduler counters, so the roofline metrics are never
-copy-pasted between presets (the previous ``conf/nsight_metrics/{roofline,full}``
-YAML duplicated them by hand).
-
-Importing this module registers ``nsight_metrics={timing,roofline,full}`` as a
-Hydra config-group selection whose content lands under ``nsight.analyze`` —
-equivalent to the old ``# @package nsight.analyze`` YAML stubs. ``profile_nsight``
-imports it before Hydra composes; there is no ``conf/nsight_metrics/`` directory.
-
-Roofline entries follow Yang's Nsight Compute 2020 metric set
-(arXiv:2009.02449, Table III), with peak counters for the reference roofs.
+Importing this module registers the timing/roofline/full presets under
+``nsight.analyze`` for ``profile_nsight.py`` to hand to Nsight Compute.
 """
 
 from __future__ import annotations
@@ -101,11 +90,7 @@ METRIC_PRESETS = {
 
 
 def register() -> None:
-    """Register the metric presets as the ``nsight_metrics`` config group.
-
-    Each preset is stored under package ``nsight.analyze`` so selecting
-    ``nsight_metrics=<preset>`` yields ``nsight.analyze.metrics=[...]``.
-    """
+    """Register the metric presets as the ``nsight_metrics`` config group."""
     cs = ConfigStore.instance()
     for name, metrics in METRIC_PRESETS.items():
         cs.store(

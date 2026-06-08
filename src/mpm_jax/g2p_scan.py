@@ -1,9 +1,4 @@
-"""G2P gather via lax.scan over the 27 stencil offsets.
-
-Scanning keeps the APIC reconstruction at ``(N, 3, 3)`` peak instead of
-materialising ``(N, 27, *)`` intermediates. This G2P path is shared by every
-backend, so only P2G varies.
-"""
+"""G2P gather via lax.scan over the 27 stencil offsets, shared by every backend."""
 
 import jax
 import jax.numpy as jnp
@@ -12,11 +7,7 @@ from mpm_jax.p2g.stencil import OFFSET_27, weight_dpos_index
 
 
 def _g2p_scan_mls(grid_v, x, F, dt, inv_dx, dx, num_grids, clip_bound):
-    """Unified MLS-MPM G2P using APIC affine ``C`` as the velocity gradient.
-
-    This keeps one ``(N, 3, 3)`` accumulator and follows the standard MLS-MPM
-    discretisation rather than a separate B-spline ``grad_v`` estimator.
-    """
+    """Unified MLS-MPM G2P using APIC affine ``C`` as the velocity gradient."""
     N = x.shape[0]
 
     def scan_body(carry, offset_int):

@@ -19,7 +19,7 @@ STENCIL_LANES = _next_power_of_two(STENCIL_NODES)
 
 
 def _quad_w(o, fx):
-    """Quadratic B-spline weight for offset tile ``o`` and fractional ``fx``."""
+    """Quadratic B-spline weight for an offset tile and fractional position."""
     return ct.where(
         o == 0,
         0.5 * (1.5 - fx) * (1.5 - fx),

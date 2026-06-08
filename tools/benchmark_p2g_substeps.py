@@ -1,7 +1,4 @@
-"""Benchmark P2G prepare/scatter timing beside full solver timing.
-
-Defaults to the benchmark sim preset (G=128, N=10M) and custom P2G backends.
-"""
+"""Benchmark P2G prepare/scatter timing beside full solver timing."""
 
 from __future__ import annotations
 

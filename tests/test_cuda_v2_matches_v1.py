@@ -1,12 +1,4 @@
-"""cuda_v2 must match cuda_v1 up to atomic-order f32 drift.
-
-Both kernels are bit-identical in their per-particle math; cuda_v2 adds Morton
-ordering plus a warp-shuffle reduction before each atomicAdd. The same drift
-sources as the rest of the CUDA equivalence suite apply (non-deterministic
-atomicAdd ordering), so we use the same tolerances as the v1-vs-JAX comparison.
-
-Skipped when the native CUDA extension isn't built or there's no GPU.
-"""
+"""cuda_v2 must match cuda_v1 up to atomic-order f32 drift."""
 
 import jax
 import jax.numpy as jnp
