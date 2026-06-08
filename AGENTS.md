@@ -45,7 +45,7 @@ The main entry points are:
   `src/mpm_jax/p2g/backends/` register their own Hydra config-group choices via
   hydra-zen; do not add dispatch logic to `simulate.py`.
 - Preserve the benchmark methodology described in `.claude/CLAUDE.md`,
-  especially the standard 8-particles-per-cell setup and the
+  especially the standard `G=128`, 10M-particle benchmark setup and the
   `profile_nsight.py` / Nsight Compute profiling workflow.
 
 ## Common Commands
@@ -55,10 +55,10 @@ pixi install
 pixi run test
 pixi run lint
 pixi run python simulate.py sim.num_frames=5
-pixi run python simulate.py sim=benchmark render.enabled=false
+pixi run python simulate.py sim=benchmark
 pixi run python simulate.py backend=jax
 pixi run python simulate.py backend=cuda_v3 material=jelly
-pixi run python simulate.py sim=benchmark backend=CuTile render.enabled=false
+pixi run python simulate.py sim=benchmark backend=CuTile
 pixi run python profile_nsight.py -cn nsight_profile backend=CuTile
 pixi run python profile_nsight.py -cn nsight_profile nsight_sweep=single_point
 pixi run python profile_nsight.py -cn nsight_profile nsight_sweep=weak

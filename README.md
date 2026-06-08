@@ -42,11 +42,11 @@ To benchmark instead of rendering:
 ```bash
 pixi run python simulate.py \
     backend=cuda_v3 material=jelly \
-    sim=benchmark render.enabled=false
+    sim=benchmark
 ```
 Prints `total_steps`, `elapsed_s`, `steps_per_sec`, average `ms/step`,
-high-level `particles_per_sec`, and the detected `gpu_type`. No GIF, no
-per-frame state capture — just wall-clock timing.
+high-level `particles_per_sec`, and the detected `gpu_type`. The benchmark
+preset disables GIF rendering and per-frame state capture by default.
 
 Outputs:
 - Single-run GIF renders, `results.json`, Hydra logs, config snapshots → `outputs/runs/<gpu-kind>/<date>/<run>/`
@@ -95,14 +95,14 @@ wheel (H100/A100) resolve correctly.
 pixi run python simulate.py
 
 # Timing run (no GIF, no per-frame state capture)
-pixi run python simulate.py sim=benchmark render.enabled=false
+pixi run python simulate.py sim=benchmark
 
 # Pick a kernel
 pixi run python simulate.py backend=jax                              # JAX/XLA baseline (scan P2G + MLS G2P)
 pixi run python simulate.py backend=cuda_v1 material=jelly
 pixi run python simulate.py backend=cuda_v2 material=jelly            # Morton-sorted warp-shuffle coalescing
 pixi run python simulate.py backend=cuda_v3 material=jelly            # super-cell grid tile
-pixi run python simulate.py backend=CuTile material=jelly sim=benchmark render.enabled=false  # cuTile (tiled model)
+pixi run python simulate.py backend=CuTile material=jelly sim=benchmark  # cuTile (tiled model)
 
 # Override sim params
 pixi run python simulate.py sim.n_particles=1000000 sim.num_grids=64
@@ -116,7 +116,6 @@ pixi run python simulate.py sim.n_particles=1000000 sim.num_grids=64
 | `cuda_v1` | CUDA P2G (one thread/particle, global `atomicAdd`) + JAX baseline G2P. |
 | `cuda_v2` | CUDA Morton-sorted warp-shuffle coalesced P2G + JAX baseline G2P. |
 | `cuda_v3` | CUDA super-cell-owned grid tile P2G + JAX baseline G2P. |
-| `cutile_v1` | cuTile direct 27-stencil scatter comparison backend. |
 | `CuTile` | cuTile home-cell tiled P2G with local 27-node reduction + JAX baseline G2P. Requires `cuda-tile`. |
 
 ## Architecture
@@ -143,7 +142,7 @@ Construction (`RuntimeConfig` + `MPMSolver` in `src/mpm_jax/solver.py`):
 All solver variants now run through the same JAX-owned frame loop. The pure-JAX path compiles the entire frame (multiple substeps) as one XLA program. The CUDA variants (`cuda_v*`) move P2G stencil work into CUDA kernels so the `(N, 27, *)` intermediate tensors never materialize in HBM; v2 sorts particles by Morton code for warp-shuffle coalescing, while v3 uses a super-cell-owned shared-memory tile. The cuTile variant (`cutile`) launches a tiled-programming-model P2G kernel from inside that same JAX frame via the cuTile/JAX bridge.
 
 To time P2G `prepare`, P2G `scatter`, `prepare+scatter`, and full solver
-`ms/step` at the benchmark operating point (`G=96`, `N=10M`), run:
+`ms/step` at the benchmark operating point (`G=128`, `N=10M`), run:
 
 ```bash
 pixi run python tools/benchmark_p2g_substeps.py
@@ -163,10 +162,10 @@ pixi run python simulate.py -cn sweep sweep=particle_count  # constant grid, par
 pixi run python simulate.py -cn sweep sweep=weak_scaling    # constant active PPC, particle count up
 ```
 
-The benchmark preset uses one frame with 50 substeps. `particle_count` uses
-fixed `G=96` and particle counts `2^18..2^24`. `weak_scaling` keeps
+The benchmark preset uses one frame with 5 substeps. `particle_count` uses
+fixed `G=128` and the configured particle-count axis. `weak_scaling` keeps
 active-cell PPC near the benchmark density (`particles_per_active_cell ~=
-8.492`) while scaling both `G` and `N`.
+9.31`) while scaling both `G` and `N`.
 
 Each combination gets its own
 `outputs/sweeps/<gpu-kind>/runs/<date>/<time>/<job>_<override-dirname>/` subdir
@@ -241,7 +240,7 @@ Compute is saved in the same per-job Hydra output dir. At multirun end,
 authoritative `results.parquet` with pandas and renders the figures:
 
 ```bash
-# Single operating point (all 6 custom kernels at the benchmark resolution):
+# Single operating point (all custom P2G kernels at the benchmark resolution):
 pixi run python profile_nsight.py -cn nsight_profile nsight_sweep=single_point
 ```
 
@@ -260,7 +259,7 @@ direction of increasing scale. The axis is auto-detected from what varies:
 # (raises ppc/density). Resources are constant, so this is NOT strong scaling.
 pixi run python profile_nsight.py -cn nsight_profile nsight_sweep=particle_count
 
-# Weak scaling: fixed particles-per-cell (~8.49), grid + N grow together.
+# Weak scaling: fixed particles-per-cell (~9.31), grid + N grow together.
 pixi run python profile_nsight.py -cn nsight_profile nsight_sweep=weak
 
 # Manual re-render from an existing aggregate:
@@ -278,14 +277,14 @@ enabled, and set Import Source to yes when you want source pages:
 ```text
 Application Executable: /root/MPM-CudaJax/.pixi/envs/default/bin/python
 Working Directory:      /root/MPM-CudaJax
-Arguments:              simulate.py sim=benchmark backend=CuTile render.enabled=false
+Arguments:              simulate.py sim=benchmark backend=CuTile
 ```
 
-The `sim=benchmark` preset is one frame with 50 substeps, so the measured solve
+The `sim=benchmark` preset is one frame with 5 substeps, so the measured solve
 range is the jitted frame containing the configured substep loop. In the API
 Stream, use **Run to Next Range Start** to land on the `CuTile_solve` NVTX
 range, then **Run to Next Kernel** and **Profile Kernel**. The cuTile kernel names show up as
-`cutile_v1_p2g_kernel...` or `cutile_p2g_kernel...`; earlier kernels in the
+`cutile_p2g_kernel...`; earlier kernels in the
 same solve range are JAX/XLA helper kernels.
 The GUI environment editor can stay empty; Pixi owns the runtime environment.
 
@@ -324,7 +323,7 @@ Hydra config groups in `conf/`:
 |---|---|---|
 | `material` | `jelly` (default) | Constitutive model |
 | `sim` | `default` | n_particles, num_grids, dt, BCs, ... |
-| `backend` | `jax` (default), `cuda_v1`, `cuda_v2`, `cuda_v3`, `cutile_v1`, `CuTile` | P2G implementation (G2P shared) |
+| `backend` | `jax` (default), `cuda_v1`, `cuda_v2`, `cuda_v3`, `CuTile` | P2G implementation (G2P shared) |
 
 Top-level fields: `tag`, `render`. All overridable from CLI:
 

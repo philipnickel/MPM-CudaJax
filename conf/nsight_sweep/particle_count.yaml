@@ -1,13 +1,13 @@
 # @package _global_
-# Fixed G=96, growing particle count (load/throughput sweep).
+# Fixed G=128, growing particle count (load/throughput sweep).
 hydra:
   mode: MULTIRUN
   sweeper:
     params:
-      backend: cuda_v1,cuda_v2,cuda_v3,cutile_v1,CuTile
+      backend: cuda_v1,cuda_v2,cuda_v3,CuTile
       sim.n_particles: 1000000,2000000,5000000,10000000,25000000
 
 sim:
-  num_grids: 96
+  num_grids: 128
 
 tag: nsight_particle_count

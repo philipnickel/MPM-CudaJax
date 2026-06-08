@@ -12,7 +12,6 @@ from mpm_jax.p2g.backends import (
     CudaV1Backend,
     CudaV2Backend,
     CudaV3Backend,
-    CutileV1Backend,
     CuTileBackend,
     JaxBackend,
 )
@@ -161,18 +160,14 @@ def test_cutile_p2g_matches_jax_scan():
     params, state, stress = _inputs()
     ref_mv, ref_m = _p2g_output(JaxBackend(), params, state, stress)
 
-    for backend in (
-        CutileV1Backend(params.num_grids),
-        CuTileBackend(params.num_grids),
-    ):
-        grid_mv, grid_m = _p2g_output(backend, params, state, stress)
+    grid_mv, grid_m = _p2g_output(CuTileBackend(params.num_grids), params, state, stress)
 
-        np.testing.assert_allclose(
-            np.asarray(grid_mv), np.asarray(ref_mv), atol=1e-5, rtol=1e-5
-        )
-        np.testing.assert_allclose(
-            np.asarray(grid_m), np.asarray(ref_m), atol=1e-5, rtol=1e-5
-        )
-        np.testing.assert_allclose(
-            float(grid_m.sum()), float(ref_m.sum()), atol=1e-5, rtol=0.0
-        )
+    np.testing.assert_allclose(
+        np.asarray(grid_mv), np.asarray(ref_mv), atol=1e-5, rtol=1e-5
+    )
+    np.testing.assert_allclose(
+        np.asarray(grid_m), np.asarray(ref_m), atol=1e-5, rtol=1e-5
+    )
+    np.testing.assert_allclose(
+        float(grid_m.sum()), float(ref_m.sum()), atol=1e-5, rtol=0.0
+    )

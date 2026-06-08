@@ -15,7 +15,7 @@ hydra:
     mode: MULTIRUN
     sweeper:
         params:
-            backend: jax,cuda_v1,cuda_v2,cuda_v3,cutile_v1,CuTile
+            backend: jax,cuda_v1,cuda_v2,cuda_v3,CuTile
     callbacks:
         scaling_plot:
             _target_: postprocessing.callbacks.ScalingPlotCallback

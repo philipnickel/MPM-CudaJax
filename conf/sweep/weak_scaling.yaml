@@ -1,5 +1,5 @@
 # @package _global_
-# Constant active PPC (~8.5), particle count up. G is derived from the swept N
+# Constant active PPC (~9.3), particle count up. G is derived from the swept N
 # via the ${ppc_grid:N} resolver — no per-point yaml needed.
 defaults:
     - /plot@plots.time: loglog

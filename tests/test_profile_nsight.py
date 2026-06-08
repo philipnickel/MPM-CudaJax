@@ -47,7 +47,6 @@ def test_backend_choices_come_from_registered_hydra_configs():
         "cuda_v1",
         "cuda_v2",
         "cuda_v3",
-        "cutile_v1",
         "CuTile",
     }
 
@@ -121,7 +120,7 @@ def test_nsight_sweep_configs_exclude_jax_and_use_direct_axes():
         "single_point": {},
         "particle_count": {
             "sweep_axis": "sim.n_particles",
-            "fixed": ("sim.num_grids", 96),
+            "fixed": ("sim.num_grids", 128),
             "tag": "nsight_particle_count",
         },
         "density": {

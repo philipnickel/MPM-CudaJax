@@ -1,6 +1,6 @@
 """Benchmark backend P2G prepare/scatter timing alongside full solver timing.
 
-Default usage runs the benchmark simulation preset (G=96, N=10M) across the
+Default usage runs the benchmark simulation preset (G=128, N=10M) across the
 custom P2G backends and writes one parquet table in the Hydra output directory:
 
     pixi run python tools/benchmark_p2g_substeps.py
@@ -39,7 +39,6 @@ DEFAULT_BACKENDS = (
     "cuda_v1",
     "cuda_v2",
     "cuda_v3",
-    "cutile_v1",
     "CuTile",
 )
 DEFAULT_TIMING = {
@@ -121,7 +120,8 @@ def _with_default_benchmark_sim(cfg: DictConfig, overrides: list[str]):
         return cfg
 
     root = Path(hydra.utils.get_original_cwd())
-    benchmark_sim = OmegaConf.load(root / "conf" / "sim" / "benchmark.yaml")
+    benchmark_cfg = OmegaConf.load(root / "conf" / "sim" / "benchmark.yaml")
+    benchmark_sim = OmegaConf.select(benchmark_cfg, "sim") or benchmark_cfg
     sim_override_cfg = OmegaConf.from_dotlist(_sim_dot_overrides(overrides))
     cfg = OmegaConf.create(OmegaConf.to_container(cfg, resolve=False))
     cfg.sim = OmegaConf.merge(benchmark_sim, sim_override_cfg.get("sim", {}))

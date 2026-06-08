@@ -11,7 +11,7 @@ from mpm_jax.p2g.backends.cuda import (
     CudaV2Backend,
     CudaV3Backend,
 )
-from mpm_jax.p2g.backends.cutile import CutileV1Backend, CuTileBackend
+from mpm_jax.p2g.backends.cutile import CuTileBackend
 from mpm_jax.p2g.backends.jax import JaxBackend
 
 store.add_to_hydra_store(overwrite_ok=True)
@@ -41,7 +41,6 @@ __all__ = [
     "CudaV1Backend",
     "CudaV2Backend",
     "CudaV3Backend",
-    "CutileV1Backend",
     "CuTileBackend",
     "JaxBackend",
     "P2GBackend",

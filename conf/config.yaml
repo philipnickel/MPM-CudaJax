@@ -1,8 +1,8 @@
 defaults:
+    - _self_
     - material: jelly
     - sim: default
     - backend: jax
-    - _self_
 
 solver:
     _target_: mpm_jax.solver.RuntimeConfig

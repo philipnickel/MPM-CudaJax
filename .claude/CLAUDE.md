@@ -11,7 +11,7 @@ This is a benchmarking/investigation project; the code is shaped by the followin
 1. **Start in JAX.** Implement the full MLS-MPM timestep in pure JAX/XLA (`backend=jax`) — the baseline. It scans over the 27 stencil offsets for **both** P2G and G2P (so neither `(N, 27, *)` intermediate materialises), uses the unified MLS-MPM G2P (the APIC affine `C` doubles as ∇v), and a closed-form StVK elastic stress (SVD-free, no plasticity). **Every other variant reuses this exact JAX G2P (`jax_scan_g2p_mls` / `_g2p_scan_mls`), so across the backend set only the P2G implementation varies.**
 2. **Profile to find the bottlenecks.** Use `profile_nsight.py` to locate the *canonical MPM bottlenecks* — chiefly the P2G scatter and the `(N, 27, *)` stencil materialisation.
 3. **Optimise the P2G with custom CUDA.** JAX FFI lets us drop hand-written CUDA **P2G** kernels in (`backend=cuda_v1` through `backend=cuda_v3`) while the rest of the timestep — G2P, grid, constitutive — stays the JAX baseline. Holding G2P fixed isolates the P2G question: "where is XLA's scatter enough vs. where does a custom kernel win?"
-4. **Try a different programming model — tiled (cuTile).** Finally, investigate whether the **tiled programming model** (NVIDIA cuTile) can reach similar or better P2G performance while keeping the same JAX-owned frame loop. The cuTile Hydra choices are `backend=cutile_v1` for direct scatter and `backend=cutile_v3` for the cleaner home-cell-tiled path. JAX computes stress, updates the grid, and runs the **same JAX baseline G2P**; cuTile owns only the tiled P2G kernel via the cuTile/JAX bridge. (An NVIDIA Warp tiled path was also explored and then dropped — it was slower than both cuTile and the CUDA kernels at this resolution.)
+4. **Try a different programming model — tiled (cuTile).** Finally, investigate whether the **tiled programming model** (NVIDIA cuTile) can reach similar or better P2G performance while keeping the same JAX-owned frame loop. The cuTile Hydra choice is `backend=CuTile`, the home-cell-tiled path with local 27-node reduction. JAX computes stress, updates the grid, and runs the **same JAX baseline G2P**; cuTile owns only the tiled P2G kernel via the cuTile/JAX bridge. (An NVIDIA Warp tiled path was also explored and then dropped — it was slower than both cuTile and the CUDA kernels at this resolution.)
 
 **The analysis method (applied to every variant, in this order):**
 
@@ -22,12 +22,12 @@ This is a benchmarking/investigation project; the code is shaped by the followin
 
 All current performance comparisons use one fixed, well-resolved configuration so numbers are comparable across variants and architectures **and the simulation stays numerically stable** — under-resolution (too few particles per cell) makes MLS-MPM go unstable, which corrupts wall-clock timings (the falling material explodes, particles clamp to the bounds and cluster, and the atomic-scatter P2G becomes contention-bound; see below).
 
-- **Current profiling operating point:** `G=96`, `N=10M`, one frame with 50 substeps. Particles fill `[0.1, 0.9]^3`, which is about 77³ active cells and ~22 particles per active cell.
-- **∆x ~= 1.04×10⁻²** (`dx = 1 / sim.num_grids`).
+- **Current profiling operating point:** `G=128`, `N=10M`, one frame with 5 substeps. Particles fill `[0.1, 0.9]^3`, which is about 102³ active cells and ~9.31 particles per active cell.
+- **∆x = 7.8125×10⁻³** (`dx = 1 / sim.num_grids`).
 - **Particles uniformly sampled in [0.1, 0.9]³** → `sim.center = [0.5, 0.5, 0.5]`, region side 0.8.
 - **APIC transfer** (codebase default) + **StVK elastic jelly** (`material=jelly`).
 - Per-particle volume follows the region: `vol = 0.8³ / N` (`MPMParams` derives `vol = prod(sim.size)/n`, so set `sim.size=[0.8,0.8,0.8]`).
-- **∆t = 5×10⁻⁵**. Jelly is soft (`E = 10⁴`, wave speed `c = √(E/ρ) ≈ 3.2 m/s`), so with `∆x ≈ 8×10⁻³` the CFL ceiling `∆t_max ≈ ∆x/c ≈ 2.5×10⁻³` sits far above this — `∆t = 5×10⁻⁵` is deliberately conservative for stable, comparable timings (the value is inherited from the original sand benchmark, whose stiffer material needed it). **Run the standard benchmark via `sim=benchmark`** (below), which bakes in all of these settings; do not hand-override `sim.num_grids`/`sim.n_particles` on top of `sim=default`.
+- **∆t = 5×10⁻⁵**. Jelly is soft (`E = 10⁴`, wave speed `c = √(E/ρ) ≈ 3.2 m/s`), so with `∆x ≈ 8×10⁻³` the CFL ceiling `∆t_max ≈ ∆x/c ≈ 2.5×10⁻³` sits far above this — `∆t = 5×10⁻⁵` is deliberately conservative for stable, comparable timings (the value is inherited from the original sand benchmark, whose stiffer material needed it). **Run the standard benchmark via `sim=benchmark`** (below), which bakes in all of these settings and disables rendering by default; do not hand-override `sim.num_grids`/`sim.n_particles` on top of `sim=default`.
 
 **Phase definitions** (kept broad so timing reflects real work, and to attribute the grid step):
 - **P2G**: compute force from the deformation gradient F; scatter mass + elastic force + APIC affine momentum to grid nodes; normalize grid velocity and apply gravity. *(The grid normalize+gravity step is grouped under P2G for timing.)*
@@ -35,9 +35,9 @@ All current performance comparisons use one fixed, well-resolved configuration s
 
 **Reproduce:**
 ```bash
-# sim=benchmark encodes 10M particles, num_grids=96, ∆t=5e-5, center/size, sticky floor
-pixi run python simulate.py -cn config sim=benchmark \
-    backend=<k> material=jelly render.enabled=false
+# sim=benchmark encodes 10M particles, num_grids=128, ∆t=5e-5, center/size,
+# sticky floor, and render.enabled=false
+pixi run python simulate.py -cn config sim=benchmark backend=<k> material=jelly
 ```
 
 ## Package manager: pixi
@@ -102,8 +102,7 @@ src/mpm_jax/
     sort.py            morton_argsort, home_cell_id
     backends/          backend implementations; modules register Hydra choices via hydra-zen
     cutile/            cuTile P2G kernels + cutile_call bridges
-      v1.py            cutile_v1: direct scatter comparison backend
-      v3.py            cutile_v3: home-cell tiled local reduction
+      v3.py            CuTile: home-cell tiled local reduction
     cuda/
       p2g_cuda.py      imports _p2g_ffi capsules + jax.ffi.register_ffi_target
       kernels/
@@ -136,7 +135,7 @@ Three embarrassingly parallel phases per substep:
 
 ### Backend Variants
 
-Kernel selection is a small implementation package, not an if/elif chain. Because only the P2G varies, `src/mpm_jax/p2g/backends/common.py` defines the shared interface/helpers and each implementation module registers its own Hydra backend choice with hydra-zen: `jax.py`, `cuda.py`, and `cutile.py`. A variant overrides `prepare()` when it needs particle ordering and `scatter()` for the P2G kernel. The frame loop calls `backend.prepare()`, `backend.scatter()`, then the shared `g2p_mls()` path; it never contains backend-specific dispatch. Importing `mpm_jax.p2g.backends` loads those modules and commits their config-group entries to Hydra's ConfigStore, so `backend=jax,cuda_v1,cuda_v2,cuda_v3,cutile_v1,cutile_v3` are Python-backed Hydra choices with no `conf/backend/*.yaml` stubs. Backend constructors own CUDA/cuTile registration. Solver construction is `MPMSolver(hydra.utils.instantiate(cfg.solver))`: the `solver` config node targets `RuntimeConfig`, whose `backend` field is already the instantiated backend object. `MPMSolver` derives params, particles, and initial state from that runtime config; the sticky floor is fixed in the solver frame. There is no availability check — the default Pixi env guarantees the kernels exist.
+Kernel selection is a small implementation package, not an if/elif chain. Because only the P2G varies, `src/mpm_jax/p2g/backends/common.py` defines the shared interface/helpers and each implementation module registers its own Hydra backend choice with hydra-zen: `jax.py`, `cuda.py`, and `cutile.py`. A variant overrides `prepare()` when it needs particle ordering and `scatter()` for the P2G kernel. The frame loop calls `backend.prepare()`, `backend.scatter()`, then the shared `g2p_mls()` path; it never contains backend-specific dispatch. Importing `mpm_jax.p2g.backends` loads those modules and commits their config-group entries to Hydra's ConfigStore, so `backend=jax,cuda_v1,cuda_v2,cuda_v3,CuTile` are Python-backed Hydra choices with no `conf/backend/*.yaml` stubs. Backend constructors own CUDA/cuTile registration. Solver construction is `MPMSolver(hydra.utils.instantiate(cfg.solver))`: the `solver` config node targets `RuntimeConfig`, whose `backend` field is already the instantiated backend object. `MPMSolver` derives params, particles, and initial state from that runtime config; the sticky floor is fixed in the solver frame. There is no availability check — the default Pixi env guarantees the kernels exist.
 
 Current kernel names:
 
@@ -146,8 +145,7 @@ Current kernel names:
 | `cuda_v1` | MPMSolver | CUDA P2G (one thread/particle, global atomicAdd) + JAX baseline G2P |
 | `cuda_v2` | MPMSolver | CUDA Morton-sorted warp-shuffle coalesced P2G + JAX baseline G2P |
 | `cuda_v3` | MPMSolver | CUDA super-cell-owned grid tile P2G + JAX baseline G2P |
-| `cutile_v1` | MPMSolver | cuTile direct 27-stencil scatter comparison backend |
-| `cutile_v3` | MPMSolver | cuTile home-cell tiled P2G with local 27-node reduction + JAX baseline G2P |
+| `CuTile` | MPMSolver | cuTile home-cell tiled P2G with local 27-node reduction + JAX baseline G2P |
 
 Material baseline:
 - `material=jelly` is the only material: StVK elastic stress (closed-form, SVD-free), no plasticity. (The earlier StVK/Drucker-Prager *sand* path and its in-repo Jacobi SVD were removed — jelly never needed them, and the SVD's only consumer was sand's plasticity.)
@@ -162,26 +160,26 @@ Material baseline:
 pixi run python simulate.py
 
 # Timing run (no GIF)
-pixi run python simulate.py sim=benchmark render.enabled=false
+pixi run python simulate.py sim=benchmark
 
 # Switch kernel
 pixi run python simulate.py backend=jax                              # JAX/XLA baseline (scan P2G + MLS G2P)
 pixi run python simulate.py backend=cuda_v1 material=jelly            # CUDA P2G + JAX G2P
 pixi run python simulate.py backend=cuda_v2 material=jelly            # Morton-sorted warp-shuffle CUDA
 pixi run python simulate.py backend=cuda_v3 material=jelly            # super-cell grid tile CUDA
-pixi run python simulate.py backend=cutile_v3 material=jelly sim=benchmark render.enabled=false  # cuTile tiled P2G
+pixi run python simulate.py backend=CuTile material=jelly sim=benchmark  # cuTile tiled P2G
 
 # Override sim params
 pixi run python simulate.py sim.n_particles=50000 sim.num_grids=64
 
-# Benchmark P2G prepare/scatter and full solver ms/step at G=96, N=10M.
+# Benchmark P2G prepare/scatter and full solver ms/step at G=128, N=10M.
 pixi run python tools/benchmark_p2g_substeps.py
 
 # Nsight Python profiler (direct NCU metrics for warmed custom P2G scatter).
 # Use only CUDA/cuTile backends here; use XProf tracing for backend=jax.
 # conf/nsight_metrics/{timing,roofline,full}.yaml owns the metric presets;
 # override nsight.analyze.metrics=[...] directly for focused collection.
-pixi run python profile_nsight.py -cn nsight_profile backend=cutile_v3 sim.n_particles=4096
+pixi run python profile_nsight.py -cn nsight_profile backend=CuTile sim.n_particles=4096
 
 # Cross-backend analysis: nsight_sweep configs define serial Hydra multiruns
 # over custom CUDA/cuTile backends only. Each job appends
@@ -200,10 +198,10 @@ pixi run python profile_nsight.py -cn nsight_profile nsight_sweep=weak
 
 # Interactive NCU GUI: launch through Pixi so runtime env vars are inherited.
 # simulate.py warms once, then marks the measured jitted frame loop with NVTX.
-# sim=benchmark is one frame with 50 substeps for steady benchmark timing.
+# sim=benchmark is one frame with 5 substeps for steady benchmark timing.
 pixi run ncu-ui
 # In the GUI, use app: .pixi/envs/default/bin/python
-# args: simulate.py sim=benchmark backend=cutile_v3 render.enabled=false
+# args: simulate.py sim=benchmark backend=CuTile
 
 # Sweeps (Hydra multirun). One entry point + a sweep/ config group axis.
 pixi run python simulate.py -cn sweep                       # particle_count (default)
@@ -215,8 +213,8 @@ pixi run sweep-weak                                # task alias
 pixi run plot-sweeps                               # write figures/sweeps/<gpu-kind>/
 
 # Sweep definitions (sweep group choices in conf/sweep/)
-# - particle_count: G=96, N=2^18..2^24, 50 substeps        (constant grid, N up)
-# - weak_scaling:   active PPC ~= 8.492, G=32..192, 50 substeps  (constant PPC, N up)
+# - particle_count: G=128, N=1M..10M, 5 substeps        (constant grid, N up)
+# - weak_scaling:   active PPC ~= 9.31, G derived from N, 5 substeps  (constant PPC, N up)
 
 # Tests
 pixi run test
@@ -251,7 +249,7 @@ pixi run sim    # smoke-test
 - **Adding a new cuTile-in-JAX kernel:** put the cuTile kernel + `cutile_call` bridge in a dedicated module under `src/mpm_jax/p2g/cutile/`, add a backend implementation under `src/mpm_jax/p2g/backends/`, and decorate it with `hydra_zen.store(..., group="backend")`.
 - Constitutive models are Hydra-instantiated (`material.elasticity._target_`); the sticky floor boundary is fixed in `solver.py`.
 - **No `block_until_ready` inside the timed region when `render.enabled=false`.** Timing-only runs dispatch all frames back-to-back and sync exactly once after the loop; elapsed/num_frames is the average. Per-stage breakdown comes from `profile_nsight.py`, not from `simulate.py`'s output.
-- `simulate.py` calls `solver.warmup()` before entering its profiled solve range. The measured jitted frame loop is wrapped with NVTX (`mpm_cudajax@<backend>_solve`). `sim=benchmark` is one frame with 50 substeps, and cuTile kernels are named `cutile_v1_p2g_kernel...` / `cutile_v3_p2g_kernel...` in Nsight Compute.
+- `simulate.py` calls `solver.warmup()` before entering its profiled solve range. The measured jitted frame loop is wrapped with NVTX (`mpm_cudajax@<backend>_solve`). `sim=benchmark` is one frame with 5 substeps, disables rendering by default, and the cuTile kernel is named `cutile_p2g_kernel...` in Nsight Compute.
 - `profile_nsight.py` profiles the warmed custom CUDA/cuTile P2G scatter path directly:
   solver construction and backend `prepare()` run outside the annotated region,
   then the jitted scatter call is annotated as `<backend>_p2g`.

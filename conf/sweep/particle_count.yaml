@@ -1,5 +1,5 @@
 # @package _global_
-# Constant grid (G=96), particle count up. N is swept directly via
+# Constant grid (benchmark G=128), particle count up. N is swept directly via
 # hydra.sweeper.params; no per-point yaml needed.
 defaults:
     - /plot@plots.time: loglog
@@ -10,10 +10,7 @@ defaults:
 hydra:
     sweeper:
         params:
-            sim.n_particles: 1000000,2000000,5000000,10000000,25000000
-
-sim:
-    num_grids: 96
+            sim.n_particles: 1000000,2000000,5000000,10000000
 
 tag: sweep_particle_count
 
