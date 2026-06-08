@@ -1,15 +1,15 @@
 # Standard high-performance benchmark configuration used by the current
-# profiling suite: 10M particles in [0.1, 0.9]^3 over a 96^3 grid
-# (dx ~= 1.04e-2), about 77^3 active cells and ~22 particles per active cell.
+# profiling suite: 10M particles in [0.1, 0.9]^3 over a 128^3 grid
+# (dx ~= 7.8e-3), about 102^3 active cells and ~9.5 particles per active cell.
 #
 #   pixi run python simulate.py -cn config sim=benchmark \
 #       backend=cuda_v3 material=jelly render.enabled=false
 num_frames: 1
-steps_per_frame: 50
+steps_per_frame: 10
 n_particles: 10000000
 initial_velocity: [0.0, 0.0, 0.0]
-num_grids: 96
-dt: 5.0e-5 # CFL-safe for the jelly material at this grid resolution.
+num_grids: 128 # even & divisible by the super-cell width (4); ~9.5 ppc at 10M
+dt: 5.0e-5 # CFL: c=sqrt(E/rho)~45 m/s, dx~=7.8e-3 -> dt_max~1.7e-4; 5e-5 is safe
 gravity: [0.0, 0.0, -9.8]
 rho: 1000.0
 clip_bound: 0.5

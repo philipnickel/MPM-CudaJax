@@ -11,6 +11,7 @@ src/mpm_jax/cuda/_p2g_ffi*.so
 output/
 .pytest_cache/
 .jax_cache/
+.mps/
 
 multirun/
 outputs/

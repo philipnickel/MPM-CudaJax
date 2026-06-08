@@ -101,6 +101,13 @@ def _write_metrics(run_dir, metrics):
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig):
+    # MPS thread-percentage clamp is applied by the caller via the env var
+    # CUDA_MPS_ACTIVE_THREAD_PERCENTAGE (see run_sm_scaling.sh); this is only
+    # the recorded value, surfaced in metrics for the strong-scaling x-axis.
+    mps_pct = cfg.get("mps_thread_percent")
+    if mps_pct is not None:
+        logger.info("mps_thread_percent=%d", int(mps_pct))
+
     run_dir = os.path.abspath(HydraConfig.get().runtime.output_dir)
     render_enabled = bool(cfg.render.get("enabled", True))
 
@@ -139,6 +146,7 @@ def main(cfg: DictConfig):
 
     metrics = solver.metrics(elapsed)
     metrics["tag"] = cfg.get("tag")
+    metrics["mps_thread_percent"] = cfg.get("mps_thread_percent")
     metrics["render_enabled"] = render_enabled
     metrics["gpu_kind"] = _slugify(metrics["gpu_type"])
     hydra_cfg = HydraConfig.get()

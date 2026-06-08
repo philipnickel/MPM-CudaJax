@@ -1,0 +1,43 @@
+# @package _global_
+# Strong scaling vs SM% via CUDA MPS. Fixed N=10M, G=128 (~9.3 active PPC);
+# backends are swept in-process (inherited from sweep.yaml). The MPS axis can't
+# be swept in one process — CUDA reads CUDA_MPS_ACTIVE_THREAD_PERCENTAGE once at
+# context creation — so `run_sm_scaling.sh` runs this config once per percentage.
+# The sweep dir is STATIC (no timestamp) so every percentage aggregates into one
+# place and the ScalingPlotCallback renders the combined result.
+defaults:
+    - /plot@plots.time: loglog
+    - /plot@plots.throughput: loglog
+    - /plot@plots.speedup: speedup
+    - _self_
+
+hydra:
+    sweep:
+        dir: outputs/sweeps/${gpu_kind:}/sm_scaling
+        subdir: ${hydra.job.num}_${hydra.job.override_dirname}
+
+sim:
+    n_particles: 10000000
+
+tag: sweep_sm_scaling
+
+plots:
+    time:
+        x: mps_thread_percent
+        xlabel: "MPS thread %"
+        y: ms_per_step
+        ylabel: ms / substep
+        title: "Time per step (fixed N, G)"
+        filename: ms_per_substep.png
+    throughput:
+        x: mps_thread_percent
+        xlabel: "MPS thread %"
+        y: particles_per_sec
+        ylabel: particles / second
+        title: "Particle Throughput (fixed N, G)"
+        filename: particles_per_sec.png
+    speedup:
+        x: mps_thread_percent
+        xlabel: "MPS thread %"
+        title: "Speedup over Jax Baseline (fixed N, G)"
+        filename: speedup_vs_jax.png
