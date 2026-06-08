@@ -4,7 +4,7 @@ One Hydra job profiles one backend variant. Sweep across backends / particle
 counts with Hydra multirun, exactly like ``simulate.py``::
 
     pixi run python profile_nsight.py -cn nsight_profile -m \
-        backend=cuda_v1,cuda_v2,cuda_v3,cutile_v1,cutile_v3
+        backend=cuda_v1,cuda_v2,cuda_v3,cutile_v1,CuTile
 
 Each job calls ``ProfileResults.to_dataframe()``, writes that processed
 ``nsight-python`` metric-row DataFrame to ``nsight_metrics.parquet`` in its

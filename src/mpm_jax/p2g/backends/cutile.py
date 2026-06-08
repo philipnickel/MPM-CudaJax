@@ -37,15 +37,15 @@ class CutileV1Backend(P2GBackend):
         )
 
 
-@store(name="cutile_v3", group="backend", num_grids="${sim.num_grids}")
-class CutileV3Backend(P2GBackend):
+@store(name="CuTile", group="backend", num_grids="${sim.num_grids}")
+class CuTileBackend(P2GBackend):
     """cuTile one-home-cell scatter with a locally reduced 27-node stencil."""
 
-    name = "cutile_v3"
+    name = "CuTile"
 
     def __init__(self, num_grids=None):
         cutile = _cutile_module()
-        self.kernel = cutile.cutile_p2g_v3
+        self.kernel = cutile.cutile_p2g
         super().__init__(num_grids=num_grids)
 
     def prepare(self, params, state, stress):

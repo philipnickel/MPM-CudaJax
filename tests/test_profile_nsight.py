@@ -48,7 +48,7 @@ def test_backend_choices_come_from_registered_hydra_configs():
         "cuda_v2",
         "cuda_v3",
         "cutile_v1",
-        "cutile_v3",
+        "CuTile",
     }
 
 

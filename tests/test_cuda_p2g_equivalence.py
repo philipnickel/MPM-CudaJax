@@ -13,7 +13,7 @@ from mpm_jax.p2g.backends import (
     CudaV2Backend,
     CudaV3Backend,
     CutileV1Backend,
-    CutileV3Backend,
+    CuTileBackend,
     JaxBackend,
 )
 from mpm_jax.p2g.cuda.p2g_cuda import (
@@ -163,7 +163,7 @@ def test_cutile_p2g_matches_jax_scan():
 
     for backend in (
         CutileV1Backend(params.num_grids),
-        CutileV3Backend(params.num_grids),
+        CuTileBackend(params.num_grids),
     ):
         grid_mv, grid_m = _p2g_output(backend, params, state, stress)
 

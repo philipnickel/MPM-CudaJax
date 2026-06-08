@@ -102,7 +102,7 @@ pixi run python simulate.py backend=jax                              # JAX/XLA b
 pixi run python simulate.py backend=cuda_v1 material=jelly
 pixi run python simulate.py backend=cuda_v2 material=jelly            # Morton-sorted warp-shuffle coalescing
 pixi run python simulate.py backend=cuda_v3 material=jelly            # super-cell grid tile
-pixi run python simulate.py backend=cutile_v3 material=jelly sim=benchmark render.enabled=false  # cuTile (tiled model)
+pixi run python simulate.py backend=CuTile material=jelly sim=benchmark render.enabled=false  # cuTile (tiled model)
 
 # Override sim params
 pixi run python simulate.py sim.n_particles=1000000 sim.num_grids=64
@@ -117,7 +117,7 @@ pixi run python simulate.py sim.n_particles=1000000 sim.num_grids=64
 | `cuda_v2` | CUDA Morton-sorted warp-shuffle coalesced P2G + JAX baseline G2P. |
 | `cuda_v3` | CUDA super-cell-owned grid tile P2G + JAX baseline G2P. |
 | `cutile_v1` | cuTile direct 27-stencil scatter comparison backend. |
-| `cutile_v3` | cuTile home-cell tiled P2G with local 27-node reduction + JAX baseline G2P. Requires `cuda-tile`. |
+| `CuTile` | cuTile home-cell tiled P2G with local 27-node reduction + JAX baseline G2P. Requires `cuda-tile`. |
 
 ## Architecture
 
@@ -219,7 +219,7 @@ jitted scatter once, then profiles the warmed P2G scatter call:
 
 ```bash
 pixi run python profile_nsight.py -cn nsight_profile \
-    backend=cutile_v3 sim.n_particles=4096
+    backend=CuTile sim.n_particles=4096
 ```
 
 `conf/nsight_metrics/` owns the direct NCU metric presets passed to
@@ -278,14 +278,14 @@ enabled, and set Import Source to yes when you want source pages:
 ```text
 Application Executable: /root/MPM-CudaJax/.pixi/envs/default/bin/python
 Working Directory:      /root/MPM-CudaJax
-Arguments:              simulate.py sim=benchmark backend=cutile_v3 render.enabled=false
+Arguments:              simulate.py sim=benchmark backend=CuTile render.enabled=false
 ```
 
 The `sim=benchmark` preset is one frame with 50 substeps, so the measured solve
 range is the jitted frame containing the configured substep loop. In the API
-Stream, use **Run to Next Range Start** to land on the `cutile_v3_solve` NVTX
+Stream, use **Run to Next Range Start** to land on the `CuTile_solve` NVTX
 range, then **Run to Next Kernel** and **Profile Kernel**. The cuTile kernel names show up as
-`cutile_v1_p2g_kernel...` or `cutile_v3_p2g_kernel...`; earlier kernels in the
+`cutile_v1_p2g_kernel...` or `cutile_p2g_kernel...`; earlier kernels in the
 same solve range are JAX/XLA helper kernels.
 The GUI environment editor can stay empty; Pixi owns the runtime environment.
 
@@ -296,7 +296,7 @@ the viewer. There is a baked-in `conf/trace.yaml`: the standard `sim=benchmark`
 preset shortened to 3 substeps x 2 frames, with profiling on and rendering off.
 
 ```bash
-pixi run python simulate.py -cn trace backend=cutile_v3        # one backend
+pixi run python simulate.py -cn trace backend=CuTile        # one backend
 pixi run python simulate.py -cn trace -m backend=jax,cuda_v3   # several
 ```
 
@@ -324,7 +324,7 @@ Hydra config groups in `conf/`:
 |---|---|---|
 | `material` | `jelly` (default) | Constitutive model |
 | `sim` | `default` | n_particles, num_grids, dt, BCs, ... |
-| `backend` | `jax` (default), `cuda_v1`, `cuda_v2`, `cuda_v3`, `cutile_v1`, `cutile_v3` | P2G implementation (G2P shared) |
+| `backend` | `jax` (default), `cuda_v1`, `cuda_v2`, `cuda_v3`, `cutile_v1`, `CuTile` | P2G implementation (G2P shared) |
 
 Top-level fields: `tag`, `render`. All overridable from CLI:
 

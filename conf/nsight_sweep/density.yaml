@@ -4,7 +4,7 @@ hydra:
   mode: MULTIRUN
   sweeper:
     params:
-      backend: cuda_v1,cuda_v2,cuda_v3,cutile_v1,cutile_v3
+      backend: cuda_v1,cuda_v2,cuda_v3,cutile_v1,CuTile
       sim.num_grids: 64,84,112,148,196
 
 sim:
