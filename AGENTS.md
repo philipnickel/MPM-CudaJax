@@ -40,7 +40,7 @@ The main entry points are:
 - Prefer `pixi run test` for the full test suite and plain `pixi run ...` for
   GPU/CUDA/cuTile runs. The default Pixi environment is the GPU environment.
 - CUDA kernels are built as an importable nanobind extension through
-  scikit-build-core and CMake during `pixi install`.
+  scikit-build-core and CMake during `pixi install`; `nvcc` is required.
 - Kernel selection is Hydra-target-driven. Backend implementation modules under
   `src/mpm_jax/p2g/backends/` register their own Hydra config-group choices via
   hydra-zen; do not add dispatch logic to `simulate.py`.

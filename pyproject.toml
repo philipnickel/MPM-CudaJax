@@ -30,8 +30,8 @@ build-dir = "build/{wheel_tag}"
 wheel.packages = ["src/mpm_jax"]
 editable.rebuild = true
 editable.verbose = false
-# CUDA build is best-effort: when nvcc is missing CMake `return()`s and the
-# wheel installs cleanly without kernels.
+# CUDA is required by the default Pixi environment; CMake fails early if the
+# CUDA compiler is unavailable.
 cmake.build-type = "Release"
 
 [tool.pytest.ini_options]
