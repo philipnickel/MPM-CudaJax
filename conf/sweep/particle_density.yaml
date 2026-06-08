@@ -1,18 +1,12 @@
 # @package _global_
-# Constant N=20M, grid resolution up. G is swept directly.
+# Constant N=20M, grid resolution up. Swept axis values + fixed N live in
+# conf/scaling/density.yaml (shared with the NCU sweep).
 defaults:
+    - /scaling: density
     - /plot@plots.time: loglog
     - /plot@plots.throughput: loglog
     - /plot@plots.speedup: speedup
     - _self_
-
-hydra:
-    sweeper:
-        params:
-            sim.num_grids: 64,84,112,148,196
-
-sim:
-    n_particles: 20000000
 
 tag: sweep_particle_density
 

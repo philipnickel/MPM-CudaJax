@@ -1,13 +1,16 @@
 # @package _global_
-# Weak scaling at fixed active-cell particles per cell.
+# Weak scaling at fixed active-cell particles per cell. Swept axis values + grid
+# derivation live in conf/scaling/weak.yaml (shared with the timing sweep).
+# _self_ first keeps the backend sweep axis ahead of the shared sim axis, so
+# multirun job indexing and output dirnames are unchanged.
+defaults:
+  - _self_
+  - /scaling: weak
+
 hydra:
   mode: MULTIRUN
   sweeper:
     params:
       backend: cuda_v1,cuda_v2,cuda_v3,CuTile
-      sim.n_particles: 250000,500000,1000000,5000000,10000000,15000000,20000000,25000000,30000000
-
-sim:
-  num_grids: ${ppc_grid:${sim.n_particles}}
 
 tag: nsight_weak

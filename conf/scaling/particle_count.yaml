@@ -1,0 +1,8 @@
+# @package _global_
+# Scaling axis: fixed grid (benchmark G=128), growing particle count.
+# Single source of the swept particle-count list, shared by the timing
+# (conf/sweep) and NCU (conf/nsight_sweep) wrappers.
+hydra:
+    sweeper:
+        params:
+            sim.n_particles: 250000,500000,1000000,5000000,10000000,15000000,20000000,25000000,30000000

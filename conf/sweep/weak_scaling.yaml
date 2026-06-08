@@ -1,19 +1,12 @@
 # @package _global_
-# Constant active PPC (~9.3), particle count up. G is derived from the swept N
-# via the ${ppc_grid:N} resolver — no per-point yaml needed.
+# Constant active PPC (~9.3), particle count up. Swept axis values + grid
+# derivation live in conf/scaling/weak.yaml (shared with the NCU sweep).
 defaults:
+    - /scaling: weak
     - /plot@plots.time: loglog
     - /plot@plots.throughput: loglog
     - /plot@plots.speedup: speedup
     - _self_
-
-hydra:
-    sweeper:
-        params:
-            sim.n_particles: 250000,500000,1000000,5000000,10000000,15000000,20000000,25000000,30000000
-
-sim:
-    num_grids: ${ppc_grid:${sim.n_particles}}
 
 tag: sweep_weak_scaling
 

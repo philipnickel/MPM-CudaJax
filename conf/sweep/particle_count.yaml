@@ -1,16 +1,12 @@
 # @package _global_
-# Constant grid (benchmark G=128), particle count up. N is swept directly via
-# hydra.sweeper.params; no per-point yaml needed.
+# Constant grid (benchmark G=128), particle count up. Swept axis values live in
+# conf/scaling/particle_count.yaml (shared with the NCU sweep).
 defaults:
+    - /scaling: particle_count
     - /plot@plots.time: loglog
     - /plot@plots.throughput: loglog
     - /plot@plots.speedup: speedup
     - _self_
-
-hydra:
-    sweeper:
-        params:
-            sim.n_particles: 250000,500000,1000000,5000000,10000000,15000000,20000000,25000000,30000000
 
 tag: sweep_particle_count
 
