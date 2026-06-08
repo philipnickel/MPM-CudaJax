@@ -20,10 +20,10 @@ hydra:
         scaling_plot:
             _target_: postprocessing.callbacks.ScalingPlotCallback
 
-# Sweeps need only enough substeps to average past warmup; 5 keeps the big-N
+# Sweeps need only enough substeps to average past warmup; 10 keeps the big-N
 # jobs short. Override on the CLI for longer runs.
 sim:
-    steps_per_frame: 5
+    steps_per_frame: 10
 
 render:
     enabled: false

@@ -76,9 +76,15 @@ def test_scaling_sweeps_use_backend_choices():
 
 
 _PARTICLE_COUNT_SEQUENCE = [
-    100_000, 200_000, 400_000, 500_000, 800_000, 1_000_000,
-    2_000_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000,
-    100_000_000, 125_000_000,
+    250_000,
+    500_000,
+    1_000_000,
+    5_000_000,
+    10_000_000,
+    15_000_000,
+    20_000_000,
+    25_000_000,
+    30_000_000,
 ]
 
 
@@ -89,26 +95,22 @@ def _axis_ints(cfg, key: str) -> list[int]:
 def test_particle_count_sweep_uses_canonical_n_subset_at_fixed_g128():
     cfg = _compose_sweep("particle_count")
     ns = _axis_ints(cfg, "sim.n_particles")
-    assert ns
-    assert set(ns).issubset(_PARTICLE_COUNT_SEQUENCE)
-    assert ns == sorted(ns)
+    assert ns == _PARTICLE_COUNT_SEQUENCE
     assert int(cfg.sim.num_grids) == 128
 
 
 def test_weak_scaling_sweep_keeps_active_ppc_near_target():
     cfg = _compose_sweep("weak_scaling")
     ns = _axis_ints(cfg, "sim.n_particles")
-    assert ns
-    assert set(ns).issubset(_PARTICLE_COUNT_SEQUENCE)
-    assert ns == sorted(ns)
-    # G is the ${ppc_grid:N} resolver applied to each N. Tolerate ~10% because
-    # G is rounded to a multiple of 4 to satisfy super-cell-tiled backends.
+    assert ns == _PARTICLE_COUNT_SEQUENCE
+    # G is the ${ppc_grid:N} resolver applied to each N. Tolerate ~15% because
+    # small-N points are rounded to a multiple of 4 for super-cell-tiled backends.
     target_ppc = 10000000 / (0.8**3 * 128**3)
     for n in ns:
         g = _resolvers._ppc_grid(n)
         assert g > 0 and g % 4 == 0
         ppc = n / (0.8**3 * g**3)
-        assert abs(ppc - target_ppc) / target_ppc < 0.10
+        assert abs(ppc - target_ppc) / target_ppc < 0.15
 
 
 def test_sweep_axis_tags_match_plot_sweeps_specs():
@@ -160,6 +162,7 @@ def test_benchmark_sim_disables_render_by_default():
         cfg = compose(config_name="config", overrides=["sim=benchmark"])
 
     assert cfg.sim.n_particles == 10_000_000
+    assert cfg.sim.steps_per_frame == 10
     assert cfg.render.enabled is False
 
 

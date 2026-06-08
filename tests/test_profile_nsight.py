@@ -11,6 +11,17 @@ import mpm_jax.p2g.backends as backend_configs
 
 
 CONF_DIR = Path(__file__).resolve().parents[1] / "conf"
+PARTICLE_COUNT_AXIS = [
+    250_000,
+    500_000,
+    1_000_000,
+    5_000_000,
+    10_000_000,
+    15_000_000,
+    20_000_000,
+    25_000_000,
+    30_000_000,
+]
 
 
 def _compose_config(config_name="config", overrides=None):
@@ -152,10 +163,11 @@ def test_nsight_sweep_configs_exclude_jax_and_use_direct_axes():
         if expected:
             if "sweep_axis" in expected:
                 sweep_values = params[expected["sweep_axis"]].split(",")
-                assert sweep_values
-                assert [int(v) for v in sweep_values] == sorted(
-                    int(v) for v in sweep_values
-                )
+                values = [int(v) for v in sweep_values]
+                if expected["sweep_axis"] == "sim.n_particles":
+                    assert values == PARTICLE_COUNT_AXIS
+                else:
+                    assert values == sorted(values)
             key, value = expected["fixed"]
             if isinstance(value, str):
                 raw_cfg = OmegaConf.to_container(cfg, resolve=False)

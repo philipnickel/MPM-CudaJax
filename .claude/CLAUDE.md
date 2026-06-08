@@ -22,7 +22,7 @@ This is a benchmarking/investigation project; the code is shaped by the followin
 
 All current performance comparisons use one fixed, well-resolved configuration so numbers are comparable across variants and architectures **and the simulation stays numerically stable** — under-resolution (too few particles per cell) makes MLS-MPM go unstable, which corrupts wall-clock timings (the falling material explodes, particles clamp to the bounds and cluster, and the atomic-scatter P2G becomes contention-bound; see below).
 
-- **Current profiling operating point:** `G=128`, `N=10M`, one frame with 5 substeps. Particles fill `[0.1, 0.9]^3`, which is about 102³ active cells and ~9.31 particles per active cell.
+- **Current profiling operating point:** `G=128`, `N=10M`, one frame with 10 substeps. Particles fill `[0.1, 0.9]^3`, which is about 102³ active cells and ~9.31 particles per active cell.
 - **∆x = 7.8125×10⁻³** (`dx = 1 / sim.num_grids`).
 - **Particles uniformly sampled in [0.1, 0.9]³** → `sim.center = [0.5, 0.5, 0.5]`, region side 0.8.
 - **APIC transfer** (codebase default) + **StVK elastic jelly** (`material=jelly`).
@@ -203,7 +203,7 @@ pixi run nsight-sweep-sm
 
 # Interactive NCU GUI: launch through Pixi so runtime env vars are inherited.
 # simulate.py warms once, then marks the measured jitted frame loop with NVTX.
-# sim=benchmark is one frame with 5 substeps for steady benchmark timing.
+# sim=benchmark is one frame with 10 substeps for steady benchmark timing.
 pixi run ncu-ui
 # In the GUI, use app: .pixi/envs/default/bin/python
 # args: simulate.py sim=benchmark backend=CuTile
@@ -219,9 +219,9 @@ pixi run sweep-sm                                  # CUDA MPS active-thread % sw
 pixi run plot-sweeps                               # write figures/sweeps/<gpu-kind>/
 
 # Sweep definitions (sweep group choices in conf/sweep/)
-# - particle_count: G=128, N=1M..10M, 5 substeps        (constant grid, N up)
-# - weak_scaling:   active PPC ~= 9.31, G derived from N, 5 substeps  (constant PPC, N up)
-# - sm_scaling:     G=128, N=10M, shell loop over CUDA MPS active-thread %
+# - particle_count: G=128, N=250k..30M, 10 substeps       (constant grid, N up)
+# - weak_scaling:   active PPC ~= 9.31, G from N=250k..30M, 10 substeps
+# - sm_scaling:     G=128, N=10M, 10 substeps, shell loop over CUDA MPS active-thread %
 
 # Tests
 pixi run test
@@ -256,7 +256,7 @@ pixi run sim    # smoke-test
 - **Adding a new cuTile-in-JAX kernel:** put the cuTile kernel + `cutile_call` bridge in a dedicated module under `src/mpm_jax/p2g/cutile/`, add a backend implementation under `src/mpm_jax/p2g/backends/`, and decorate it with `hydra_zen.store(..., group="backend")`.
 - Constitutive models are Hydra-instantiated (`material.elasticity._target_`); the sticky floor boundary is fixed in `solver.py`.
 - **No `block_until_ready` inside the timed region when `render.enabled=false`.** Timing-only runs dispatch all frames back-to-back and sync exactly once after the loop; elapsed/num_frames is the average. Per-stage breakdown comes from `profile_nsight.py`, not from `simulate.py`'s output.
-- `simulate.py` calls `solver.warmup()` before entering its profiled solve range. The measured jitted frame loop is wrapped with NVTX (`mpm_cudajax@<backend>_solve`). `sim=benchmark` is one frame with 5 substeps, disables rendering by default, and the cuTile kernel is named `cutile_p2g_kernel...` in Nsight Compute.
+- `simulate.py` calls `solver.warmup()` before entering its profiled solve range. The measured jitted frame loop is wrapped with NVTX (`mpm_cudajax@<backend>_solve`). `sim=benchmark` is one frame with 10 substeps, disables rendering by default, and the cuTile kernel is named `cutile_p2g_kernel...` in Nsight Compute.
 - `profile_nsight.py` profiles the warmed custom CUDA/cuTile P2G scatter path directly:
   solver construction and backend `prepare()` run outside the annotated region,
   then the jitted scatter call is annotated as `<backend>_p2g`.

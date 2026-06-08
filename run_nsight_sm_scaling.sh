@@ -8,7 +8,7 @@
 # combined roofline trajectory.
 #
 #   pixi run nsight-sweep-sm
-#   MPS_PERCENTS="25 50 100" pixi run nsight-sweep-sm nsight_metrics=roofline nsight_plot=roofline_only
+#   MPS_PERCENTS="20 40 80" pixi run nsight-sweep-sm nsight_metrics=roofline nsight_plot=roofline_only
 #   pixi run nsight-sweep-sm backend=cuda_v3
 set -euo pipefail
 
@@ -50,7 +50,7 @@ if ! mps_up; then
     done
 fi
 
-PERCENTS="${MPS_PERCENTS:-10 25 50 75 100}"
+PERCENTS="${MPS_PERCENTS:-10 20 40 60 80 100}"
 for pct in $PERCENTS; do
     echo ">>> Nsight CUDA MPS active thread percentage: ${pct}%"
     CUDA_MPS_ACTIVE_THREAD_PERCENTAGE="$pct" \

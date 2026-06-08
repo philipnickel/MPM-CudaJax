@@ -646,13 +646,9 @@ def plot_roofline_scaling(
     """fp32 roofline trajectory plot.
 
     Every backend is a seaborn trajectory in HBM arithmetic intensity; roof
-    lines are annotated references and arrows show increasing scale."""
-    scale_label = scale_label or scale_col
+    lines are annotated references."""
     import numpy as np
 
-    backends = [b for b in BACKEND_ORDER if b in set(df["backend"])] or sorted(
-        df["backend"].unique()
-    )
     # Ceilings are per-chip device constants; take the median over the sweep for
     # robustness against noisy rows.
     peak_c = float(df["peak_compute_gflops"].median())
@@ -699,35 +695,6 @@ def plot_roofline_scaling(
             ax=ax,
         )
 
-    for b in backends:
-        sub = df[df["backend"] == b].sort_values(scale_col)
-        y = sub["gflops_per_s"].to_numpy()
-        if len(y) == 0:
-            continue
-        for lvl, _mark in MEMORY_LEVELS:
-            x = sub[f"ai_{lvl}_flop_per_byte"].to_numpy()
-            if len(x) >= 2:
-                color = MEMORY_COLOR[lvl]
-                ax.annotate(
-                    "",
-                    xy=(x[-1], y[-1]),
-                    xytext=(x[-2], y[-2]),
-                    arrowprops=dict(
-                        arrowstyle="-|>",
-                        color=color,
-                        lw=1.4,
-                        alpha=0.9,
-                        shrinkA=0,
-                        shrinkB=0,
-                    ),
-                    zorder=4,
-                )
-
-    lo = df[scale_col].min()
-    hi = df[scale_col].max()
-    fmt = (lambda s: f"{s / 1e6:g}M") if scale_col == "n_particles" else (
-        lambda s: f"{int(s)}"
-    )
     if not roof_long.empty:
         sns.move_legend(
             ax,
@@ -744,10 +711,9 @@ def plot_roofline_scaling(
         ax,
         "Hierarchical fp32 roofline trajectory — P2G scatter",
         gpu_label,
-        subtitle=f"arrow = increasing {scale_label} ({fmt(lo)} → {fmt(hi)})",
     )
     ax.grid(True, which="both", alpha=0.2)
-    fig.tight_layout(rect=[0, 0, 1, 0.9])
+    fig.tight_layout(rect=[0, 0, 1, 0.92])
     _annotate_roofs(ax, ai, peak_c, roof_specs)
     fig.savefig(out, dpi=140)
     plt.close(fig)

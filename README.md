@@ -163,7 +163,7 @@ pixi run python simulate.py -cn sweep sweep=weak_scaling    # constant active PP
 pixi run sweep-sm                                           # CUDA MPS active-thread % sweep
 ```
 
-The benchmark preset uses one frame with 5 substeps. `particle_count` uses
+The benchmark preset uses one frame with 10 substeps. `particle_count` uses
 fixed `G=128` and the configured particle-count axis. `weak_scaling` keeps
 active-cell PPC near the benchmark density (`particles_per_active_cell ~=
 9.31`) while scaling both `G` and `N`.
@@ -263,8 +263,8 @@ Python will fail if more than one non-ignored kernel remains unless
 
 **Scaling roofline trajectories.** Add a scale axis to the multirun and
 `nsight_plots.py` also emits `roofline_scaling.png` — a hierarchical roofline where
-each backend is a connected L1/L2/HBM trajectory with a trend arrow in the
-direction of increasing scale. The axis is auto-detected from what varies:
+each backend is a connected L1/L2/HBM trajectory. The axis is auto-detected
+from what varies:
 
 ```bash
 # Load sweep (throughput vs problem size): fixed grid, growing particle count
@@ -296,7 +296,7 @@ Working Directory:      /root/MPM-CudaJax
 Arguments:              simulate.py sim=benchmark backend=CuTile
 ```
 
-The `sim=benchmark` preset is one frame with 5 substeps, so the measured solve
+The `sim=benchmark` preset is one frame with 10 substeps, so the measured solve
 range is the jitted frame containing the configured substep loop. In the API
 Stream, use **Run to Next Range Start** to land on the `CuTile_solve` NVTX
 range, then **Run to Next Kernel** and **Profile Kernel**. The cuTile kernel names show up as

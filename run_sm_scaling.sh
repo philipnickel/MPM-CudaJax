@@ -6,7 +6,7 @@
 # context, so a single Hydra multirun cannot sweep this axis inside one process.
 #
 #   pixi run sweep-sm
-#   MPS_PERCENTS="20 100" pixi run sweep-sm
+#   MPS_PERCENTS="20 40 80" pixi run sweep-sm
 #   pixi run sweep-sm backend=CuTile
 set -euo pipefail
 
@@ -38,7 +38,7 @@ if ! mps_up; then
     done
 fi
 
-PERCENTS="${MPS_PERCENTS:-10 25 50 75 100}"
+PERCENTS="${MPS_PERCENTS:-10 20 40 60 80 100}"
 for pct in $PERCENTS; do
     echo ">>> CUDA MPS active thread percentage: ${pct}%"
     CUDA_MPS_ACTIVE_THREAD_PERCENTAGE="$pct" \

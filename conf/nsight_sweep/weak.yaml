@@ -5,7 +5,7 @@ hydra:
   sweeper:
     params:
       backend: cuda_v1,cuda_v2,cuda_v3,CuTile
-      sim.n_particles: 1000000,2000000,5000000,10000000,25000000
+      sim.n_particles: 250000,500000,1000000,5000000,10000000,15000000,20000000,25000000,30000000
 
 sim:
   num_grids: ${ppc_grid:${sim.n_particles}}
