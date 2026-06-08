@@ -18,12 +18,22 @@ cd "$ROOT_DIR"
 export CUDA_MPS_PIPE_DIRECTORY="${CUDA_MPS_PIPE_DIRECTORY:-$ROOT_DIR/.mps/pipe}"
 export CUDA_MPS_LOG_DIRECTORY="${CUDA_MPS_LOG_DIRECTORY:-$ROOT_DIR/.mps/log}"
 
+REAL_NCU="$(command -v ncu)"
+NCU_WRAPPER_DIR="$(mktemp -d)"
+cat >"$NCU_WRAPPER_DIR/ncu" <<EOF
+#!/usr/bin/env bash
+exec "$REAL_NCU" --mps=control "\$@"
+EOF
+chmod +x "$NCU_WRAPPER_DIR/ncu"
+export PATH="$NCU_WRAPPER_DIR:$PATH"
+
 mps_up() {
     echo get_server_list | nvidia-cuda-mps-control >/dev/null 2>&1
 }
 
 STARTED_MPS=0
 cleanup() {
+    rm -rf "$NCU_WRAPPER_DIR"
     if [ "$STARTED_MPS" = "1" ]; then
         echo quit | nvidia-cuda-mps-control >/dev/null 2>&1 || true
     fi
