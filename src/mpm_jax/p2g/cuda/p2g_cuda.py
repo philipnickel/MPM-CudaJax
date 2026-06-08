@@ -117,9 +117,10 @@ class CudaV3P2G(CudaP2GKernel):
         )
 
 
-# cuda_v3 compiles fixed SC template instantiations; config can select these.
-SUPPORTED_SC = (2, 4, 8)  # template instantiations compiled into the extension
-V3_SUPER_CELL_WIDTH = 4  # default super-cell width
+# cuda_v3 compiles a fixed set of super-cell-width template instantiations;
+# config selects among these.
+SUPPORTED_SC = (2, 4, 8)
+V3_SUPER_CELL_WIDTH = 4
 
 
 def _p2g_ffi_call(

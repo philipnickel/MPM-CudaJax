@@ -153,8 +153,7 @@ class MPMSolver:
     def warmup(self, n=1):
         """Run ``n`` throwaway frames to trigger JIT compilation, then reset.
 
-        A standalone step the caller invokes before timing/tracing — keeping it
-        out of :meth:`run` means a profiler trace wrapping ``run`` never
+        Kept out of :meth:`run` so a profiler trace wrapping ``run`` never
         captures one-time compilation.
         """
         for _ in range(max(1, int(n))):

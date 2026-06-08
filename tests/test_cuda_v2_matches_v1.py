@@ -11,34 +11,17 @@ Skipped when the native CUDA extension isn't built or there's no GPU.
 import jax
 import jax.numpy as jnp
 import numpy as np
-import pytest
 from omegaconf import OmegaConf
 
 from mpm_jax.p2g.backends import CudaV1Backend, CudaV2Backend
 from mpm_jax.p2g.cuda.p2g_cuda import CudaV1P2G, CudaV2P2G
 from mpm_jax.types import MPMState, MPMParams
-
-
-def _has_cuda() -> bool:
-    try:
-        return jax.default_backend() == "gpu"
-    except Exception:
-        return False
-
-
-def _require_kernels(*kernel_types):
-    if not _has_cuda():
-        pytest.skip("cuda_v1 / cuda_v2 require a GPU backend")
-    try:
-        for kernel_type in kernel_types:
-            kernel_type()
-    except ImportError as exc:
-        pytest.skip(f"cuda_v1 / cuda_v2 native extension not built: {exc}")
+from tests.cuda_helpers import require_kernels
 
 
 def test_cuda_v2_matches_v1():
     """Compare scatter output directly; cuda_v2 changes particle order."""
-    _require_kernels(CudaV1P2G, CudaV2P2G)
+    require_kernels(CudaV1P2G, CudaV2P2G, label="cuda_v1 / cuda_v2")
     n = 2000
     num_grids = 16
     rng = np.random.RandomState(0)

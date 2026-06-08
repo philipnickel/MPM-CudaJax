@@ -132,21 +132,17 @@ def test_nsight_sweep_configs_exclude_jax_and_use_direct_axes():
         "particle_count": {
             "sweep_axis": "sim.n_particles",
             "fixed": ("sim.num_grids", 128),
-            "tag": "nsight_particle_count",
         },
         "density": {
             "sweep_axis": "sim.num_grids",
             "fixed": ("sim.n_particles", 20_000_000),
-            "tag": "nsight_density",
         },
         "weak": {
             "sweep_axis": "sim.n_particles",
             "fixed": ("sim.num_grids", "${ppc_grid:${sim.n_particles}}"),
-            "tag": "nsight_weak",
         },
         "sm_scaling": {
             "fixed": ("sim.num_grids", 128),
-            "tag": "nsight_sm_scaling",
         },
     }
     for sweep, expected in expectations.items():
@@ -176,7 +172,6 @@ def test_nsight_sweep_configs_exclude_jax_and_use_direct_axes():
                 assert current == value
             else:
                 assert OmegaConf.select(cfg, key) == value
-            assert cfg.tag == expected["tag"]
             if sweep == "sm_scaling":
                 hydra_cfg = OmegaConf.to_container(cfg, resolve=False)["hydra"]
                 assert hydra_cfg["sweep"]["dir"] == (
@@ -411,7 +406,7 @@ def test_nsight_gpu_label_falls_back_to_output_path():
 
 def test_results_dataframe_adds_config_metadata(tmp_path, monkeypatch):
     cfg = _compose_config("nsight_profile", overrides=["mps_thread_percent=50"])
-    monkeypatch.setattr(profile_nsight, "_current_gpu_type", lambda: "NVIDIA Test GPU")
+    monkeypatch.setattr(profile_nsight, "current_gpu_type", lambda: "NVIDIA Test GPU")
 
     class Results:
         def to_dataframe(self):

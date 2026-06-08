@@ -104,7 +104,6 @@ nvtx = "*"
 warp-lang = "==1.14.0"
 cuda-tile = { version = ">=1.4.0, <2", extras = ["tileiras"] }
 jax = { version = ">=0.10.1, <0.11", extras = ["cuda13"] }
-tensorboard = ">=2.20.0, <3"
 xprof = ">=2.22.1, <3"
 nsys-jax = { git = "https://github.com/NVIDIA/JAX-Toolbox.git", subdirectory = ".github/container/nsys_jax" }
 

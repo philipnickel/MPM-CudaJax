@@ -7,8 +7,6 @@ from __future__ import annotations
 
 import gc
 import logging
-import re
-import subprocess
 import time
 from collections.abc import Iterable
 from pathlib import Path
@@ -20,6 +18,7 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 
 import mpm_jax.p2g.backends as backend_configs
+import mpm_jax.resolvers  # noqa: F401 - registers OmegaConf resolvers (ppc_grid, gpu_kind)
 from mpm_jax.p2g.backends.common import P2GBackend
 from mpm_jax.solver import MPMSolver
 
@@ -50,33 +49,6 @@ TABLE_COLUMNS = [
     "num_grids",
     "steps_per_frame",
 ]
-
-
-def _slugify(value):
-    slug = re.sub(r"[^0-9A-Za-z]+", "_", str(value).strip().lower()).strip("_")
-    return slug or "unknown"
-
-
-def _current_gpu_kind():
-    try:
-        result = subprocess.run(
-            [
-                "nvidia-smi",
-                "--query-gpu=name",
-                "--format=csv,noheader,nounits",
-                "-i",
-                "0",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        return _slugify(result.stdout.splitlines()[0])
-    except Exception:
-        return "unknown"
-
-
-OmegaConf.register_new_resolver("gpu_kind", _current_gpu_kind, replace=True)
 
 
 def _task_overrides():

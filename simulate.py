@@ -3,7 +3,6 @@ import json
 import logging
 import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -49,40 +48,14 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 
 import mpm_jax.p2g.backends  # noqa: F401 - registers Hydra backend config choices
-import mpm_jax.resolvers  # noqa: F401 - registers OmegaConf resolvers (e.g. ppc_grid)
+import mpm_jax.resolvers  # noqa: F401 - registers OmegaConf resolvers (ppc_grid, gpu_kind)
 import postprocessing  # noqa: F401 - registers Hydra `plot` config group via hydra-zen
 from mpm_jax.rendering import render_warp_opengl
+from mpm_jax.resolvers import slugify
 from mpm_jax.solver import MPMSolver
 
 logger = logging.getLogger(__name__)
 NVTX_DOMAIN = "mpm_cudajax"
-
-
-def _slugify(value):
-    slug = re.sub(r"[^0-9A-Za-z]+", "_", str(value).strip().lower()).strip("_")
-    return slug or "unknown"
-
-
-def _current_gpu_kind():
-    try:
-        result = subprocess.run(
-            [
-                "nvidia-smi",
-                "--query-gpu=name",
-                "--format=csv,noheader,nounits",
-                "-i",
-                "0",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        return _slugify(result.stdout.splitlines()[0])
-    except Exception:
-        return "unknown"
-
-
-OmegaConf.register_new_resolver("gpu_kind", _current_gpu_kind, replace=True)
 
 
 def _analysis_csv_path(metrics):
@@ -147,7 +120,7 @@ def main(cfg: DictConfig):
             return solver.run(capture_frames=render_enabled)
 
     if profile_enabled:
-        # One shared trace root lets XProf compare labels side by side.
+        # A shared trace root lets XProf compare labels side by side.
         traces_root = os.path.join(hydra.utils.get_original_cwd(), "traces")
         run_label = profile_cfg.get("label") or solver.backend.name
         trace_dir = os.path.join(traces_root, run_label)
@@ -167,7 +140,7 @@ def main(cfg: DictConfig):
     metrics = solver.metrics(elapsed)
     metrics["tag"] = cfg.get("tag")
     metrics["render_enabled"] = render_enabled
-    metrics["gpu_kind"] = _slugify(metrics["gpu_type"])
+    metrics["gpu_kind"] = slugify(metrics["gpu_type"])
     metrics["mps_thread_percent"] = cfg.get("mps_thread_percent")
     hydra_cfg = HydraConfig.get()
     metrics["output_dir"] = run_dir

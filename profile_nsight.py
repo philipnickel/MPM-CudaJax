@@ -10,8 +10,6 @@ from __future__ import annotations
 import importlib
 import json
 import logging
-import re
-import subprocess
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -22,8 +20,9 @@ from hydra.core.hydra_config import HydraConfig
 from omegaconf import DictConfig, OmegaConf
 
 import mpm_jax.p2g.backends as backend_configs
-import mpm_jax.resolvers  # noqa: F401 - registers ${ppc_grid:N}
+import mpm_jax.resolvers  # noqa: F401 - registers OmegaConf resolvers (ppc_grid, gpu_kind)
 import nsight_metric_sets  # noqa: F401 - registers the nsight_metrics config group
+from mpm_jax.resolvers import current_gpu_type, slugify
 from mpm_jax.solver import MPMSolver
 
 logger = logging.getLogger(__name__)
@@ -44,44 +43,13 @@ _SCRIPT_NSIGHT_KEYS = {"analyze"}
 _NSIGHT_BACKEND_CHOICES = tuple(
     choice for choice in backend_configs.backend_choices() if choice != "jax"
 )
-# configs is derived from Hydra; metric derivation stays in postprocessing.
+# These keys are derived from Hydra; metric derivation stays in postprocessing.
 _UNSUPPORTED_ANALYZE_CONFIG_KEYS = {
     "configs",
     "derive_metric",
     "metric_preset",
     "metric_presets",
 }
-
-
-def _slugify(value):
-    slug = re.sub(r"[^0-9A-Za-z]+", "_", str(value).strip().lower()).strip("_")
-    return slug or "unknown"
-
-
-def _current_gpu_type():
-    try:
-        result = subprocess.run(
-            [
-                "nvidia-smi",
-                "--query-gpu=name",
-                "--format=csv,noheader,nounits",
-                "-i",
-                "0",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        return result.stdout.splitlines()[0].strip() or "unknown"
-    except Exception:
-        return "unknown"
-
-
-def _current_gpu_kind():
-    return _slugify(_current_gpu_type())
-
-
-OmegaConf.register_new_resolver("gpu_kind", _current_gpu_kind, replace=True)
 
 
 def _normalize_backend_choice(value) -> str:
@@ -259,14 +227,14 @@ def _nsight_analyze_kwargs(cfg: DictConfig, run_dir: Path, profile_config):
 
 
 def _config_metadata(cfg: DictConfig, run_dir: Path, backend_choice: str, target_name: str):
-    gpu_type = _current_gpu_type()
+    gpu_type = current_gpu_type()
     sim = OmegaConf.to_container(cfg.sim, resolve=True)
     sim_columns = pd.json_normalize({"sim": sim}, sep=".").iloc[0].to_dict()
     metadata = {
         "backend": backend_choice,
         "target": target_name,
         "gpu_type": gpu_type,
-        "gpu_kind": _slugify(gpu_type),
+        "gpu_kind": slugify(gpu_type),
         "mps_thread_percent": cfg.get("mps_thread_percent"),
         "hydra_output_dir": str(run_dir),
         "hydra_config": json.dumps(

@@ -10,14 +10,12 @@
 
 #include "p2g_common.cuh"
 
-// SC is a template parameter so tile dimensions stay static; the FFI handler
-// dispatches among the supported instantiations.
-
 namespace ffi = xla::ffi;
 
-// One block handles one super-cell bucket. Boundary stencils that fall outside
-// the shared tile fall back to global atomics.
-
+// One block handles one super-cell bucket. SC is a template parameter so the
+// tile dimensions stay static; the FFI handler dispatches among the supported
+// instantiations. Boundary stencils that spill outside the shared tile fall
+// back to global atomics.
 template <int SC>
 __global__ void p2g_v3_kernel(
     const float* __restrict__ x,
@@ -44,7 +42,7 @@ __global__ void p2g_v3_kernel(
     // Uniform early exit before any barrier; every thread sees the same super_id.
     if (n_particles == 0) return;
 
-    // Matches the JAX-side super-cell id.
+    // Decompose super_id to match the JAX-side super-cell id.
     int Si = super_id / (Gs * Gs);
     int Sj = (super_id / Gs) % Gs;
     int Sk = super_id % Gs;

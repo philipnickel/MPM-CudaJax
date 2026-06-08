@@ -5,5 +5,3 @@ hydra:
   sweeper:
     params:
       backend: cuda_v1,cuda_v2,cuda_v3,CuTile
-
-tag: nsight_single_point

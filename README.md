@@ -384,7 +384,7 @@ MPM-CudaJax/
 │   ├── material/            # jelly.yaml
 │   ├── sim/default.yaml
 │   ├── sweep.yaml          # sweep entry point + shared bits
-│   └── sweep/              # scale-axis config group: all, particle_count, ...
+│   └── sweep/              # scale-axis group: particle_count, weak_scaling, particle_density, sm_scaling
 └── src/
     └── mpm_jax/
         ├── types.py         # MPMState, MPMParams

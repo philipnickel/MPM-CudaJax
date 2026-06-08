@@ -21,6 +21,7 @@ from mpm_jax.p2g.cuda.p2g_cuda import (
     CudaV3P2G,
 )
 from mpm_jax.types import MPMState, MPMParams
+from tests.cuda_helpers import has_cuda, require_kernels
 
 
 def _optional_module(name):
@@ -33,25 +34,8 @@ def _optional_module(name):
 cuda_tile = _optional_module("cuda.tile")
 
 
-def _has_cuda() -> bool:
-    try:
-        return jax.default_backend() == "gpu"
-    except Exception:
-        return False
-
-
-def _require_cuda_kernels(*kernel_types):
-    if not _has_cuda():
-        pytest.skip("CUDA P2G kernels require a GPU backend")
-    try:
-        for kernel_type in kernel_types:
-            kernel_type()
-    except ImportError as exc:
-        pytest.skip(f"CUDA P2G kernels not built: {exc}")
-
-
 def _cutile_available() -> bool:
-    if not _has_cuda():
+    if not has_cuda():
         return False
     return cuda_tile is not None
 
@@ -101,7 +85,7 @@ def _p2g_output(backend, params, state, stress):
 
 
 def test_cuda_p2g_variants_match_jax_scan():
-    _require_cuda_kernels(
+    require_kernels(
         CudaV1P2G,
         CudaV2P2G,
         CudaV3P2G,
@@ -127,7 +111,7 @@ def test_cuda_p2g_variants_match_jax_scan():
 
 
 def test_cuda_v3_supercell_widths_match_jax_scan():
-    _require_cuda_kernels(CudaV3P2G)
+    require_kernels(CudaV3P2G)
     # Exercise every compiled cuda_v3 super-cell template.
     from mpm_jax.p2g.backends import CudaV3Backend
     from mpm_jax.p2g.cuda.p2g_cuda import SUPPORTED_SC

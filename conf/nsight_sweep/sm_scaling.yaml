@@ -19,5 +19,3 @@ hydra:
     callbacks:
         nsight_plot:
             scale_axis: mps_thread_percent
-
-tag: nsight_sm_scaling

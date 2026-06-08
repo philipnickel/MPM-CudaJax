@@ -20,12 +20,12 @@ __global__ void p2g_v2_kernel(
 ) {
     int pid = blockIdx.x * blockDim.x + threadIdx.x;
 
-    // All lanes must reach the warp intrinsics; inactive lanes use a sentinel
-    // key and zero contributions so they form a harmless peer group.
+    // All lanes must reach the warp intrinsics, so inactive lanes carry a
+    // sentinel key and zero contributions and form a harmless peer group.
     bool active = (pid < N);
     int lane = threadIdx.x & 31;
 
-    // Keep inactive lanes defined through the unguarded base/weight work.
+    // Zero-init so inactive lanes stay defined through the unguarded base/weight work.
     float px[3] = {0, 0, 0}, pv[3] = {0, 0, 0}, pC[9] = {0}, pS[9] = {0};
     if (active) {
         p2g_load_particle(x, v, C, stress, pid, px, pv, pC, pS);
