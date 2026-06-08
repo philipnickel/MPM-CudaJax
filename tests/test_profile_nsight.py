@@ -326,6 +326,59 @@ def test_render_roofline_from_nersc_2020_metrics(tmp_path):
     assert written[0].exists()
 
 
+def test_render_particle_roofline_with_null_mps_metadata(tmp_path):
+    import pandas as pd
+
+    metric_values = {
+        "sm__cycles_elapsed.avg": 1_000_000.0,
+        "sm__cycles_elapsed.avg.per_second": 1_000_000_000.0,
+        "sm__sass_thread_inst_executed_op_fadd_pred_on.sum": 1_000_000.0,
+        "sm__sass_thread_inst_executed_op_fmul_pred_on.sum": 1_000_000.0,
+        "sm__sass_thread_inst_executed_op_ffma_pred_on.sum": 1_000_000.0,
+        "l1tex__t_bytes.sum": 4_000_000.0,
+        "lts__t_bytes.sum": 2_000_000.0,
+        "dram__bytes.sum": 1_000_000.0,
+        "sm__sass_thread_inst_executed_op_ffma_pred_on.sum.peak_sustained": 10.0,
+        "l1tex__t_bytes.sum.peak_sustained": 8.0,
+        "l1tex__cycles_elapsed.avg.per_second": 1_000_000_000.0,
+        "lts__t_bytes.sum.peak_sustained": 4.0,
+        "lts__cycles_elapsed.avg.per_second": 1_000_000_000.0,
+        "dram__bytes.sum.peak_sustained": 2.0,
+        "dram__cycles_elapsed.avg.per_second": 1_000_000_000.0,
+    }
+    rows = []
+    for n_particles in [250_000, 500_000]:
+        for metric, value in metric_values.items():
+            rows.append(
+                {
+                    "backend": "cuda_v3",
+                    "target": "p2g",
+                    "mps_thread_percent": None,
+                    "n_particles": n_particles,
+                    "num_grids": 128,
+                    "Annotation": "cuda_v3_p2g",
+                    "Metric": metric,
+                    "AvgValue": value * n_particles / 250_000,
+                    "Kernel": "p2g",
+                }
+            )
+    path = tmp_path / "results.parquet"
+    pd.DataFrame(rows).to_parquet(path, index=False)
+
+    df = nsight_plots.load_dataframe(path)
+    assert nsight_plots._resolve_scale_axis(df)[0] == "n_particles"
+
+    written = render_nsight_figures(
+        path,
+        tmp_path / "figures",
+        plots=["roofline_scaling"],
+        style={"theme": "darkgrid", "context": "paper"},
+    )
+
+    assert [p.name for p in written] == ["roofline_scaling.png"]
+    assert written[0].exists()
+
+
 def test_render_nsight_figures_skips_missing_metric_plots(tmp_path):
     import pandas as pd
 

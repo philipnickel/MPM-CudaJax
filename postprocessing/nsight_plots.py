@@ -94,8 +94,18 @@ def _wide_metric_rows(df):
     if not {"Metric", "AvgValue"}.issubset(df.columns):
         return df
     index_cols = [c for c in df.columns if c not in _NSIGHT_VALUE_COLUMNS]
+    # ``pivot_table`` drops groups with NA in any index column. Optional metadata
+    # such as mps_thread_percent is intentionally null for non-MPS sweeps, so
+    # protect those rows while reshaping and restore the nulls afterwards.
+    null_sentinel = "__MPM_CUDAJAX_NULL_INDEX__"
+    work = df.copy()
+    for col in index_cols:
+        mask = work[col].isna()
+        if mask.any():
+            work[col] = work[col].astype("object")
+            work.loc[mask, col] = null_sentinel
     wide = (
-        df.pivot_table(
+        work.pivot_table(
             index=index_cols,
             columns="Metric",
             values="AvgValue",
@@ -105,6 +115,9 @@ def _wide_metric_rows(df):
         .copy()
     )
     wide.columns.name = None
+    for col in index_cols:
+        if col in wide.columns:
+            wide[col] = wide[col].replace(null_sentinel, pd.NA)
     return wide
 
 
