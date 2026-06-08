@@ -1,10 +1,6 @@
 """Re-render scaling plots for an existing sweep multirun.
 
-Same call the on-multirun-end callback runs; useful after a plotting tweak.
-The ``plots`` block is loaded from any one of the sweep's per-job
-``.hydra/config.yaml`` files (they all share the same plots config).
-
-    pixi run plot-sweeps -- outputs/sweeps/<gpu>/runs/<date>/<time>
+Loads the ``plots`` block from the first per-job ``.hydra/config.yaml``.
 """
 
 from __future__ import annotations

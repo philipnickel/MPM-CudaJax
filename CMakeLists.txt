@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-# CUDA arch: respect an explicit CMAKE_CUDA_ARCHITECTURES cache value, else autodetect.
+# Default CUDA arch to native unless the caller overrides it.
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
     set(CMAKE_CUDA_ARCHITECTURES native CACHE STRING "CUDA architectures")
 endif()
@@ -13,8 +13,7 @@ set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# Locate Python, nanobind, and the JAX FFI header from whichever Python is
-# running scikit-build-core.
+# Use the Python environment driving scikit-build-core.
 find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
 execute_process(
     COMMAND ${Python_EXECUTABLE} -m nanobind --cmake_dir
@@ -56,11 +55,9 @@ target_include_directories(_p2g_ffi PRIVATE ${JAX_FFI_INCLUDE})
 target_compile_options(_p2g_ffi PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:-O3>
     $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>
-    # -lineinfo: source-level attribution for ncu/Nsight (no codegen change,
-    # unlike -G); this project's analysis method leans on per-kernel ncu.
+    # Source-level attribution for ncu/Nsight without debug codegen.
     $<$<COMPILE_LANGUAGE:CUDA>:-lineinfo>
-    # -Xptxas -v: print per-kernel registers / spills / shared-mem usage at
-    # build time, feeding the occupancy/roofline narrative.
+    # Build-time registers, spills, and shared-memory usage for profiling notes.
     $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-v>
     $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-fPIC>
     $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wno-return-type>

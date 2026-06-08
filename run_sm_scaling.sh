@@ -1,13 +1,6 @@
 #!/usr/bin/env bash
-# Strong-scaling-via-MPS sweep.
-#
-# This intentionally runs normal simulate.py processes, one MPS percentage at a
-# time. CUDA reads CUDA_MPS_ACTIVE_THREAD_PERCENTAGE when JAX creates its CUDA
-# context, so a single Hydra multirun cannot sweep this axis inside one process.
-#
-#   pixi run sweep-sm
-#   MPS_PERCENTS="20 40 80" pixi run sweep-sm
-#   pixi run sweep-sm backend=CuTile
+# Sweep CUDA MPS active-thread percentage with fresh simulate.py processes.
+# CUDA reads CUDA_MPS_ACTIVE_THREAD_PERCENTAGE when JAX creates its context.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

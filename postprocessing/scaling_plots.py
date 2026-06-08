@@ -1,32 +1,7 @@
-"""Plot functions registered as Hydra-zen config-group choices.
+"""Hydra-zen plot configs for scaling sweeps.
 
-Two functions are registered under group ``plot``:
-
-* ``loglog`` — log-log lineplot used by Time per step and Particle Throughput.
-* ``speedup`` — semilog (log x, linear y) with a dashed y=1 baseline.
-
-Each sweep yaml lists which plot configs to render via the ``plots`` block:
-
-    defaults:
-      - /plot@plots.time: loglog
-      - /plot@plots.throughput: loglog
-      - /plot@plots.speedup: speedup
-      - _self_
-
-    plots:
-      time:
-        x: n_particles
-        xlabel: particles
-        y: ms_per_step
-        ylabel: ms / substep
-        title: "Time per step (fixed G)"
-        filename: ms_per_substep.png
-      ...
-
-``render(sweep_root, plots)`` walks the per-job ``results.json`` files,
-writes one ``results.parquet`` at ``sweep_root``, and instantiates each
-plot config as a partial bound to the per-plot fields. The partial is
-then called with the runtime ``df``, ``gpu_label``, and ``out_dir``.
+``render`` aggregates per-job results into ``results.parquet`` and calls each
+configured plot partial.
 """
 
 from __future__ import annotations
@@ -84,7 +59,7 @@ def _finalize(fig, ax, df, *, x, xlabel, ylabel, title, subtitle, out_path):
 def loglog_plot(
     df, *, x, xlabel, y, ylabel, title, filename, gpu_label, out_dir, **_
 ):
-    """Log-log lineplot — substep wall time and throughput."""
+    """Log-log lineplot for substep wall time and throughput."""
     fig, ax = plt.subplots(figsize=(7.0, 4.3), constrained_layout=True)
     sns.lineplot(data=df, x=x, y=y, hue="kernel", marker="o", ax=ax)
     ax.set_yscale("log")
@@ -126,8 +101,7 @@ def _aggregate_results(sweep_root: Path) -> pd.DataFrame:
 
 
 def render(sweep_root: Path, plots: Mapping[str, Any]) -> None:
-    """Aggregate per-job results.json under ``sweep_root``, write parquet,
-    and render every plot in ``plots`` into ``<sweep_root>/<group>/``."""
+    """Aggregate sweep results and render the configured plots."""
     sweep_root = Path(sweep_root)
     df = _aggregate_results(sweep_root)
     if df.empty:

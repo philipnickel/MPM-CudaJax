@@ -128,8 +128,7 @@ def test_cuda_p2g_variants_match_jax_scan():
 
 def test_cuda_v3_supercell_widths_match_jax_scan():
     _require_cuda_kernels(CudaV3P2G)
-    # cuda_v3 is templated + dispatched over SUPPORTED_SC; every compiled
-    # super-cell width must scatter identically to the JAX baseline.
+    # Exercise every compiled cuda_v3 super-cell template.
     from mpm_jax.p2g.backends import CudaV3Backend
     from mpm_jax.p2g.cuda.p2g_cuda import SUPPORTED_SC
 

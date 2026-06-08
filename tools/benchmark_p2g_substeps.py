@@ -1,15 +1,6 @@
-"""Benchmark backend P2G prepare/scatter timing alongside full solver timing.
+"""Benchmark P2G prepare/scatter timing beside full solver timing.
 
-Default usage runs the benchmark simulation preset (G=128, N=10M) across the
-custom P2G backends and writes one parquet table in the Hydra output directory:
-
-    pixi run python tools/benchmark_p2g_substeps.py
-
-Quick smoke example:
-
-    pixi run python tools/benchmark_p2g_substeps.py \
-        sim.n_particles=8192 sim.num_grids=16 sim.steps_per_frame=2 \
-        +timing.backends=[cuda_v1,cuda_v2] +timing.repeats=1
+Defaults to the benchmark sim preset (G=128, N=10M) and custom P2G backends.
 """
 
 from __future__ import annotations

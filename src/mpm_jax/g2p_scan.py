@@ -1,20 +1,8 @@
-"""G2P gather via lax.scan over the 27 stencil offsets — the JAX baseline G2P.
+"""G2P gather via lax.scan over the 27 stencil offsets.
 
-Motivation
-----------
-A naive vmap G2P would gather all 27 neighbour velocities at once
-(``gv = grid_v[index]`` → ``(N, 27, 3)``) and form the APIC outer products
-``(N, 27, 3, 3)`` before reducing over the 27 axis. At multi-million particle
-counts those intermediates are gigabytes of HBM traffic per substep — the G2P
-analog of the ``(N, 27, *)`` blow-up that ``p2g_scan`` was written to avoid.
-
-This module mirrors ``p2g_scan``: ``lax.scan`` over the 27 offsets, gather one
-``(N, 3)`` node per step, and accumulate the APIC reconstruction into the carry.
-Peak intermediate is ``(N, 3, 3)``; the ``(N, 27, 3, 3)`` never materialises.
-Weights are recomputed inline (the standard quadratic B-spline math), so
-``prepare`` need not build the ``(N, 27, *)`` weight arrays either.
-``_g2p_scan_mls`` is the G2P shared by every backend (jax, the CUDA variants,
-and the cuTile arena P2G), so only the P2G implementation varies.
+Scanning keeps the APIC reconstruction at ``(N, 3, 3)`` peak instead of
+materialising ``(N, 27, *)`` intermediates. This G2P path is shared by every
+backend, so only P2G varies.
 """
 
 import jax
@@ -24,31 +12,25 @@ from mpm_jax.p2g.stencil import OFFSET_27, weight_dpos_index
 
 
 def _g2p_scan_mls(grid_v, x, F, dt, inv_dx, dx, num_grids, clip_bound):
-    """Unified MLS-MPM G2P: reuse the APIC affine matrix C as the velocity
-    gradient for the F-update (``F_new = (I + dt*C)*F``), dropping the separate
-    B-spline ``grad_v`` (and its outer product + the ``dweight`` it needs). G2P
-    therefore builds only ONE (N, 3, 3) accumulator instead of two — the true
-    MLS-MPM formulation (Hu et al. 2018).
+    """Unified MLS-MPM G2P using APIC affine ``C`` as the velocity gradient.
 
-    NOTE: the APIC affine C differs from a separately-accumulated B-spline
-    ``grad_v`` by ~16%, so this is the standard MLS-MPM velocity-gradient
-    discretisation rather than the two-estimator variant.
+    This keeps one ``(N, 3, 3)`` accumulator and follows the standard MLS-MPM
+    discretisation rather than a separate B-spline ``grad_v`` estimator.
     """
     N = x.shape[0]
 
     def scan_body(carry, offset_int):
         v_acc, C_acc = carry
         idx, weight, dpos = weight_dpos_index(x, offset_int, inv_dx, dx, num_grids)
-        gv = grid_v[idx]  # (N, 3) gather one node
-        v_acc = v_acc + weight[:, None] * gv  # (N, 3)
+        gv = grid_v[idx]
+        v_acc = v_acc + weight[:, None] * gv
         C_acc = C_acc + weight[:, None, None] * (
             gv[:, :, None] * dpos[:, None, :]
-        )  # (N, 3, 3)
+        )
         return (v_acc, C_acc), None
 
     init = (jnp.zeros((N, 3), jnp.float32), jnp.zeros((N, 3, 3), jnp.float32))
     (new_v, C_acc), _ = jax.lax.scan(scan_body, init, OFFSET_27, unroll=True)
-    # same as in the p2g scan ..
 
     new_C = 4.0 * inv_dx * inv_dx * C_acc  # APIC affine = MLS velocity gradient
     new_x = jnp.clip(x + new_v * dt, clip_bound, 1.0 - clip_bound)

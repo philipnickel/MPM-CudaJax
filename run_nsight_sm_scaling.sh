@@ -1,15 +1,7 @@
 #!/usr/bin/env bash
-# Nsight roofline trajectories swept over CUDA MPS active-thread percentage.
-#
-# The profiled process must start with CUDA_MPS_ACTIVE_THREAD_PERCENTAGE already
-# set, so this loops over percentages and launches normal profile_nsight.py
-# multiruns. The nsight_sweep=sm_scaling config has a static sweep directory,
-# allowing every percentage to append to one results.parquet and re-render the
-# combined roofline trajectory.
-#
-#   pixi run nsight-sweep-sm
-#   MPS_PERCENTS="20 40 80" pixi run nsight-sweep-sm nsight_metrics=roofline nsight_plot=roofline_only
-#   pixi run nsight-sweep-sm backend=cuda_v3
+# Sweep Nsight roofline data over CUDA MPS active-thread percentage.
+# The profiled process must start with CUDA_MPS_ACTIVE_THREAD_PERCENTAGE set;
+# sm_scaling appends each pass to one shared sweep parquet.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,6 +12,7 @@ export CUDA_MPS_LOG_DIRECTORY="${CUDA_MPS_LOG_DIRECTORY:-$ROOT_DIR/.mps/log}"
 
 REAL_NCU="$(command -v ncu)"
 NCU_WRAPPER_DIR="$(mktemp -d)"
+# Run NCU in MPS control mode for each child process.
 cat >"$NCU_WRAPPER_DIR/ncu" <<EOF
 #!/usr/bin/env bash
 exec "$REAL_NCU" --mps=control "\$@"

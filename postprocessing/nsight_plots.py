@@ -1,19 +1,4 @@
-"""Cross-backend P2G NCU analysis figures.
-
-Reads the processed ``ProfileResults.to_dataframe()`` rows in
-``results.parquet`` produced by a ``profile_nsight.py`` Hydra-multirun
-sweep over the custom P2G backends, derives analysis columns, and renders four
-figures: a hierarchical fp32 roofline, the atomic-scatter story, occupancy + its
-limiter, and the warp-issue-stall breakdown.
-
-    # 1. collect (one NCU job per backend via Hydra multirun)
-    pixi run python profile_nsight.py -cn nsight_profile -m \
-        backend=cuda_v1,cuda_v2,cuda_v3,CuTile \
-        sim.n_particles=1000000
-    # 2. plot the sweep's aggregated results.parquet
-    pixi run python postprocessing/nsight_plots.py \
-        outputs/nsight/<gpu>/sweeps/<date>/<time>/results.parquet -o figs/
-"""
+"""Render NCU analysis figures from profile_nsight.py sweep parquet files."""
 
 from __future__ import annotations
 
@@ -31,7 +16,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-# Canonical left->right order tracing the optimization arc; cuTile in a cool hue.
+# Backend order follows the optimization path.
 BACKEND_ORDER = ["cuda_v1", "cuda_v2", "cuda_v3", "CuTile"]
 COLOR = {
     "cuda_v1": "#fdae6b",
@@ -46,7 +31,7 @@ BACKEND_MARKER = {
     "CuTile": "X",
 }
 LIMITER_NAME = {0: "registers", 1: "shared_mem", 2: "warps", 3: "blocks"}
-# Stall reasons grouped global-mem -> shared-mem -> compute -> hidden(good).
+# Stall reasons grouped by memory, compute, then hidden latency.
 STALLS = [
     ("long_scoreboard", "#d62728"),
     ("lg_throttle", "#ff7f0e"),
@@ -94,9 +79,7 @@ def _wide_metric_rows(df):
     if not {"Metric", "AvgValue"}.issubset(df.columns):
         return df
     index_cols = [c for c in df.columns if c not in _NSIGHT_VALUE_COLUMNS]
-    # ``pivot_table`` drops groups with NA in any index column. Optional metadata
-    # such as mps_thread_percent is intentionally null for non-MPS sweeps, so
-    # protect those rows while reshaping and restore the nulls afterwards.
+    # pivot_table drops NA index groups; protect optional metadata while reshaping.
     null_sentinel = "__MPM_CUDAJAX_NULL_INDEX__"
     work = df.copy()
     for col in index_cols:
@@ -510,8 +493,7 @@ def _has_scheduler_data(df):
 def table_from_dataframe(df):
     """Wide DataFrame -> {backend: {metric: value}}, dropping NaN cells.
 
-    For a scaling sweep (several rows per backend) the single-point figures use
-    the largest-N row per backend as the representative operating point."""
+    Scaling sweeps use the largest row per backend as the representative point."""
     sort_keys = [
         c for c in ("n_particles", "num_grids", "mps_thread_percent") if c in df.columns
     ]
@@ -656,14 +638,10 @@ def plot_roofline(table, out, gpu_label=None):
 def plot_roofline_scaling(
     df, out, scale_col="n_particles", scale_label=None, gpu_label=None
 ):
-    """fp32 roofline trajectory plot.
-
-    Every backend is a seaborn trajectory in HBM arithmetic intensity; roof
-    lines are annotated references."""
+    """fp32 roofline trajectory over the selected scaling axis."""
     import numpy as np
 
-    # Ceilings are per-chip device constants; take the median over the sweep for
-    # robustness against noisy rows.
+    # Ceilings are device constants; median filters noisy rows.
     peak_c = float(df["peak_compute_gflops"].median())
     fig, ax = plt.subplots(figsize=(8.6, 6.2))
     ax.set_xscale("log")

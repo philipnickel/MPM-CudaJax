@@ -1,17 +1,8 @@
-"""Hydra-wrapped Nsight Compute collection for backend P2G scatter kernels.
+"""Hydra-wrapped Nsight Compute collection for custom P2G scatter kernels.
 
-One Hydra job profiles one backend variant. Sweep across backends / particle
-counts with Hydra multirun, exactly like ``simulate.py``::
-
-    pixi run python profile_nsight.py -cn nsight_profile -m \
-        backend=cuda_v1,cuda_v2,cuda_v3,CuTile
-
-Each job calls ``ProfileResults.to_dataframe()``, writes that processed
-``nsight-python`` metric-row DataFrame to ``nsight_metrics.parquet`` in its
-Hydra output directory, then appends the same rows to ``results.parquet`` in the
-Hydra sweep directory when running as a multirun. The profiled region is the
-warmed backend scatter call with prepared inputs; metric derivation belongs to
-postprocessing.
+Each Hydra job profiles one warmed backend scatter call with prepared inputs.
+Multirun sweeps append processed nsight-python rows to the sweep
+``results.parquet``; metric derivation stays in postprocessing.
 """
 
 from __future__ import annotations
@@ -46,15 +37,13 @@ def _optional_module(name):
 
 nsight = _optional_module("nsight")
 
-# Only these top-level nsight.* keys are recognized; anything else is a typo.
+# Guard top-level nsight.* config typos.
 _SCRIPT_NSIGHT_KEYS = {"analyze"}
-# Nsight Python analysis is for one custom P2G scatter kernel per annotation.
-# The JAX baseline lowers to several XLA-generated kernels; use XProf for it.
+# Nsight Python targets single custom scatter annotations; use XProf for JAX/XLA.
 _NSIGHT_BACKEND_CHOICES = tuple(
     choice for choice in backend_configs.backend_choices() if choice != "jax"
 )
-# nsight.analyze.configs is derived from the Hydra config, never user-supplied.
-# Derived metrics are intentionally left to postprocessing.
+# configs is derived from Hydra; metric derivation stays in postprocessing.
 _UNSUPPORTED_ANALYZE_CONFIG_KEYS = {
     "configs",
     "derive_metric",
@@ -127,7 +116,7 @@ def _backend_choice_from_cfg(cfg: DictConfig):
 
 
 def _profile_config(cfg: DictConfig, backend_choice: str):
-    """The single (backend, n, g, steps) config tuple this job profiles."""
+    """Config tuple passed to nsight.analyze."""
     if backend_choice not in _NSIGHT_BACKEND_CHOICES:
         supported = ", ".join(_NSIGHT_BACKEND_CHOICES)
         raise RuntimeError(
@@ -198,7 +187,6 @@ class _P2GScatterRunner:
 
 
 def _p2g_runner(cfg: DictConfig):
-    """Return a prepared scatter runner for the selected backend."""
     return _P2GScatterRunner(cfg)
 
 
@@ -264,7 +252,7 @@ def _nsight_analyze_kwargs(cfg: DictConfig, run_dir: Path, profile_config):
     kwargs.setdefault(
         "output_prefix", str(run_dir / f"nsight_{backend_choice}_p2g_")
     )
-    # One config per Hydra job; sweep across backends/sizes via Hydra multirun.
+    # One profile config per Hydra job; multirun handles sweeps.
     kwargs["configs"] = [profile_config]
     return kwargs
 
@@ -368,8 +356,7 @@ def main(cfg: DictConfig):
         profile_config,
     )
     results = _run_nsight_profile(profiled_variant)
-    # In an NCU child re-exec, a non-matching Hydra-multirun job returns None
-    # (the matching job exits inside NCU). Only the parent writes.
+    # NCU child re-execs can return None for non-matching Hydra jobs.
     if results is not None:
         df = _results_dataframe(results, cfg, run_dir, backend_choice, target_name)
         _write_results(df, run_dir)

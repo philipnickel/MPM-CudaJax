@@ -1,29 +1,6 @@
-// P2G scatter kernel with warp-shuffle atomic coalescing used by cuda_v2.
-//
-// Same structure as the cuda_v1 kernel (p2g_v1.cu): one thread per particle,
-// register-resident state, B-spline weights, 27-stencil scatter loop.
-//
-// Difference: before each atomicAdd into the grid, threads in the same warp
-// that happen to target the SAME grid node detect each other with
-// __match_any_sync, sum their contributions with __shfl_sync, and elect
-// a single leader to do one atomic on behalf of the group. When particles
-// are spatially sorted (Morton / Z-order) BEFORE this kernel runs, many
-// warp lanes hit the same stencil cell and the number of global atomics
-// drops dramatically.
-//
-// Helper warp_reduce_masked coalesces matching stencil targets inside a warp.
-//
-// Inputs (all float32):
-//   x:      (N, 3)        particle positions          (assumed sorted)
-//   v:      (N, 3)        particle velocities         (in same order as x)
-//   C:      (N, 9)        APIC affine matrix          (in same order as x)
-//   stress: (N, 9)        Kirchhoff stress            (in same order as x)
-//
-// Outputs:
-//   grid_mv: (G^3, 3)
-//   grid_m:  (G^3,)
-//
-// Scalar attributes: N, G, dt, vol, p_mass, inv_dx, dx
+// cuda_v2 P2G scatter: same math as v1, but coalesces same-node atomics
+// inside a warp with __match_any_sync and masked shuffles. Morton sorting makes
+// matching lanes common enough for this to matter.
 
 #include "xla/ffi/api/ffi.h"
 
@@ -32,26 +9,23 @@
 namespace ffi = xla::ffi;
 
 __global__ void p2g_v2_kernel(
-    const float* __restrict__ x,        // (N, 3)
-    const float* __restrict__ v,        // (N, 3)
-    const float* __restrict__ C,        // (N, 9) row-major
-    const float* __restrict__ stress,   // (N, 9) row-major
-    float*       __restrict__ grid_mv,  // (G^3, 3)
-    float*       __restrict__ grid_m,   // (G^3,)
+    const float* __restrict__ x,
+    const float* __restrict__ v,
+    const float* __restrict__ C,
+    const float* __restrict__ stress,
+    float*       __restrict__ grid_mv,
+    float*       __restrict__ grid_m,
     int N, int G,
     float dt, float vol, float p_mass, float inv_dx, float dx
 ) {
     int pid = blockIdx.x * blockDim.x + threadIdx.x;
 
-    // Out-of-range threads have to participate in the warp sync intrinsics
-    // (otherwise __match_any_sync deadlocks). We mark them as "inactive" by
-    // giving them a match key of -1 so they never match an in-range lane,
-    // and we skip the atomicAdd at the bottom.
+    // All lanes must reach the warp intrinsics; inactive lanes use a sentinel
+    // key and zero contributions so they form a harmless peer group.
     bool active = (pid < N);
     int lane = threadIdx.x & 31;
 
-    // Zero-init so inactive lanes carry defined state through the (unguarded)
-    // base/weight computation; the actual load happens only for active lanes.
+    // Keep inactive lanes defined through the unguarded base/weight work.
     float px[3] = {0, 0, 0}, pv[3] = {0, 0, 0}, pC[9] = {0}, pS[9] = {0};
     if (active) {
         p2g_load_particle(x, v, C, stress, pid, px, pv, pC, pS);
@@ -62,9 +36,6 @@ __global__ void p2g_v2_kernel(
     p2g_base_fx(px, inv_dx, base, fx);
     p2g_bspline_tables(fx, w, dw);
 
-    // v2's scatter is the experiment: on Morton-sorted particles many warp
-    // lanes hit the same node, so warp-shuffle reduce same-node lanes and let
-    // one leader atomic per group cut the global atomic count.
     for (int di = 0; di < 3; di++)
     for (int dj = 0; dj < 3; dj++)
     for (int dk = 0; dk < 3; dk++) {
@@ -73,7 +44,6 @@ __global__ void p2g_v2_kernel(
         int gk = p2g_clip_axis(base[2] + dk, G);
         int grid_idx = gi * G * G + gj * G + gk;
 
-        // Inactive lanes get a sentinel that won't match any real index.
         int match_key = active ? grid_idx : -1;
 
         float mv0 = 0.0f, mv1 = 0.0f, mv2 = 0.0f, m_contrib = 0.0f;
@@ -84,9 +54,7 @@ __global__ void p2g_v2_kernel(
             mv0 = mv[0]; mv1 = mv[1]; mv2 = mv[2];
         }
 
-        // Find all lanes (in this 32-lane warp) targeting the same grid node.
-        // Inactive lanes use match_key = -1, so they cluster together and
-        // their (zeroed) contributions don't pollute real groups.
+        // Coalesce lanes targeting the same grid node.
         unsigned peers = __match_any_sync(P2G_FULL_MASK, match_key);
 
         mv0 = p2g_warp_reduce_masked(mv0, peers);
@@ -101,10 +69,6 @@ __global__ void p2g_v2_kernel(
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// XLA FFI handler
-// ---------------------------------------------------------------------------
 
 ffi::Error P2GV2Impl(
     cudaStream_t stream,
@@ -138,12 +102,12 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     P2GV2, P2GV2Impl,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()   // x
-        .Arg<ffi::Buffer<ffi::F32>>()   // v
-        .Arg<ffi::Buffer<ffi::F32>>()   // C
-        .Arg<ffi::Buffer<ffi::F32>>()   // stress
-        .Ret<ffi::Buffer<ffi::F32>>()   // grid_mv
-        .Ret<ffi::Buffer<ffi::F32>>()   // grid_m
+        .Arg<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<ffi::F32>>()
+        .Arg<ffi::Buffer<ffi::F32>>()
+        .Ret<ffi::Buffer<ffi::F32>>()
+        .Ret<ffi::Buffer<ffi::F32>>()
         .Attr<int32_t>("N")
         .Attr<int32_t>("G")
         .Attr<float>("dt")

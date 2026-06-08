@@ -103,8 +103,7 @@ def test_weak_scaling_sweep_keeps_active_ppc_near_target():
     cfg = _compose_sweep("weak_scaling")
     ns = _axis_ints(cfg, "sim.n_particles")
     assert ns == _PARTICLE_COUNT_SEQUENCE
-    # G is the ${ppc_grid:N} resolver applied to each N. Tolerate ~15% because
-    # small-N points are rounded to a multiple of 4 for super-cell-tiled backends.
+    # Rounded grid sizes can drift slightly from the target density.
     target_ppc = 10000000 / (0.8**3 * 128**3)
     for n in ns:
         g = _resolvers._ppc_grid(n)

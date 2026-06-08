@@ -117,12 +117,7 @@ class CudaV3P2G(CudaP2GKernel):
         )
 
 
-# Super-cell width for the cuda_v3 backend. With SC=k the kernel launches
-# (G/SC)^3 blocks (vs G^3) and each block aggregates particles from SC^3 cells
-# into a (SC+2)^3 shared-memory tile. The kernel is a template on SC; the FFI
-# handler dispatches to the instantiated values in SUPPORTED_SC by a runtime
-# switch, so SC is config-selectable (backend.super_cell_width) without
-# recompiling, but only among the instantiated widths.
+# cuda_v3 compiles fixed SC template instantiations; config can select these.
 SUPPORTED_SC = (2, 4, 8)  # template instantiations compiled into the extension
 V3_SUPER_CELL_WIDTH = 4  # default super-cell width
 
@@ -172,12 +167,10 @@ def _p2g_ffi_call(
 
 
 __all__ = [
-    # FFI kernels
     "CudaP2GKernel",
     "CudaV1P2G",
     "CudaV2P2G",
     "CudaV3P2G",
-    # Super-cell helpers
     "V3_SUPER_CELL_WIDTH",
     "SUPPORTED_SC",
 ]

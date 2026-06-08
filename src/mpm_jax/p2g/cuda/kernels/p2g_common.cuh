@@ -1,12 +1,5 @@
-// Shared device helpers for the inline P2G kernels (cuda_v1..v3).
-//
-// Only the pieces that are IDENTICAL across every variant by design live here:
-// the per-particle register loads, the quadratic B-spline base/weight tables,
-// the per-axis index clamp, and the per-node MLS-MPM contribution math. Each
-// kernel keeps its OWN 27-stencil loop and scatter store (global atomicAdd /
-// warp-reduced atomic / shared-tile atomic) — that scatter strategy is exactly
-// what distinguishes the variants, so it stays local to each .cu. All helpers
-// are __device__ __forceinline__, so codegen is unchanged vs. the inline form.
+// Shared inline helpers for CUDA P2G variants. Common math lives here; each
+// kernel keeps its own scatter strategy so the variants remain easy to compare.
 #pragma once
 
 #include <cstddef>
@@ -82,7 +75,6 @@ __device__ __forceinline__ void p2g_atomic_add_grid(
     p2g_atomic_add_grid(grid_mv, grid_m, grid_idx, mv[0], mv[1], mv[2], m_contrib);
 }
 
-// Load one particle's AoS state into registers (read ONCE, reused 27x).
 __device__ __forceinline__ void p2g_load_particle(
     const float* __restrict__ x, const float* __restrict__ v,
     const float* __restrict__ C, const float* __restrict__ stress,
@@ -108,8 +100,6 @@ __device__ __forceinline__ void p2g_base_fx(
     }
 }
 
-// Per-axis quadratic B-spline weight (w) and weight-gradient (dw) tables,
-// 3 entries each.
 __device__ __forceinline__ void p2g_bspline_tables(
     const float fx[3], float w[3][3], float dw[3][3]) {
     for (int d = 0; d < 3; d++) {
@@ -122,17 +112,13 @@ __device__ __forceinline__ void p2g_bspline_tables(
     }
 }
 
-// Per-axis clamp of a stencil node index to [0, G-1]. NOTE: this is a per-axis
-// clamp; the JAX reference (p2g_scan.py / g2p_scan.py) clips the flat index, so
-// the two only diverge for out-of-domain stencil nodes (never at the interior
-// benchmark). Keep both conventions in sync if a particle can reach the wall.
+// Per-axis clamp; the JAX reference clips the flat index, so the conventions
+// only diverge for out-of-domain stencil nodes.
 __device__ __forceinline__ int p2g_clip_axis(int idx, int G) {
     return max(0, min(idx, G - 1));
 }
 
-// MLS-MPM per-node contribution for stencil offset (di,dj,dk): the momentum
-// mv[3] and the mass m_contrib. Identical in every variant; only the scatter
-// store that consumes these differs.
+// MLS-MPM per-node contribution; identical across CUDA variants.
 //   mv = -dt*vol*(stress @ dweight) + p_mass*weight*(v + C @ dpos)
 //   m  = weight * p_mass
 __device__ __forceinline__ void p2g_node_contribution(
@@ -149,7 +135,7 @@ __device__ __forceinline__ void p2g_node_contribution(
     dweight[1] = inv_dx * w[0][di]  * dw[1][dj] * w[2][dk];
     dweight[2] = inv_dx * w[0][di]  * w[1][dj]  * dw[2][dk];
 
-    // dpos = (offset - fx) * dx
+    // dpos = (offset - fx) * dx.
     float dpos[3];
     dpos[0] = ((float)di - fx[0]) * dx;
     dpos[1] = ((float)dj - fx[1]) * dx;
@@ -171,10 +157,7 @@ __device__ __forceinline__ int p2g_stencil_index(int di, int dj, int dk) {
     return di * 9 + dj * 3 + dk;
 }
 
-// Warp reduction over an arbitrary peer mask (used by v2):
-// sum `val` across all lanes in `mask`, returning the sum in ALL lanes. Walk
-// the set bits rather than an XOR butterfly, since match groups are not
-// power-of-two aligned.
+// Sum val across lanes in an arbitrary peer mask; match groups are not aligned.
 __device__ __forceinline__ float p2g_warp_reduce_masked(float val, unsigned mask) {
     float sum = 0.0f;
     for (unsigned remaining = mask; remaining; remaining &= (remaining - 1)) {

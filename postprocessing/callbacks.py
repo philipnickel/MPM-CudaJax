@@ -1,9 +1,4 @@
-"""Hydra callback that renders scaling plots when a multirun finishes.
-
-Wired in ``conf/sweep.yaml`` as ``hydra.callbacks.scaling_plot``. Passes the
-multirun's ``hydra.sweep.dir`` plus the composed ``cfg.plots`` block to
-:func:`postprocessing.scaling_plots.render`.
-"""
+"""Hydra callbacks that render plots after multiruns."""
 
 from __future__ import annotations
 
@@ -49,8 +44,7 @@ class NsightPlotCallback(Callback):
         self.style = style
 
     def on_multirun_end(self, config: DictConfig, **kwargs: Any) -> None:
-        # Serial Hydra jobs append to this file as the authoritative sweep
-        # aggregate. Do not reconstruct it from per-job outputs here.
+        # Use the serial sweep aggregate, not per-job outputs.
         sweep_root = Path(config.hydra.sweep.dir).resolve()
         results_path = sweep_root / self.results_name
         if not results_path.exists():

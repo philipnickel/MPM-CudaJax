@@ -91,8 +91,7 @@ def test_profile_config_reads_sim_axes():
 
 def test_backend_choice_from_cfg_infers_from_backend_target():
     cfg = _compose_config(overrides=["backend=cuda_v3"])
-    # Outside a Hydra run there is no runtime choice, so it falls back to the
-    # backend config _target_.
+    # Outside Hydra, infer the backend from the config target.
     assert profile_nsight._backend_choice_from_cfg(cfg) == "cuda_v3"
 
 

@@ -7,10 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Trace collection disables CUDA graphs so kernels and named scopes stay visible
-# in XProf instead of being hidden under command-buffer launches. XLA reads
-# XLA_FLAGS when the JAX backend initializes, so this must run before importing
-# jax below; Hydra config is not available yet, hence the small argv sniff.
+# XProf traces need command buffers disabled before JAX initializes. Hydra config
+# is not composed yet, so sniff argv here.
 # ruff: noqa: E402
 def _config_name_from_argv(argv):
     config_name = "config"
@@ -87,12 +85,12 @@ def _current_gpu_kind():
 OmegaConf.register_new_resolver("gpu_kind", _current_gpu_kind, replace=True)
 
 
-def _analysis_csv_path(metrics):  # this should not be needed.
+def _analysis_csv_path(metrics):
     job_num = metrics.get("hydra_job_num")
     if job_num is None:
         return None
     original_cwd = Path(hydra.utils.get_original_cwd())
-    sweep_dir = Path(metrics["hydra_sweep_dir"])  # doesn't belong in metrics...
+    sweep_dir = Path(metrics["hydra_sweep_dir"])
     if not sweep_dir.is_absolute():
         sweep_dir = original_cwd / sweep_dir
     try:
@@ -103,9 +101,7 @@ def _analysis_csv_path(metrics):  # this should not be needed.
     return sweep_root / "results.csv"
 
 
-def _write_csv_row(
-    path, metrics
-):  # this should not be needed. metrics should be a dataclass that can be serialized directly and saved..
+def _write_csv_row(path, metrics):
     path.parent.mkdir(parents=True, exist_ok=True)
     write_header = not path.exists() or path.stat().st_size == 0
     with path.open("a", newline="") as f:
@@ -117,12 +113,12 @@ def _write_csv_row(
 
 def _write_metrics(run_dir, metrics):
     results_path = Path(run_dir) / "results.json"
-    metrics["results_json_path"] = str(results_path)  # not needed
+    metrics["results_json_path"] = str(results_path)
 
     analysis_csv_path = _analysis_csv_path(metrics)
     metrics["analysis_csv_path"] = (
         str(analysis_csv_path) if analysis_csv_path else None
-    )  # not needed
+    )
 
     results_path.write_text(json.dumps(metrics, indent=2))
     (Path(run_dir) / "metrics.jsonl").write_text(json.dumps(metrics) + "\n")
@@ -130,11 +126,6 @@ def _write_metrics(run_dir, metrics):
 
     if analysis_csv_path is not None:
         _write_csv_row(analysis_csv_path, metrics)
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
@@ -147,7 +138,7 @@ def main(cfg: DictConfig):
 
     solver = MPMSolver(hydra.utils.instantiate(cfg.solver))
 
-    # Warmup (JIT compilation) always runs outside any trace.
+    # Keep JIT warmup outside the trace.
     solver.warmup(int(profile_cfg.get("warmup_frames", 1)))
 
     def run_measured_solve():
@@ -156,10 +147,7 @@ def main(cfg: DictConfig):
             return solver.run(capture_frames=render_enabled)
 
     if profile_enabled:
-        # Traces live in a shared top-level dir (one run per label) so
-        # `xprof --logdir traces` lists them side by side. The label defaults to
-        # the backend name; override `profile.label` to keep a focused capture
-        # (e.g. a single-substep run) out of the backend-comparison runs.
+        # One shared trace root lets XProf compare labels side by side.
         traces_root = os.path.join(hydra.utils.get_original_cwd(), "traces")
         run_label = profile_cfg.get("label") or solver.backend.name
         trace_dir = os.path.join(traces_root, run_label)
@@ -226,7 +214,7 @@ def main(cfg: DictConfig):
             width=int(render_cfg.get("width", 960)),
             height=int(render_cfg.get("height", 720)),
         )
-        metrics["render_path"] = export_path  # not needed
+        metrics["render_path"] = export_path
     elif not render_enabled:
         logger.info("Rendering disabled.")
 
