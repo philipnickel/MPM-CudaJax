@@ -1,20 +1,12 @@
 cmake_minimum_required(VERSION 3.24)
-project(mpm_cuda LANGUAGES CXX)
 
 # CUDA arch: respect an explicit CMAKE_CUDA_ARCHITECTURES cache value, else autodetect.
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
     set(CMAKE_CUDA_ARCHITECTURES native CACHE STRING "CUDA architectures")
 endif()
 
-# Skip CUDA cleanly when nvcc is absent (CPU-only installs still succeed).
-include(CheckLanguage)
-check_language(CUDA)
-if(NOT CMAKE_CUDA_COMPILER)
-    message(STATUS "No CUDA compiler found - skipping CUDA kernel build (JAX baseline only).")
-    return()
-endif()
+project(mpm_cuda LANGUAGES CXX CUDA)
 
-enable_language(CUDA)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 17)
@@ -57,7 +49,6 @@ set(P2G_FFI_SOURCES
     ${KERNEL_SRC_DIR}/p2g_v1.cu
     ${KERNEL_SRC_DIR}/p2g_v2.cu
     ${KERNEL_SRC_DIR}/p2g_v3.cu
-    ${KERNEL_SRC_DIR}/p2g_v4.cu
 )
 
 nanobind_add_module(_p2g_ffi NB_STATIC NOMINSIZE ${P2G_FFI_SOURCES})

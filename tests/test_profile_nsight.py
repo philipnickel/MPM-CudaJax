@@ -47,9 +47,8 @@ def test_backend_choices_come_from_registered_hydra_configs():
         "cuda_v1",
         "cuda_v2",
         "cuda_v3",
-        "cuda_v4",
         "cutile_v1",
-        "cutile_v3",
+        "CuTile",
     }
 
 
@@ -111,7 +110,8 @@ def test_nsight_metric_presets_compose():
 
     assert "gpu__time_duration.sum" in full.nsight.analyze.metrics
     assert list(timing.nsight.analyze.metrics) == ["gpu__time_duration.sum"]
-    assert "dram__bytes.sum" in roofline.nsight.analyze.metrics
+    assert "lts__t_bytes.sum" in roofline.nsight.analyze.metrics
+    assert "sm__sass_thread_inst_executed_op_ffma_pred_on.sum" in roofline.nsight.analyze.metrics
     assert "launch__registers_per_thread" not in roofline.nsight.analyze.metrics
 
 
@@ -206,6 +206,55 @@ def test_render_nsight_figures_from_parquet(tmp_path):
     )
 
     assert [p.name for p in written] == ["roofline_scaling.png"]
+    assert written[0].exists()
+
+
+def test_render_roofline_from_nersc_2020_metrics(tmp_path):
+    import pandas as pd
+
+    metric_values = {
+        "sm__cycles_elapsed.avg": 1_000_000.0,
+        "sm__cycles_elapsed.avg.per_second": 1_000_000_000.0,
+        "sm__sass_thread_inst_executed_op_fadd_pred_on.sum": 1_000_000.0,
+        "sm__sass_thread_inst_executed_op_fmul_pred_on.sum": 1_000_000.0,
+        "sm__sass_thread_inst_executed_op_ffma_pred_on.sum": 1_000_000.0,
+        "l1tex__t_bytes.sum": 4_000_000.0,
+        "lts__t_bytes.sum": 2_000_000.0,
+        "dram__bytes.sum": 1_000_000.0,
+        "sm__sass_thread_inst_executed_op_ffma_pred_on.sum.peak_sustained": 10.0,
+        "l1tex__t_bytes.sum.peak_sustained": 8.0,
+        "l1tex__cycles_elapsed.avg.per_second": 1_000_000_000.0,
+        "lts__t_bytes.sum.peak_sustained": 4.0,
+        "lts__cycles_elapsed.avg.per_second": 1_000_000_000.0,
+        "dram__bytes.sum.peak_sustained": 2.0,
+        "dram__cycles_elapsed.avg.per_second": 1_000_000_000.0,
+    }
+    rows = []
+    for backend in ["cuda_v1", "cuda_v2"]:
+        for metric, value in metric_values.items():
+            rows.append(
+                {
+                    "backend": backend,
+                    "target": "p2g",
+                    "n_particles": 1000,
+                    "num_grids": 16,
+                    "Annotation": f"{backend}_p2g",
+                    "Metric": metric,
+                    "AvgValue": value,
+                    "Kernel": "p2g",
+                }
+            )
+    path = tmp_path / "results.parquet"
+    pd.DataFrame(rows).to_parquet(path, index=False)
+
+    written = render_nsight_figures(
+        path,
+        tmp_path / "figures",
+        plots=["roofline"],
+        style={"theme": "darkgrid", "context": "paper"},
+    )
+
+    assert [p.name for p in written] == ["roofline.png"]
     assert written[0].exists()
 
 

@@ -15,9 +15,8 @@ EXPECTED_BACKENDS = {
     "cuda_v1": "mpm_jax.p2g.backends.cuda.CudaV1Backend",
     "cuda_v2": "mpm_jax.p2g.backends.cuda.CudaV2Backend",
     "cuda_v3": "mpm_jax.p2g.backends.cuda.CudaV3Backend",
-    "cuda_v4": "mpm_jax.p2g.backends.cuda.CudaV4Backend",
     "cutile_v1": "mpm_jax.p2g.backends.cutile.CutileV1Backend",
-    "cutile_v3": "mpm_jax.p2g.backends.cutile.CutileV3Backend",
+    "CuTile": "mpm_jax.p2g.backends.cutile.CuTileBackend",
 }
 
 
@@ -35,12 +34,11 @@ def test_each_backend_config_instantiates_expected_backend_name(monkeypatch):
     monkeypatch.setattr("mpm_jax.p2g.cuda.p2g_cuda.CudaV1P2G.register", lambda self: True)
     monkeypatch.setattr("mpm_jax.p2g.cuda.p2g_cuda.CudaV2P2G.register", lambda self: True)
     monkeypatch.setattr("mpm_jax.p2g.cuda.p2g_cuda.CudaV3P2G.register", lambda self: True)
-    monkeypatch.setattr("mpm_jax.p2g.cuda.p2g_cuda.CudaV4P2G.register", lambda self: True)
     monkeypatch.setattr(
         "mpm_jax.p2g.backends.cutile._cutile_module",
         lambda: SimpleNamespace(
-            cutile_p2g_v1=lambda *_, **__: None,
-            cutile_p2g_v3=lambda *_, **__: None,
+            cutile_p2g_v1=lambda *args, **kwargs: None,
+            cutile_p2g=lambda *args, **kwargs: None,
         ),
     )
 
@@ -78,15 +76,19 @@ def test_scaling_sweeps_use_backend_choices():
 
 
 _PARTICLE_COUNT_SEQUENCE = [
-    100_000, 200_000, 400_000, 800_000, 1_000_000,
+    100_000, 200_000, 400_000, 500_000, 800_000, 1_000_000,
     2_000_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000,
     100_000_000, 125_000_000,
 ]
 
 
+def _axis_ints(cfg, key: str) -> list[int]:
+    return [int(float(v)) for v in _sweep_axis(cfg, key)]
+
+
 def test_particle_count_sweep_uses_canonical_n_subset_at_fixed_g96():
     cfg = _compose_sweep("particle_count")
-    ns = [int(v) for v in _sweep_axis(cfg, "sim.n_particles")]
+    ns = _axis_ints(cfg, "sim.n_particles")
     assert ns
     assert set(ns).issubset(_PARTICLE_COUNT_SEQUENCE)
     assert ns == sorted(ns)
@@ -95,7 +97,7 @@ def test_particle_count_sweep_uses_canonical_n_subset_at_fixed_g96():
 
 def test_weak_scaling_sweep_keeps_active_ppc_near_target():
     cfg = _compose_sweep("weak_scaling")
-    ns = [int(v) for v in _sweep_axis(cfg, "sim.n_particles")]
+    ns = _axis_ints(cfg, "sim.n_particles")
     assert ns
     assert set(ns).issubset(_PARTICLE_COUNT_SEQUENCE)
     assert ns == sorted(ns)
