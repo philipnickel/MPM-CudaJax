@@ -1,22 +1,29 @@
-// Home-sorted P2G scatter with warp-shuffle reduction used by cuda_v2.
+// P2G scatter kernel with warp-shuffle atomic coalescing used by cuda_v2.
 //
-// Identical to the cuda_v1 backend kernel (p2g_v1.cu) for the per-particle setup —
-// one thread per particle, register-resident state, B-spline weights,
-// no (N, 27, *) materialisation in HBM. The ONLY difference is the 27-stencil
-// scatter: before each atomicAdd, lanes inside the warp that target the same
-// grid_idx reduce their contributions via __match_any_sync + __shfl_sync,
-// and only the leader lane issues the atomic.
+// Same structure as the cuda_v1 kernel (p2g_v1.cu): one thread per particle,
+// register-resident state, B-spline weights, 27-stencil scatter loop.
 //
-// Intended input order is home_cell_order. The kernel does not consume
-// bucket_bounds itself; it only relies on sorted x/v/C/stress so neighboring
-// warp lanes are more likely to target the same grid nodes.
+// Difference: before each atomicAdd into the grid, threads in the same warp
+// that happen to target the SAME grid node detect each other with
+// __match_any_sync, sum their contributions with __shfl_sync, and elect
+// a single leader to do one atomic on behalf of the group. When particles
+// are spatially sorted (Morton / Z-order) BEFORE this kernel runs, many
+// warp lanes hit the same stencil cell and the number of global atomics
+// drops dramatically.
 //
-// Question this kernel answers: does home-cell ordering plus warp aggregation
-// reduce global atomic pressure while keeping particle-owned scatter?
+// Helper warp_reduce_masked coalesces matching stencil targets inside a warp.
 //
-// Requires sm_70+ for __match_any_sync (the A10 / sm_86 is fine).
+// Inputs (all float32):
+//   x:      (N, 3)        particle positions          (assumed sorted)
+//   v:      (N, 3)        particle velocities         (in same order as x)
+//   C:      (N, 9)        APIC affine matrix          (in same order as x)
+//   stress: (N, 9)        Kirchhoff stress            (in same order as x)
 //
-// Inputs/outputs identical to p2g_v1.cu — see that file for layout.
+// Outputs:
+//   grid_mv: (G^3, 3)
+//   grid_m:  (G^3,)
+//
+// Scalar attributes: N, G, dt, vol, p_mass, inv_dx, dx
 
 #include "xla/ffi/api/ffi.h"
 
@@ -35,61 +42,62 @@ __global__ void p2g_v2_kernel(
     float dt, float vol, float p_mass, float inv_dx, float dx
 ) {
     int pid = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // Out-of-range threads have to participate in the warp sync intrinsics
+    // (otherwise __match_any_sync deadlocks). We mark them as "inactive" by
+    // giving them a match key of -1 so they never match an in-range lane,
+    // and we skip the atomicAdd at the bottom.
+    bool active = (pid < N);
     int lane = threadIdx.x & 31;
 
-    // Out-of-range threads must still participate in __match_any_sync (they
-    // contribute a sentinel grid_idx of -1, so they form their own group and
-    // skip the atomics in the leader check). Otherwise we deadlock the warp.
-    bool active = pid < N;
-
-    // Per-particle state + B-spline tables (only meaningful for active lanes;
-    // inactive lanes never read them — they carry grid_idx = -1 below).
-    float px[3], pv[3], pC[9], pS[9];
-    int base[3];
-    float fx[3], w[3][3], dw[3][3];
+    // Zero-init so inactive lanes carry defined state through the (unguarded)
+    // base/weight computation; the actual load happens only for active lanes.
+    float px[3] = {0, 0, 0}, pv[3] = {0, 0, 0}, pC[9] = {0}, pS[9] = {0};
     if (active) {
         p2g_load_particle(x, v, C, stress, pid, px, pv, pC, pS);
-        p2g_base_fx(px, inv_dx, base, fx);
-        p2g_bspline_tables(fx, w, dw);
     }
 
-    // Scatter to 27 stencil nodes. All warp lanes must execute the loop
-    // (they all participate in __match_any_sync); inactive lanes carry
-    // grid_idx = -1 so they form their own match group and the atomic guard
-    // (active && lane == leader) keeps them from writing. v2's scatter is the
-    // experiment: warp-shuffle reduce same-node lanes, one leader atomic each.
+    int base[3];
+    float fx[3], w[3][3], dw[3][3];
+    p2g_base_fx(px, inv_dx, base, fx);
+    p2g_bspline_tables(fx, w, dw);
+
+    // v2's scatter is the experiment: on Morton-sorted particles many warp
+    // lanes hit the same node, so warp-shuffle reduce same-node lanes and let
+    // one leader atomic per group cut the global atomic count.
     for (int di = 0; di < 3; di++)
     for (int dj = 0; dj < 3; dj++)
     for (int dk = 0; dk < 3; dk++) {
-        float mv0 = 0.0f, mv1 = 0.0f, mv2 = 0.0f, mass_contrib = 0.0f;
-        int grid_idx = -1;
-        if (active) {
-            int gi = p2g_clip_axis(base[0] + di, G);
-            int gj = p2g_clip_axis(base[1] + dj, G);
-            int gk = p2g_clip_axis(base[2] + dk, G);
-            grid_idx = gi * G * G + gj * G + gk;
+        int gi = p2g_clip_axis(base[0] + di, G);
+        int gj = p2g_clip_axis(base[1] + dj, G);
+        int gk = p2g_clip_axis(base[2] + dk, G);
+        int grid_idx = gi * G * G + gj * G + gk;
 
+        // Inactive lanes get a sentinel that won't match any real index.
+        int match_key = active ? grid_idx : -1;
+
+        float mv0 = 0.0f, mv1 = 0.0f, mv2 = 0.0f, m_contrib = 0.0f;
+        if (active) {
             float mv[3];
             p2g_node_contribution(di, dj, dk, w, dw, fx, pC, pS, pv,
-                                  inv_dx, dx, dt, vol, p_mass, mv, &mass_contrib);
+                                  inv_dx, dx, dt, vol, p_mass, mv, &m_contrib);
             mv0 = mv[0]; mv1 = mv[1]; mv2 = mv[2];
         }
 
-        // Warp coalescing: find lanes in this warp targeting the same grid_idx.
-        // Inactive lanes (grid_idx = -1) form their own group and don't write.
-        unsigned peers = __match_any_sync(P2G_FULL_MASK, grid_idx);
+        // Find all lanes (in this 32-lane warp) targeting the same grid node.
+        // Inactive lanes use match_key = -1, so they cluster together and
+        // their (zeroed) contributions don't pollute real groups.
+        unsigned peers = __match_any_sync(P2G_FULL_MASK, match_key);
 
-        // Sum contributions across matching lanes.
         mv0 = p2g_warp_reduce_masked(mv0, peers);
         mv1 = p2g_warp_reduce_masked(mv1, peers);
         mv2 = p2g_warp_reduce_masked(mv2, peers);
-        mass_contrib = p2g_warp_reduce_masked(mass_contrib, peers);
+        m_contrib = p2g_warp_reduce_masked(m_contrib, peers);
 
-        // Only the leader (lowest lane in group) does the atomic.
-        int leader = __ffs(peers) - 1;  // __ffs returns 1-indexed
+        int leader = __ffs(peers) - 1;
         if (active && lane == leader) {
             p2g_atomic_add_grid(grid_mv, grid_m, grid_idx,
-                                mv0, mv1, mv2, mass_contrib);
+                                mv0, mv1, mv2, m_contrib);
         }
     }
 }

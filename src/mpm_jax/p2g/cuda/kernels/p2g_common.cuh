@@ -1,4 +1,4 @@
-// Shared device helpers for the inline P2G kernels (cuda_v1..v4).
+// Shared device helpers for the inline P2G kernels (cuda_v1..v3).
 //
 // Only the pieces that are IDENTICAL across every variant by design live here:
 // the per-particle register loads, the quadratic B-spline base/weight tables,
@@ -171,7 +171,7 @@ __device__ __forceinline__ int p2g_stencil_index(int di, int dj, int dk) {
     return di * 9 + dj * 3 + dk;
 }
 
-// Warp reduction over an arbitrary peer mask (used by v2/v4):
+// Warp reduction over an arbitrary peer mask (used by v2):
 // sum `val` across all lanes in `mask`, returning the sum in ALL lanes. Walk
 // the set bits rather than an XOR butterfly, since match groups are not
 // power-of-two aligned.

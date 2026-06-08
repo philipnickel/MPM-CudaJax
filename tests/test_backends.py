@@ -1,11 +1,11 @@
 import hydra
+import pytest
 from omegaconf import OmegaConf
 
 from mpm_jax.p2g.backends import (
     CudaV1Backend,
     CudaV2Backend,
     CudaV3Backend,
-    CudaV4Backend,
     JaxBackend,
 )
 from mpm_jax.solver import MPMSolver
@@ -31,40 +31,17 @@ def test_cuda_backend_constructors_register_expected_kind(monkeypatch):
         "mpm_jax.p2g.cuda.p2g_cuda.CudaV3P2G.register",
         lambda self: calls.append("cuda_v3"),
     )
-    monkeypatch.setattr(
-        "mpm_jax.p2g.cuda.p2g_cuda.CudaV4P2G.register",
-        lambda self: calls.append("cuda_v4"),
-    )
 
     CudaV1Backend(num_grids=16)
     CudaV2Backend(num_grids=16)
     CudaV3Backend(num_grids=16)
-    CudaV4Backend(num_grids=16)
 
-    assert calls == ["cuda_v1", "cuda_v2", "cuda_v3", "cuda_v4"]
+    assert calls == ["cuda_v1", "cuda_v2", "cuda_v3"]
 
 
-def test_cuda_progression_backends_do_not_require_grid_divisors(monkeypatch):
-    monkeypatch.setattr(
-        "mpm_jax.p2g.cuda.p2g_cuda.CudaV1P2G.register", lambda self: True
-    )
-    monkeypatch.setattr(
-        "mpm_jax.p2g.cuda.p2g_cuda.CudaV2P2G.register", lambda self: True
-    )
-    monkeypatch.setattr(
-        "mpm_jax.p2g.cuda.p2g_cuda.CudaV3P2G.register", lambda self: True
-    )
-    monkeypatch.setattr(
-        "mpm_jax.p2g.cuda.p2g_cuda.CudaV4P2G.register", lambda self: True
-    )
-
-    for backend in (
-        CudaV1Backend(num_grids=18),
-        CudaV2Backend(num_grids=18),
-        CudaV3Backend(num_grids=18),
-        CudaV4Backend(num_grids=18),
-    ):
-        assert backend.grid_divisor() is None
+def test_supercell_backend_validates_num_grids():
+    with pytest.raises(RuntimeError, match="requires num_grids"):
+        CudaV3Backend(num_grids=18, super_cell_width=4)
 
 
 def test_hydra_instantiates_runtime_config_and_solver():

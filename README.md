@@ -100,9 +100,8 @@ pixi run python simulate.py sim=benchmark render.enabled=false
 # Pick a kernel
 pixi run python simulate.py backend=jax                              # JAX/XLA baseline (scan P2G + MLS G2P)
 pixi run python simulate.py backend=cuda_v1 material=jelly
-pixi run python simulate.py backend=cuda_v2 material=jelly            # home-sorted warp-coalesced atomics
-pixi run python simulate.py backend=cuda_v3 material=jelly            # home-cell shared-tile reduction
-pixi run python simulate.py backend=cuda_v4 material=jelly            # home-cell structured warp reduction
+pixi run python simulate.py backend=cuda_v2 material=jelly            # Morton-sorted warp-shuffle coalescing
+pixi run python simulate.py backend=cuda_v3 material=jelly            # super-cell grid tile
 pixi run python simulate.py backend=cutile_v3 material=jelly sim=benchmark render.enabled=false  # cuTile (tiled model)
 
 # Override sim params
@@ -115,9 +114,8 @@ pixi run python simulate.py sim.n_particles=1000000 sim.num_grids=64
 |---|---|
 | `jax` | The JAX/XLA baseline: `lax.scan` over the 27 offsets for **both** P2G and G2P, unified MLS-MPM G2P (APIC affine `C` reused as ∇v), closed-form StVK stress. Every other kernel reuses this G2P, so only the P2G varies. |
 | `cuda_v1` | CUDA P2G (one thread/particle, global `atomicAdd`) + JAX baseline G2P. |
-| `cuda_v2` | Home-cell sorted CUDA P2G with one thread/particle and warp-coalesced global atomics + JAX baseline G2P. |
-| `cuda_v3` | Home-cell sorted CUDA P2G with one block per home cell, shared 27-node local reduction, and final global flush + JAX baseline G2P. |
-| `cuda_v4` | Home-cell sorted CUDA P2G with structured warp reduction over the 27-node local tile before the final global flush + JAX baseline G2P. |
+| `cuda_v2` | CUDA Morton-sorted warp-shuffle coalesced P2G + JAX baseline G2P. |
+| `cuda_v3` | CUDA super-cell-owned grid tile P2G + JAX baseline G2P. |
 | `cutile_v1` | cuTile direct 27-stencil scatter comparison backend. |
 | `cutile_v3` | cuTile home-cell tiled P2G with local 27-node reduction + JAX baseline G2P. Requires `cuda-tile`. |
 
@@ -142,7 +140,7 @@ Construction (`RuntimeConfig` + `MPMSolver` in `src/mpm_jax/solver.py`):
 - `MPMSolver` reads the runtime config and builds params (with derived dx/vol/p_mass), particles, and initial state. The backend object is already instantiated by Hydra and owns CUDA/cuTile registration and grid-divisibility validation; the sticky floor is fixed in the solver frame.
 - `src/mpm_jax/p2g/backends/` is a small P2G backend hierarchy. Variants override `prepare()` when they need ordering and `scatter()` for the P2G kernel. The implementation modules register the user-facing Hydra choices (`jax`, `cuda_v1`, etc.) directly via hydra-zen. The solver substep calls `backend.prepare()`, `backend.scatter()`, then the shared `g2p_mls()` path.
 
-All solver variants now run through the same JAX-owned frame loop. The pure-JAX path compiles the entire frame (multiple substeps) as one XLA program. The CUDA variants (`cuda_v*`) move P2G stencil work into CUDA kernels so the `(N, 27, *)` intermediate tensors never materialize in HBM; v2 keeps particle-owned scatter, while v3/v4 switch to home-cell-owned local reduction. The cuTile variant (`cutile`) launches a tiled-programming-model P2G kernel from inside that same JAX frame via the cuTile/JAX bridge.
+All solver variants now run through the same JAX-owned frame loop. The pure-JAX path compiles the entire frame (multiple substeps) as one XLA program. The CUDA variants (`cuda_v*`) move P2G stencil work into CUDA kernels so the `(N, 27, *)` intermediate tensors never materialize in HBM; v2 sorts particles by Morton code for warp-shuffle coalescing, while v3 uses a super-cell-owned shared-memory tile. The cuTile variant (`cutile`) launches a tiled-programming-model P2G kernel from inside that same JAX frame via the cuTile/JAX bridge.
 
 To time P2G `prepare`, P2G `scatter`, `prepare+scatter`, and full solver
 `ms/step` at the benchmark operating point (`G=96`, `N=10M`), run:
@@ -326,7 +324,7 @@ Hydra config groups in `conf/`:
 |---|---|---|
 | `material` | `jelly` (default) | Constitutive model |
 | `sim` | `default` | n_particles, num_grids, dt, BCs, ... |
-| `backend` | `jax` (default), `cuda_v1`, `cuda_v2`, `cuda_v3`, `cuda_v4`, `cutile_v1`, `cutile_v3` | P2G implementation (G2P shared) |
+| `backend` | `jax` (default), `cuda_v1`, `cuda_v2`, `cuda_v3`, `cutile_v1`, `cutile_v3` | P2G implementation (G2P shared) |
 
 Top-level fields: `tag`, `render`. All overridable from CLI:
 
@@ -378,13 +376,13 @@ MPM-CudaJax/
         ├── grid.py          # grid_update + build_grid_x
         └── p2g/
             ├── scan.py      # JAX scan P2G
-            ├── sort.py      # morton_argsort, home_cell_id
+            ├── sort.py      # morton_argsort, home_super_cell_id, home_cell_id
             ├── backends/    # backend implementations + hydra-zen registrations
             ├── cutile/      # cuTile P2G kernels + jax bridges
             └── cuda/
                 ├── p2g_cuda.py  # FFI capsule registration + kernel objects
                 └── kernels/     # p2g_ffi_module.cc plus p2g_v1.cu,
-                                 # p2g_v2.cu, p2g_v3.cu, p2g_v4.cu
+                                 # p2g_v2.cu, p2g_v3.cu
 ```
 
 ## References

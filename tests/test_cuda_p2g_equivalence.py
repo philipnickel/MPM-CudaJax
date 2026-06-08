@@ -3,11 +3,15 @@ import importlib
 import numpy as np
 import pytest
 
+import jax
+import jax.numpy as jnp
+
+from omegaconf import OmegaConf
+
 from mpm_jax.p2g.backends import (
     CudaV1Backend,
     CudaV2Backend,
     CudaV3Backend,
-    CudaV4Backend,
     CutileV1Backend,
     CutileV3Backend,
     JaxBackend,
@@ -16,18 +20,8 @@ from mpm_jax.p2g.cuda.p2g_cuda import (
     CudaV1P2G,
     CudaV2P2G,
     CudaV3P2G,
-    CudaV4P2G,
 )
-from tests.cuda_validation import (
-    assert_grid_close,
-    assert_home_cell_prepared,
-    benchmark_validation_size,
-    has_cuda,
-    make_p2g_inputs,
-    p2g_output,
-    require_cuda_kernels,
-    timed_prepare_scatter,
-)
+from mpm_jax.types import MPMState, MPMParams
 
 
 def _optional_module(name):
@@ -40,8 +34,25 @@ def _optional_module(name):
 cuda_tile = _optional_module("cuda.tile")
 
 
+def _has_cuda() -> bool:
+    try:
+        return jax.default_backend() == "gpu"
+    except Exception:
+        return False
+
+
+def _require_cuda_kernels(*kernel_types):
+    if not _has_cuda():
+        pytest.skip("CUDA P2G kernels require a GPU backend")
+    try:
+        for kernel_type in kernel_types:
+            kernel_type()
+    except ImportError as exc:
+        pytest.skip(f"CUDA P2G kernels not built: {exc}")
+
+
 def _cutile_available() -> bool:
-    if not has_cuda():
+    if not _has_cuda():
         return False
     return cuda_tile is not None
 
@@ -51,101 +62,117 @@ def _require_cutile():
         pytest.skip("cuTile/JAX backend requires a GPU and cuda-tile")
 
 
+def _inputs():
+    n = 2000
+    num_grids = 16
+    rng = np.random.RandomState(123)
+    state = MPMState(
+        x=jnp.array(rng.rand(n, 3).astype(np.float32) * 0.4 + 0.3),
+        v=jnp.array(rng.randn(n, 3).astype(np.float32) * 0.1),
+        C=jnp.array(rng.randn(n, 3, 3).astype(np.float32) * 0.01),
+        F=jnp.tile(jnp.eye(3, dtype=jnp.float32), (n, 1, 1)),
+    )
+    stress = jnp.array(rng.randn(n, 3, 3).astype(np.float32) * 0.01)
+    params = MPMParams(
+        OmegaConf.create(
+            {
+                "n_particles": n,
+                "num_grids": num_grids,
+                "dt": 3e-4,
+                "gravity": [0.0, 0.0, -9.8],
+                "rho": 1000.0,
+                "clip_bound": 0.5,
+                "damping": 1.0,
+                "size": [0.4, 0.4, 0.4],
+            }
+        )
+    )
+    return params, state, stress
+
+
+def _p2g_output(backend, params, state, stress):
+    @jax.jit
+    def run(state, stress):
+        prepared = backend.prepare(params, state, stress)
+        return backend.scatter(params, prepared)
+
+    out = run(state, stress)
+    jax.block_until_ready(out)
+    return out
+
+
 def test_cuda_p2g_variants_match_jax_scan():
-    require_cuda_kernels(
+    _require_cuda_kernels(
         CudaV1P2G,
         CudaV2P2G,
         CudaV3P2G,
-        CudaV4P2G,
     )
-    params, state, stress = make_p2g_inputs()
-    ref = p2g_output(JaxBackend(), params, state, stress)
+    params, state, stress = _inputs()
+    ref_mv, ref_m = _p2g_output(JaxBackend(), params, state, stress)
 
     for backend in (
         CudaV1Backend(params.num_grids),
         CudaV2Backend(params.num_grids),
         CudaV3Backend(params.num_grids),
-        CudaV4Backend(params.num_grids),
     ):
-        grid = p2g_output(backend, params, state, stress)
-        assert_grid_close(grid, ref, err_msg=backend.name)
-
-
-def test_cuda_progression_prepare_contract(monkeypatch):
-    monkeypatch.setattr(
-        "mpm_jax.p2g.cuda.p2g_cuda.CudaV1P2G.register", lambda self: True
-    )
-    monkeypatch.setattr(
-        "mpm_jax.p2g.cuda.p2g_cuda.CudaV2P2G.register", lambda self: True
-    )
-    monkeypatch.setattr(
-        "mpm_jax.p2g.cuda.p2g_cuda.CudaV3P2G.register", lambda self: True
-    )
-    monkeypatch.setattr(
-        "mpm_jax.p2g.cuda.p2g_cuda.CudaV4P2G.register", lambda self: True
-    )
-
-    params, state, stress = make_p2g_inputs(n=64, num_grids=16)
-    v1_prepared = CudaV1Backend(params.num_grids).prepare(params, state, stress)
-
-    np.testing.assert_array_equal(np.asarray(v1_prepared.x), np.asarray(state.x))
-    np.testing.assert_array_equal(np.asarray(v1_prepared.v), np.asarray(state.v))
-    assert v1_prepared.bucket_start is None
-    assert v1_prepared.bucket_bounds is None
-
-    for backend in (
-        CudaV2Backend(params.num_grids),
-        CudaV3Backend(params.num_grids),
-        CudaV4Backend(params.num_grids),
-    ):
-        assert_home_cell_prepared(backend, params, state, stress)
-
-
-def test_cuda_progression_optional_benchmark_scale_matches_v1():
-    n, num_grids = benchmark_validation_size()
-    require_cuda_kernels(CudaV1P2G, CudaV2P2G, CudaV3P2G, CudaV4P2G)
-
-    params, state, stress = make_p2g_inputs(
-        n=n, num_grids=num_grids, seed=987, size=(0.8, 0.8, 0.8)
-    )
-    ref, ref_timing = timed_prepare_scatter(
-        CudaV1Backend(params.num_grids), params, state, stress
-    )
-    timings = [("cuda_v1", ref_timing)]
-
-    for backend in (
-        CudaV2Backend(params.num_grids),
-        CudaV3Backend(params.num_grids),
-        CudaV4Backend(params.num_grids),
-    ):
-        grid, timing = timed_prepare_scatter(backend, params, state, stress)
-        assert_grid_close(
-            grid,
-            ref,
-            atol=5e-5,
-            rtol=5e-5,
-            sum_atol=1e-3,
-            err_msg=backend.name,
+        grid_mv, grid_m = _p2g_output(backend, params, state, stress)
+        np.testing.assert_allclose(
+            np.asarray(grid_mv), np.asarray(ref_mv), atol=1e-5, rtol=1e-5
         )
-        timings.append((backend.name, timing))
+        np.testing.assert_allclose(
+            np.asarray(grid_m), np.asarray(ref_m), atol=1e-5, rtol=1e-5
+        )
+        np.testing.assert_allclose(
+            float(grid_m.sum()), float(ref_m.sum()), atol=1e-5, rtol=0.0
+        )
 
-    for name, timing in timings:
-        assert timing["prepare_ms"] >= 0.0, name
-        assert timing["scatter_ms"] >= 0.0, name
-        print(
-            f"{name}: prepare={timing['prepare_ms']:.3f} ms "
-            f"scatter={timing['scatter_ms']:.3f} ms"
+
+def test_cuda_v3_supercell_widths_match_jax_scan():
+    _require_cuda_kernels(CudaV3P2G)
+    # cuda_v3 is templated + dispatched over SUPPORTED_SC; every compiled
+    # super-cell width must scatter identically to the JAX baseline.
+    from mpm_jax.p2g.backends import CudaV3Backend
+    from mpm_jax.p2g.cuda.p2g_cuda import SUPPORTED_SC
+
+    params, state, stress = _inputs()  # num_grids=16, divisible by 2/4/8
+    ref_mv, ref_m = _p2g_output(JaxBackend(), params, state, stress)
+
+    for sc in SUPPORTED_SC:
+        backend = CudaV3Backend(num_grids=params.num_grids, super_cell_width=sc)
+        grid_mv, grid_m = _p2g_output(backend, params, state, stress)
+        np.testing.assert_allclose(
+            np.asarray(grid_mv),
+            np.asarray(ref_mv),
+            atol=1e-5,
+            rtol=1e-5,
+            err_msg=f"SC={sc}",
+        )
+        np.testing.assert_allclose(
+            np.asarray(grid_m),
+            np.asarray(ref_m),
+            atol=1e-5,
+            rtol=1e-5,
+            err_msg=f"SC={sc}",
         )
 
 
 def test_cutile_p2g_matches_jax_scan():
     _require_cutile()
-    params, state, stress = make_p2g_inputs()
-    ref = p2g_output(JaxBackend(), params, state, stress)
+    params, state, stress = _inputs()
+    ref_mv, ref_m = _p2g_output(JaxBackend(), params, state, stress)
 
     for backend in (
         CutileV1Backend(params.num_grids),
         CutileV3Backend(params.num_grids),
     ):
-        grid = p2g_output(backend, params, state, stress)
-        assert_grid_close(grid, ref, err_msg=backend.name)
+        grid_mv, grid_m = _p2g_output(backend, params, state, stress)
+
+        np.testing.assert_allclose(
+            np.asarray(grid_mv), np.asarray(ref_mv), atol=1e-5, rtol=1e-5
+        )
+        np.testing.assert_allclose(
+            np.asarray(grid_m), np.asarray(ref_m), atol=1e-5, rtol=1e-5
+        )
+        np.testing.assert_allclose(
+            float(grid_m.sum()), float(ref_m.sum()), atol=1e-5, rtol=0.0
+        )
