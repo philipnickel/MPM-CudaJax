@@ -118,20 +118,58 @@ def _col(df, name, default=0.0):
     return pd.Series(default, index=df.index, dtype="float64")
 
 
+def _first_col(df, names, default=0.0):
+    for name in names:
+        if name in df:
+            return pd.to_numeric(df[name], errors="coerce")
+    return pd.Series(default, index=df.index, dtype="float64")
+
+
+def _has_any_value(series):
+    return series.notna().any() and (series.fillna(0) != 0).any()
+
+
+def _prefer_nonzero(primary, fallback):
+    primary = pd.to_numeric(primary, errors="coerce")
+    fallback = pd.to_numeric(fallback, errors="coerce")
+    return primary.where(primary.fillna(0) != 0, fallback)
+
+
 def _derive_analysis_columns(df):
     """Add plotting columns from raw NCU counters. Existing derived columns win."""
     df = df.copy()
     n = _col(df, "n_particles")
-    time_ns = _col(df, "gpu__time_duration.sum")
-    seconds = time_ns / 1e9
+    gpu_seconds = _col(df, "gpu__time_duration.sum") / 1e9
+    sm_seconds = _col(df, "sm__cycles_elapsed.avg") / _col(
+        df, "sm__cycles_elapsed.avg.per_second"
+    )
+    seconds = _prefer_nonzero(gpu_seconds, sm_seconds)
     if "time_ms" not in df:
-        df["time_ms"] = time_ns / 1e6
+        df["time_ms"] = seconds * 1e3
     if "p2g_mparticles_per_s" not in df:
         df["p2g_mparticles_per_s"] = (n / seconds) / 1e6
 
-    fadd = _col(df, "smsp__sass_thread_inst_executed_op_fadd_pred_on.sum")
-    fmul = _col(df, "smsp__sass_thread_inst_executed_op_fmul_pred_on.sum")
-    ffma = _col(df, "smsp__sass_thread_inst_executed_op_ffma_pred_on.sum")
+    fadd = _first_col(
+        df,
+        [
+            "sm__sass_thread_inst_executed_op_fadd_pred_on.sum",
+            "smsp__sass_thread_inst_executed_op_fadd_pred_on.sum",
+        ],
+    )
+    fmul = _first_col(
+        df,
+        [
+            "sm__sass_thread_inst_executed_op_fmul_pred_on.sum",
+            "smsp__sass_thread_inst_executed_op_fmul_pred_on.sum",
+        ],
+    )
+    ffma = _first_col(
+        df,
+        [
+            "sm__sass_thread_inst_executed_op_ffma_pred_on.sum",
+            "smsp__sass_thread_inst_executed_op_ffma_pred_on.sum",
+        ],
+    )
     flops = fadd + fmul + 2.0 * ffma
     if "fp32_flops" not in df:
         df["fp32_flops"] = flops
@@ -139,8 +177,14 @@ def _derive_analysis_columns(df):
         df["gflops_per_s"] = flops / seconds / 1e9
 
     bytes_by_level = {
-        "l1": _col(df, "l1tex__lsu_writeback_active_mem_lg.sum") * 128.0,
-        "l2": _col(df, "lts__lts2xbar_cycles_active.sum") * 32.0,
+        "l1": _prefer_nonzero(
+            _col(df, "l1tex__t_bytes.sum"),
+            _col(df, "l1tex__lsu_writeback_active_mem_lg.sum") * 128.0,
+        ),
+        "l2": _prefer_nonzero(
+            _col(df, "lts__t_bytes.sum"),
+            _col(df, "lts__lts2xbar_cycles_active.sum") * 32.0,
+        ),
         "hbm": _col(df, "dram__bytes.sum"),
     }
     for level, nbytes in bytes_by_level.items():
@@ -153,15 +197,17 @@ def _derive_analysis_columns(df):
     sm_hz = _col(df, "sm__cycles_elapsed.avg.per_second")
     if "peak_compute_gflops" not in df:
         df["peak_compute_gflops"] = ffma_peak * 2.0 * sm_hz / 1e9
-    for level, peak_name, clock_name, width in (
+    for level, peak_name, fallback_name, clock_name, fallback_width in (
         (
             "l1",
+            "l1tex__t_bytes.sum.peak_sustained",
             "l1tex__lsu_writeback_active_mem_lg.sum.peak_sustained",
             "l1tex__cycles_elapsed.avg.per_second",
             128.0,
         ),
         (
             "l2",
+            "lts__t_bytes.sum.peak_sustained",
             "lts__lts2xbar_cycles_active.sum.peak_sustained",
             "lts__cycles_elapsed.avg.per_second",
             32.0,
@@ -169,12 +215,18 @@ def _derive_analysis_columns(df):
         (
             "hbm",
             "dram__bytes.sum.peak_sustained",
+            None,
             "dram__cycles_elapsed.avg.per_second",
             1.0,
         ),
     ):
         if f"peak_{level}_gbps" not in df:
-            df[f"peak_{level}_gbps"] = _col(df, peak_name) * width * _col(df, clock_name) / 1e9
+            peak_per_cycle = _col(df, peak_name)
+            if not _has_any_value(peak_per_cycle) and fallback_name is not None:
+                peak_per_cycle = _col(df, fallback_name) * fallback_width
+            df[f"peak_{level}_gbps"] = (
+                peak_per_cycle * _col(df, clock_name) / 1e9
+            )
 
     for metric, column in [
         ("dram__bytes.sum", "dram_bytes_per_particle"),
@@ -215,11 +267,17 @@ def _derive_analysis_columns(df):
             "gpu__compute_memory_throughput.avg.pct_of_peak_sustained_elapsed",
             "sol_compute_memory_pct",
         ),
-        ("dram__throughput.avg.pct_of_peak_sustained_elapsed", "sol_dram_pct"),
+        (
+            "gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed",
+            "sol_dram_pct",
+        ),
         ("sm__warps_active.avg.pct_of_peak_sustained_active", "active_warps_pct"),
         ("smsp__issue_active.avg.pct_of_peak_sustained_active", "issue_active_pct"),
         ("lts__throughput.avg.pct_of_peak_sustained_elapsed", "sol_l2_pct"),
-        ("l1tex__throughput.avg.pct_of_peak_sustained_elapsed", "sol_l1_pct"),
+        (
+            "l1tex__throughput.avg.pct_of_peak_sustained_elapsed",
+            "sol_l1_pct",
+        ),
         ("lts__t_sector_hit_rate.pct", "l2_hit_rate_pct"),
         ("l1tex__t_sector_hit_rate.pct", "l1_hit_rate_pct"),
         (
@@ -239,17 +297,34 @@ def _derive_analysis_columns(df):
             "load_sectors_per_request",
         ),
         ("launch__registers_per_thread", "regs_per_thread"),
-        ("launch__shared_mem_per_block_static", "smem_bytes_per_block"),
+        ("launch__shared_mem_per_block", "smem_bytes_per_block"),
     ]:
         if column not in df:
-            df[column] = _col(df, metric)
+            fallbacks = {
+                "sol_dram_pct": [
+                    "gpu__dram_throughput.avg.pct_of_peak_sustained_elapsed",
+                    "dram__throughput.avg.pct_of_peak_sustained_elapsed",
+                ],
+                "sol_l1_pct": [
+                    "l1tex__throughput.avg.pct_of_peak_sustained_elapsed",
+                    "l1tex__throughput.avg.pct_of_peak_sustained_active",
+                ],
+                "smem_bytes_per_block": [
+                    "launch__shared_mem_per_block",
+                    "launch__shared_mem_per_block_static",
+                ],
+            }
+            df[column] = _first_col(df, fallbacks.get(column, [metric]))
 
     if "sol_max_pct" not in df:
         df["sol_max_pct"] = df[
             ["sol_sm_pct", "sol_compute_memory_pct", "sol_dram_pct"]
         ].max(axis=1)
 
-    if "theoretical_occ_pct" not in df or "occ_limiter_code" not in df:
+    if "theoretical_occ_pct" not in df:
+        df["theoretical_occ_pct"] = _col(df, "sm__maximum_warps_per_active_cycle_pct")
+
+    if "occ_limiter_code" not in df:
         limits = pd.DataFrame(
             {
                 "registers": _col(df, "launch__occupancy_limit_registers"),
@@ -260,7 +335,8 @@ def _derive_analysis_columns(df):
         )
         max_warps = _col(df, "sm__maximum_warps_avg_per_active_cycle", 64.0)
         binder = limits.idxmin(axis=1)
-        df["theoretical_occ_pct"] = 100.0 * limits.min(axis=1) / max_warps
+        if not _has_any_value(df["theoretical_occ_pct"]):
+            df["theoretical_occ_pct"] = 100.0 * limits.min(axis=1) / max_warps
         df["occ_limiter_code"] = binder.map(
             {"registers": 0, "shared_mem": 1, "warps": 2, "blocks": 3}
         )
