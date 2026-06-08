@@ -100,9 +100,8 @@ pixi run python simulate.py sim=benchmark render.enabled=false
 # Pick a kernel
 pixi run python simulate.py backend=jax                              # JAX/XLA baseline (scan P2G + MLS G2P)
 pixi run python simulate.py backend=cuda_v1 material=jelly
-pixi run python simulate.py backend=cuda_v2 material=jelly            # warp-shuffle coalescing
-pixi run python simulate.py backend=cuda_v3 material=jelly            # Morton sort
-pixi run python simulate.py backend=cuda_v4 material=jelly            # super-cell grid tile
+pixi run python simulate.py backend=cuda_v2 material=jelly            # Morton-sorted warp-shuffle coalescing
+pixi run python simulate.py backend=cuda_v3 material=jelly            # super-cell grid tile
 pixi run python simulate.py backend=cutile_v3 material=jelly sim=benchmark render.enabled=false  # cuTile (tiled model)
 
 # Override sim params
@@ -115,9 +114,8 @@ pixi run python simulate.py sim.n_particles=1000000 sim.num_grids=64
 |---|---|
 | `jax` | The JAX/XLA baseline: `lax.scan` over the 27 offsets for **both** P2G and G2P, unified MLS-MPM G2P (APIC affine `C` reused as ∇v), closed-form StVK stress. Every other kernel reuses this G2P, so only the P2G varies. |
 | `cuda_v1` | CUDA P2G (one thread/particle, global `atomicAdd`) + JAX baseline G2P. |
-| `cuda_v2` | CUDA warp-shuffle coalesced P2G + JAX baseline G2P. |
-| `cuda_v3` | CUDA Morton-sorted P2G + JAX baseline G2P. |
-| `cuda_v4` | CUDA super-cell-owned grid tile P2G + JAX baseline G2P. |
+| `cuda_v2` | CUDA Morton-sorted warp-shuffle coalesced P2G + JAX baseline G2P. |
+| `cuda_v3` | CUDA super-cell-owned grid tile P2G + JAX baseline G2P. |
 | `cutile_v1` | cuTile direct 27-stencil scatter comparison backend. |
 | `cutile_v3` | cuTile home-cell tiled P2G with local 27-node reduction + JAX baseline G2P. Requires `cuda-tile`. |
 
@@ -229,9 +227,9 @@ and `postprocessing/nsight_plots.py` loads that CSV into pandas and renders the
 figures:
 
 ```bash
-# Single operating point (all 6 custom kernels at the benchmark resolution):
+# Single operating point (all 5 custom kernels at the benchmark resolution):
 pixi run python profile_nsight.py -cn nsight_profile -m \
-    backend=cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v3 \
+    backend=cuda_v1,cuda_v2,cuda_v3,cutile_v1,cutile_v3 \
     nsight.target=scatter
 pixi run python postprocessing/nsight_plots.py \
     outputs/nsight/<gpu>/sweeps/<date>/<time>/results.csv -o figures/nsight/<gpu>/
@@ -253,12 +251,12 @@ direction of increasing scale. The axis is auto-detected from what varies:
 # Load sweep (throughput vs problem size): fixed grid, growing particle count
 # (raises ppc/density). Resources are constant, so this is NOT strong scaling.
 pixi run python profile_nsight.py -cn nsight_profile -m \
-    backend=cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v3 \
+    backend=cuda_v1,cuda_v2,cuda_v3,cutile_v1,cutile_v3 \
     sim.n_particles=1250000,2500000,5000000,10000000 nsight.target=scatter
 
 # Weak scaling: fixed particles-per-cell (~8.49), grid + N grow together.
 pixi run python profile_nsight.py -cn nsight_profile -m \
-    backend=cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v3 \
+    backend=cuda_v1,cuda_v2,cuda_v3,cutile_v1,cutile_v3 \
     scale=weak_g64,weak_g96,weak_g128,weak_g160 nsight.target=scatter
 ```
 
@@ -318,7 +316,7 @@ Hydra config groups in `conf/`:
 |---|---|---|
 | `material` | `jelly` (default) | Constitutive model |
 | `sim` | `default` | n_particles, num_grids, dt, BCs, ... |
-| `backend` | `jax` (default), `cuda_v1`, `cuda_v2`, `cuda_v3`, `cuda_v4`, `cutile_v1`, `cutile_v3` | P2G implementation (G2P shared) |
+| `backend` | `jax` (default), `cuda_v1`, `cuda_v2`, `cuda_v3`, `cutile_v1`, `cutile_v3` | P2G implementation (G2P shared) |
 
 Top-level fields: `tag`, `render`. All overridable from CLI:
 
@@ -376,7 +374,7 @@ MPM-CudaJax/
             └── cuda/
                 ├── p2g_cuda.py  # FFI capsule registration + kernel objects
                 └── kernels/     # p2g_ffi_module.cc plus p2g_v1.cu,
-                                 # p2g_v2.cu, p2g_v3.cu, p2g_v4.cu
+                                 # p2g_v2.cu, p2g_v3.cu
 ```
 
 ## References

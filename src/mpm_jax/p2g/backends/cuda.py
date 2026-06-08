@@ -5,12 +5,11 @@ from hydra_zen import store
 from mpm_jax.p2g.backends.common import P2GBackend, morton_order, supercell_order
 from mpm_jax.p2g.cuda.p2g_cuda import (
     SUPPORTED_SC,
-    V4_SUPER_CELL_WIDTH,
+    V3_SUPER_CELL_WIDTH,
     CudaP2GKernel,
     CudaV1P2G,
     CudaV2P2G,
     CudaV3P2G,
-    CudaV4P2G,
 )
 
 
@@ -49,36 +48,30 @@ class CudaV2Backend(CudaP2GBackend):
     name = "cuda_v2"
     kernel_type = CudaV2P2G
 
-
-@store(name="cuda_v3", group="backend", num_grids="${sim.num_grids}")
-class CudaV3Backend(CudaP2GBackend):
-    name = "cuda_v3"
-    kernel_type = CudaV3P2G
-
     def prepare(self, params, state, stress):
         return morton_order(params, state, stress)
 
 
 @store(
-    name="cuda_v4",
+    name="cuda_v3",
     group="backend",
     num_grids="${sim.num_grids}",
     super_cell_width=4,
 )
-class CudaV4Backend(P2GBackend):
-    name = "cuda_v4"
+class CudaV3Backend(P2GBackend):
+    name = "cuda_v3"
 
     def __init__(self, num_grids=None, super_cell_width=None):
         super_cell = (
-            V4_SUPER_CELL_WIDTH if super_cell_width is None else int(super_cell_width)
+            V3_SUPER_CELL_WIDTH if super_cell_width is None else int(super_cell_width)
         )
         if super_cell not in SUPPORTED_SC:
             raise ValueError(
-                f"cuda_v4 super_cell_width={super_cell} is not a compiled "
+                f"cuda_v3 super_cell_width={super_cell} is not a compiled "
                 f"instantiation; the kernel is built for {SUPPORTED_SC}."
             )
         self.super_cell = super_cell
-        self.kernel = CudaV4P2G(super_cell)
+        self.kernel = CudaV3P2G(super_cell)
         super().__init__(num_grids=num_grids)
 
     def prepare(self, params, state, stress):

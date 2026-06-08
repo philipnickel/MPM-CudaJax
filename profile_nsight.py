@@ -4,7 +4,7 @@ One Hydra job profiles **one** backend variant (one config). Sweep across
 backends / particle counts with **Hydra multirun**, exactly like ``simulate.py``::
 
     pixi run python profile_nsight.py -cn nsight_profile -m \
-        backend=cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v3 \
+        backend=cuda_v1,cuda_v2,cuda_v3,cutile_v1,cutile_v3 \
         nsight.target=scatter
 
 Each job writes its NCU-derived metrics as one wide row to a per-run

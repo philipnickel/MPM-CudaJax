@@ -1,10 +1,9 @@
 """cuda_v2 must match cuda_v1 up to atomic-order f32 drift.
 
-Both kernels are bit-identical in their per-particle math; only the scatter
-strategy differs (v2 adds a warp-shuffle reduction before each atomicAdd).
-The same drift sources as the rest of the CUDA equivalence
-suite apply (non-deterministic atomicAdd ordering), so we use the same
-tolerances as the v1-vs-JAX comparison.
+Both kernels are bit-identical in their per-particle math; cuda_v2 adds Morton
+ordering plus a warp-shuffle reduction before each atomicAdd. The same drift
+sources as the rest of the CUDA equivalence suite apply (non-deterministic
+atomicAdd ordering), so we use the same tolerances as the v1-vs-JAX comparison.
 
 Skipped when the native CUDA extension isn't built or there's no GPU.
 """
@@ -14,12 +13,9 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from omegaconf import OmegaConf
-from types import SimpleNamespace
 
 from mpm_jax.p2g.backends import CudaV1Backend, CudaV2Backend
-from mpm_jax.constitutive import stvk_elasticity_jacobi
 from mpm_jax.p2g.cuda.p2g_cuda import CudaV1P2G, CudaV2P2G
-from mpm_jax.solver import MPMSolver, RuntimeConfig
 from mpm_jax.types import MPMState, MPMParams
 
 
@@ -41,12 +37,18 @@ def _require_kernels(*kernel_types):
 
 
 def test_cuda_v2_matches_v1():
-    """Run a short sim under both CUDA kernels and compare final state."""
+    """Compare scatter output directly; cuda_v2 changes particle order."""
     _require_kernels(CudaV1P2G, CudaV2P2G)
     n = 2000
     num_grids = 16
     rng = np.random.RandomState(0)
-    x0 = jnp.array(rng.rand(n, 3).astype(np.float32) * 0.4 + 0.3)
+    state = MPMState(
+        x=jnp.array(rng.rand(n, 3).astype(np.float32) * 0.4 + 0.3),
+        v=jnp.array(rng.randn(n, 3).astype(np.float32) * 0.1),
+        C=jnp.array(rng.randn(n, 3, 3).astype(np.float32) * 0.01),
+        F=jnp.tile(jnp.eye(3, dtype=jnp.float32), (n, 1, 1)),
+    )
+    stress = jnp.array(rng.randn(n, 3, 3).astype(np.float32) * 0.01)
     params = MPMParams(
         OmegaConf.create(
             {
@@ -62,55 +64,19 @@ def test_cuda_v2_matches_v1():
         )
     )
 
-    # jelly material (StVK elasticity, no plasticity): stress stays on the JAX
-    # side without a cuSOLVER dependence.
-    elasticity_fn = stvk_elasticity_jacobi(E=2e6, nu=0.4)
+    def p2g_output(backend):
+        @jax.jit
+        def run(state, stress):
+            prepared = backend.prepare(params, state, stress)
+            return backend.scatter(params, prepared)
 
-    state0 = MPMState(
-        x=x0,
-        v=jnp.broadcast_to(jnp.array([0.0, 0.0, -0.5]), (n, 3)).copy(),
-        C=jnp.zeros((n, 3, 3)),
-        F=jnp.tile(jnp.eye(3), (n, 1, 1)),
-    )
+        out = run(state, stress)
+        jax.block_until_ready(out)
+        return out
 
-    steps_per_frame = 5
-    num_frames = 3
+    mv1, m1 = p2g_output(CudaV1Backend(num_grids))
+    mv2, m2 = p2g_output(CudaV2Backend(num_grids))
 
-    sim = OmegaConf.create(
-        {
-            "n_particles": n,
-            "num_grids": num_grids,
-            "dt": params.dt,
-            "gravity": [0.0, 0.0, -9.8],
-            "rho": 1000.0,
-            "clip_bound": 0.5,
-            "damping": 1.0,
-            "size": [1.0, 1.0, 1.0],
-            "initial_velocity": [0.0, 0.0, -0.5],
-            "center": [0.5, 0.5, 0.5],
-            "steps_per_frame": steps_per_frame,
-        }
-    )
-    material = SimpleNamespace(elasticity=elasticity_fn)
-    solver_v1 = MPMSolver(
-        RuntimeConfig(material=material, sim=sim, backend=CudaV1Backend(num_grids))
-    )
-    solver_v2 = MPMSolver(
-        RuntimeConfig(material=material, sim=sim, backend=CudaV2Backend(num_grids))
-    )
-    solver_v1.state = state0
-    solver_v2.state = state0
-
-    for _ in range(num_frames):
-        s1 = solver_v1._frame(solver_v1.state)
-        s2 = solver_v2._frame(solver_v2.state)
-        solver_v1.state = s1
-        solver_v2.state = s2
-    jax.block_until_ready(s1.x)
-    jax.block_until_ready(s2.x)
-
-    # Same scatter-only tolerance band as the rest of the CUDA-equivalence
-    # suite: positions ~1e-4, velocities ~5e-3, F ~1e-4.
-    np.testing.assert_allclose(np.asarray(s1.x), np.asarray(s2.x), atol=1e-4, rtol=1e-3)
-    np.testing.assert_allclose(np.asarray(s1.v), np.asarray(s2.v), atol=5e-3, rtol=1e-3)
-    np.testing.assert_allclose(np.asarray(s1.F), np.asarray(s2.F), atol=1e-4, rtol=1e-3)
+    np.testing.assert_allclose(np.asarray(mv1), np.asarray(mv2), atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(np.asarray(m1), np.asarray(m2), atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(float(m1.sum()), float(m2.sum()), atol=1e-4, rtol=0.0)

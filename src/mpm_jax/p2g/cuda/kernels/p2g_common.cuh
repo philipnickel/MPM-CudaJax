@@ -1,4 +1,4 @@
-// Shared device helpers for the inline P2G kernels (cuda_v1..v4).
+// Shared device helpers for the inline P2G kernels (cuda_v1..v3).
 //
 // Only the pieces that are IDENTICAL across every variant by design live here:
 // the per-particle register loads, the quadratic B-spline base/weight tables,

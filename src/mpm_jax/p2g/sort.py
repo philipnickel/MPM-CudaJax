@@ -66,7 +66,7 @@ def home_super_cell_id(x, inv_dx, num_grids, super_cell_width):
     """Super-cell id for the quadratic B-spline home node.
 
     A particle's quadratic B-spline stencil is centered on ``floor(x / dx - 0.5) + 1``.
-    CUDA v4 sorts particles by the super-cell containing that home node before
+    CUDA v3 sorts particles by the super-cell containing that home node before
     building CSR-style ``bucket_start`` boundaries.
     """
     px = x * inv_dx
