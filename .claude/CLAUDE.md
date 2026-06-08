@@ -68,6 +68,7 @@ CUDA kernels in `src/mpm_jax/p2g/cuda/kernels/*.cu` and the tiny capsule binding
 
 Key knobs:
 
+- CUDA is required in the default Pixi environment. If `nvcc` is unavailable, CMake configure fails instead of installing a JAX-only wheel without the native kernels.
 - CMake defaults to `native` CUDA architecture autodetection. Cross-build hosts that need a fixed architecture should set that in Pixi task/environment configuration instead of prefixing ad hoc commands.
 - `editable.rebuild = true` in `pyproject.toml` means edits to `.cu`, `.cuh`, or binding `.cc` sources trigger a rebuild when the native extension is next imported. Manual rebuild: `pixi reinstall mpm-cudajax`.
 - `[build-system].requires` pulls in `scikit-build-core>=0.10`, `cmake>=3.24`, `jax>=0.4.20`, and `nanobind` (jax is needed at build time so CMake can `import jax.ffi` to find the FFI headers).
