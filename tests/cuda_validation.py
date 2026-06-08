@@ -9,7 +9,8 @@ import numpy as np
 import pytest
 from omegaconf import OmegaConf
 
-from mpm_jax.p2g.backends.common import home_cell_order
+from mpm_jax.p2g.backends.common import morton_order, supercell_order
+from mpm_jax.p2g.cuda.p2g_cuda import V3_SUPER_CELL_WIDTH
 from mpm_jax.types import MPMParams, MPMState
 
 
@@ -141,9 +142,10 @@ def assert_grid_close(
     )
 
 
-def assert_home_cell_prepared(backend, params, state, stress):
+def assert_morton_prepared(backend, params, state, stress):
+    """cuda_v2 reorders particles by Morton code with no bucket structure."""
     prepared = block_until_ready(backend.prepare(params, state, stress))
-    expected = block_until_ready(home_cell_order(params, state, stress))
+    expected = block_until_ready(morton_order(params, state, stress))
 
     np.testing.assert_array_equal(np.asarray(prepared.x), np.asarray(expected.x))
     np.testing.assert_array_equal(np.asarray(prepared.v), np.asarray(expected.v))
@@ -151,13 +153,26 @@ def assert_home_cell_prepared(backend, params, state, stress):
     np.testing.assert_array_equal(np.asarray(prepared.F), np.asarray(expected.F))
     np.testing.assert_array_equal(np.asarray(prepared.stress), np.asarray(expected.stress))
     assert prepared.bucket_start is None
-    assert prepared.bucket_bounds is not None
-    assert prepared.bucket_bounds.shape == (
-        params.num_grids + 1,
-        params.num_grids + 1,
-        params.num_grids + 1,
-        2,
+    assert prepared.bucket_bounds is None
+
+
+def assert_supercell_prepared(backend, params, state, stress):
+    """cuda_v3 sorts particles by super-cell and emits CSR-style bucket_start."""
+    super_cell = getattr(backend, "super_cell", V3_SUPER_CELL_WIDTH)
+    prepared = block_until_ready(backend.prepare(params, state, stress))
+    expected = block_until_ready(
+        supercell_order(params, state, stress, super_cell)
     )
+
+    np.testing.assert_array_equal(np.asarray(prepared.x), np.asarray(expected.x))
+    np.testing.assert_array_equal(np.asarray(prepared.v), np.asarray(expected.v))
+    np.testing.assert_array_equal(np.asarray(prepared.C), np.asarray(expected.C))
+    np.testing.assert_array_equal(np.asarray(prepared.F), np.asarray(expected.F))
+    np.testing.assert_array_equal(np.asarray(prepared.stress), np.asarray(expected.stress))
+    assert prepared.bucket_bounds is None
+    assert prepared.bucket_start is not None
+    super_grids = params.num_grids // super_cell
+    assert prepared.bucket_start.shape == (super_grids**3 + 1,)
     np.testing.assert_array_equal(
-        np.asarray(prepared.bucket_bounds), np.asarray(expected.bucket_bounds)
+        np.asarray(prepared.bucket_start), np.asarray(expected.bucket_start)
     )

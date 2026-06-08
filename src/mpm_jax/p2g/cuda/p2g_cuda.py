@@ -20,7 +20,6 @@ _REGISTER_LOCK = Lock()
 _P2G_TARGET = "p2g_v1_cuda"
 _P2G_V2_TARGET = "p2g_v2_cuda"
 _P2G_V3_TARGET = "p2g_v3_cuda"
-_P2G_V4_TARGET = "p2g_v4_cuda"
 
 
 class CudaP2GKernel:
@@ -71,46 +70,10 @@ class CudaV1P2G(CudaP2GKernel):
 
 
 class CudaV2P2G(CudaP2GKernel):
-    """Home-sorted one-thread-per-particle scatter with warp-coalesced atomics."""
+    """Warp-shuffle coalesced scatter for Morton-sorted particles."""
 
     target = _P2G_V2_TARGET
     capsule_factory = "p2g_v2"
-
-
-class CudaV3P2G(CudaP2GKernel):
-    """Home-cell local reduction with a final reduced global flush."""
-
-    target = _P2G_V3_TARGET
-    capsule_factory = "p2g_v3"
-
-    def __call__(
-        self,
-        x_sorted,
-        v_sorted,
-        C_sorted,
-        stress_sorted,
-        bucket_bounds,
-        num_grids,
-        dt,
-        vol,
-        p_mass,
-        inv_dx,
-        dx,
-    ):
-        return _p2g_ffi_call(
-            self.target,
-            x_sorted,
-            v_sorted,
-            C_sorted,
-            stress_sorted,
-            bucket_bounds,
-            num_grids=num_grids,
-            dt=dt,
-            vol=vol,
-            p_mass=p_mass,
-            inv_dx=inv_dx,
-            dx=dx,
-        )
 
 
 def _p2g_ffi_call(
@@ -157,11 +120,26 @@ def _p2g_ffi_call(
     )
 
 
-class CudaV4P2G(CudaP2GKernel):
-    """Optimized home-cell local reduction with structured warp/block reduction."""
+# Super-cell width for the cuda_v3 backend. With SC=k the kernel launches (G/SC)^3
+# blocks (vs G^3) and each block aggregates particles from SC^3 cells into a
+# (SC+2)^3 shared-memory tile. The kernel is a template on SC; the FFI handler
+# dispatches to the instantiated values in SUPPORTED_SC by a runtime switch, so
+# SC is config-selectable (backend.super_cell_width) without recompiling — but
+# only among the instantiated widths. SC=4 is the default: 4^3 cells, ~512
+# particles/block at the 8-particles/cell benchmark, and a 6^3 grid scratchpad.
+SUPPORTED_SC = (2, 4, 8)  # template instantiations compiled into the extension
+V3_SUPER_CELL_WIDTH = 4  # default super-cell width
 
-    target = _P2G_V4_TARGET
-    capsule_factory = "p2g_v4"
+
+class CudaV3P2G(CudaP2GKernel):
+    """Super-cell-owned grid tile scatter."""
+
+    target = _P2G_V3_TARGET
+    capsule_factory = "p2g_v3"
+
+    def __init__(self, super_cell=V3_SUPER_CELL_WIDTH):
+        self.super_cell = int(super_cell)
+        super().__init__()
 
     def __call__(
         self,
@@ -169,7 +147,7 @@ class CudaV4P2G(CudaP2GKernel):
         v_sorted,
         C_sorted,
         stress_sorted,
-        bucket_bounds,
+        bucket_start,
         num_grids,
         dt,
         vol,
@@ -183,13 +161,14 @@ class CudaV4P2G(CudaP2GKernel):
             v_sorted,
             C_sorted,
             stress_sorted,
-            bucket_bounds,
+            bucket_start,
             num_grids=num_grids,
             dt=dt,
             vol=vol,
             p_mass=p_mass,
             inv_dx=inv_dx,
             dx=dx,
+            extra_attrs={"SC": np.int32(self.super_cell)},
         )
 
 
@@ -199,5 +178,7 @@ __all__ = [
     "CudaV1P2G",
     "CudaV2P2G",
     "CudaV3P2G",
-    "CudaV4P2G",
+    # Super-cell helpers
+    "V3_SUPER_CELL_WIDTH",
+    "SUPPORTED_SC",
 ]

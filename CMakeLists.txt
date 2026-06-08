@@ -57,7 +57,6 @@ set(P2G_FFI_SOURCES
     ${KERNEL_SRC_DIR}/p2g_v1.cu
     ${KERNEL_SRC_DIR}/p2g_v2.cu
     ${KERNEL_SRC_DIR}/p2g_v3.cu
-    ${KERNEL_SRC_DIR}/p2g_v4.cu
 )
 
 nanobind_add_module(_p2g_ffi NB_STATIC NOMINSIZE ${P2G_FFI_SOURCES})

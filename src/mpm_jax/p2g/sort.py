@@ -57,6 +57,23 @@ def morton_argsort(x, inv_dx, num_grids):
     return jnp.argsort(codes)
 
 
+def home_super_cell_id(x, inv_dx, num_grids, super_cell_width):
+    """Super-cell id for the quadratic B-spline home node.
+
+    A particle's quadratic B-spline stencil is centered on ``floor(x / dx - 0.5) + 1``.
+    CUDA v3 sorts particles by the super-cell containing that home node before
+    building CSR-style ``bucket_start`` boundaries.
+    """
+    px = x * inv_dx
+    base = jnp.floor(px - 0.5).astype(jnp.int32)
+    home = jnp.clip(base + 1, 0, num_grids - 1)
+    super_grids = num_grids // super_cell_width
+    si = home[:, 0] // super_cell_width
+    sj = home[:, 1] // super_cell_width
+    sk = home[:, 2] // super_cell_width
+    return (si * (super_grids * super_grids) + sj * super_grids + sk).astype(jnp.int32)
+
+
 def home_cell_id(x, inv_dx, num_grids):
     """Cell id for the unclipped quadratic B-spline home node.
 

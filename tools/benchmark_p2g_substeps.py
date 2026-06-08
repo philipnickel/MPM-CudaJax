@@ -39,7 +39,6 @@ DEFAULT_BACKENDS = (
     "cuda_v1",
     "cuda_v2",
     "cuda_v3",
-    "cuda_v4",
     "cutile_v1",
     "cutile_v3",
 )

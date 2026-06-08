@@ -6,7 +6,7 @@ import jax.numpy as jnp
 
 from mpm_jax.g2p_scan import _g2p_scan_mls
 from mpm_jax.p2g.scan import _p2g_scan
-from mpm_jax.p2g.sort import home_cell_id
+from mpm_jax.p2g.sort import home_cell_id, home_super_cell_id, morton_argsort
 
 
 class PreparedP2G(NamedTuple):
@@ -56,6 +56,29 @@ def _bucket_bounds(bucket_start, bucket_shape):
     starts = bucket_start[:-1].reshape(bucket_shape)
     ends = bucket_start[1:].reshape(bucket_shape)
     return jnp.stack((starts, ends), axis=-1)
+
+
+def morton_order(params, state, stress):
+    order = morton_argsort(state.x, params.inv_dx, params.num_grids)
+    return PreparedP2G(
+        state.x[order], state.v[order], state.C[order], state.F[order], stress[order]
+    )
+
+
+def supercell_order(params, state, stress, super_cell_width):
+    bucket_id = home_super_cell_id(
+        state.x, params.inv_dx, params.num_grids, super_cell_width
+    )
+    order = jnp.argsort(bucket_id)
+    grids_per_super_cell = params.num_grids // super_cell_width
+    return PreparedP2G(
+        state.x[order],
+        state.v[order],
+        state.C[order],
+        state.F[order],
+        stress[order],
+        bucket_start=_bucket_start(bucket_id, grids_per_super_cell**3),
+    )
 
 
 def home_cell_order(params, state, stress):

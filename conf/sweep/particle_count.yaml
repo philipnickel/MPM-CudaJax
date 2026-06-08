@@ -10,7 +10,10 @@ defaults:
 hydra:
     sweeper:
         params:
-            sim.n_particles: 1e5,5e5, 1e6, 5e6, 1e7
+            sim.n_particles: 100000,1000000,2000000,5000000,10000000
+
+sim:
+    num_grids: 96
 
 tag: sweep_particle_count
 
