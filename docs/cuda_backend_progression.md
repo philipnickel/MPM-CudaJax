@@ -14,40 +14,31 @@ the full solver step.
   and issue direct global `atomicAdd` updates for grid momentum and mass.
 - Purpose: baseline for particle-owned scatter with unsorted particles.
 
-### `cuda_v2`: Home-Sorted Warp-Coalesced Atomics
+### `cuda_v2`: Morton-Sorted Warp-Coalesced Atomics
 
-- `prepare`: `home_cell_order`.
+- `prepare`: `morton_order`.
 - `scatter`: one CUDA thread per particle, compute the 27-node stencil, use
   warp-level matching/reduction for lanes targeting the same grid node, and have
   one elected lane issue the global atomic update.
-- Purpose: isolate the benefit of home-cell ordering plus warp aggregation while
+- Purpose: isolate the benefit of Morton ordering plus warp aggregation while
   keeping particle-owned global atomics.
 
-### `cuda_v3`: Home-Cell Local Reduction
+### `cuda_v3`: Super-Cell Local Reduction
 
-- `prepare`: `home_cell_order`.
-- `scatter`: one CUDA block or cooperative group owns one home cell, loops over
-  that cell's particles, accumulates the 27-node stencil locally, and flushes the
-  reduced stencil to global memory.
-- Purpose: change ownership from particle-owned scatter to cell-owned local
-  reduction.
-
-### `cuda_v4`: Optimized Home-Cell Local Reduction
-
-- `prepare`: `home_cell_order`.
-- `scatter`: same home-cell ownership as `cuda_v3`, but reduce shared-memory
-  atomic pressure with structured warp/block reductions over stencil
-  offsets/channels before the final global flush.
-- Purpose: optimized hand-written CUDA implementation of the home-cell reduction
-  idea.
+- `prepare`: `supercell_order`.
+- `scatter`: one CUDA block owns one super-cell, loops over that super-cell's
+  particles, accumulates into a shared `(SC+2)^3` grid tile, and flushes the
+  reduced tile to global memory.
+- Purpose: change ownership from particle-owned scatter to super-cell-owned
+  local reduction.
 
 ### Reference/Comparison Backends
 
 - `jax`: correctness and full-solver baseline. It is not the primary target for
   Nsight kernel-roofline comparisons because XLA scatter can be multi-kernel.
-- `cutile_v3`: cuTile implementation of home-cell local reduction. Compare it
-  primarily against `cuda_v3` and `cuda_v4` to separate algorithmic wins from
-  code-generation wins.
+- `CuTile`: cuTile implementation of home-cell local reduction. Compare it
+  primarily against `cuda_v3` to separate algorithmic wins from code-generation
+  wins.
 
 ## Profiling Methodology
 

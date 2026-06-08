@@ -8,7 +8,7 @@ limiter, and the warp-issue-stall breakdown.
 
     # 1. collect (one NCU job per backend via Hydra multirun)
     pixi run python profile_nsight.py -cn nsight_profile -m \
-        backend=cuda_v1,cuda_v2,cuda_v3,cuda_v4,cutile_v1,cutile_v3 \
+        backend=cuda_v1,cuda_v2,cuda_v3,cutile_v1,CuTile \
         sim.n_particles=1000000
     # 2. plot the sweep's aggregated results.parquet
     pixi run python postprocessing/nsight_plots.py \
@@ -32,22 +32,20 @@ import matplotlib.pyplot as plt  # noqa: E402
 logger = logging.getLogger(__name__)
 
 # Canonical left->right order tracing the optimization arc; cuTile in a cool hue.
-BACKEND_ORDER = ["cuda_v1", "cuda_v2", "cuda_v3", "cuda_v4", "cutile_v1", "cutile_v3"]
+BACKEND_ORDER = ["cuda_v1", "cuda_v2", "cuda_v3", "cutile_v1", "CuTile"]
 COLOR = {
     "cuda_v1": "#fdae6b",
     "cuda_v2": "#fd8d3c",
-    "cuda_v3": "#e6550d",
-    "cuda_v4": "#a63603",
+    "cuda_v3": "#a63603",
     "cutile_v1": "#6baed6",
-    "cutile_v3": "#2171b5",
+    "CuTile": "#2171b5",
 }
 BACKEND_MARKER = {
     "cuda_v1": "o",
     "cuda_v2": "s",
     "cuda_v3": "^",
-    "cuda_v4": "D",
     "cutile_v1": "P",
-    "cutile_v3": "X",
+    "CuTile": "X",
 }
 LIMITER_NAME = {0: "registers", 1: "shared_mem", 2: "warps", 3: "blocks"}
 # Stall reasons grouped global-mem -> shared-mem -> compute -> hidden(good).

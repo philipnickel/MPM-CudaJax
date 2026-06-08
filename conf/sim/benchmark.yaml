@@ -5,7 +5,7 @@
 #   pixi run python simulate.py -cn config sim=benchmark \
 #       backend=cuda_v3 material=jelly render.enabled=false
 num_frames: 1
-steps_per_frame: 50
+steps_per_frame: 5
 n_particles: 10000000
 initial_velocity: [0.0, 0.0, 0.0]
 num_grids: 96
